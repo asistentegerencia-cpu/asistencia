@@ -3434,17 +3434,30 @@ function pedirSalidaPendiente(emp){
   const registrar = hora=>{
     if(toMin(hora) <= toMin(p.entrada.hora)){ toast('La salida debe ser posterior a tu entrada'); return; }
     const ev = evaluarSalida(emp, p.fecha, hora);
+    const cid = nuevoCid();
+    const datos = {
+      ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid,
+      tipo:'SALIDA', fecha:p.fecha, hora, origen:'DECLARADO', gps:'off',
+      motivo:'Declarada por el colaborador al día siguiente', deviceId: idDispositivo()
+    };
     MAR.push({
-      id:'M'+Date.now()+Math.floor(Math.random()*900+100),
+      id:'M'+Date.now()+Math.floor(Math.random()*900+100), cid,
       empId:emp.id, nombre:emp.nombre, dni:emp.dni||'', area:emp.area, proyecto:emp.proyecto||'',
       fecha:p.fecha, hora, ts:new Date(p.fecha+'T'+hora+':00').getTime(), tipo:'SALIDA',
-      origen:'DECLARADO', motivo:'Declarada por el colaborador al día siguiente',
+      origen:'DECLARADO', motivo:datos.motivo,
       estado:ev.estado, tardanza:0, anticipada:ev.anticipada||0,
       lat:null, lng:null, dist:null, fueraZona:false, gps:'off'
     });
     saveMar();
     toast('Salida del '+cuando+' registrada');
     renderMark();
+
+    // Sin esto la salida declarada vive solo en este celular y desaparece al sincronizar
+    if(hayServidor()){
+      api('marcar', datos, {timeout:15000})
+        .then(r=>{ if(r && r.ok && r.marcaje) integrarMarcaje(r.marcaje); })
+        .catch(()=>{ COLA.push(datos); saveCola(); });
+    }
   };
 
   $('#spOk').onclick = ()=>registrar(sug);
@@ -4817,6 +4830,7 @@ function tabCfg(b){
     '<button class="btn btn-sm btn-line" id="apiTest">Probar conexión</button>'+
     '<button class="btn btn-sm" id="apiSubir">Subir datos al servidor</button>'+
     '<button class="btn btn-sm btn-line" id="apiSync">Traer marcajes</button>'+
+    '<button class="btn btn-sm btn-line" id="apiBorrar" style="color:var(--danger);border-color:var(--danger)">Borrar marcajes de un rango</button>'+
   '</div>'+
   '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
   (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
@@ -5022,6 +5036,43 @@ function tabCfg(b){
     }catch(e){ apiOut('<span style="color:var(--danger)">No se pudo sincronizar: '+esc(e.message)+'</span>'); }
   };
 
+  /* Borrar marcajes del servidor — para limpiar las pruebas antes de arrancar en serio */
+  $('#apiBorrar').onclick = ()=>{
+    if(!guardarUrl()){ apiOut('<span style="color:var(--danger)">Pega primero la URL del servidor.</span>'); return; }
+    const m=document.createElement('div'); m.className='modal';
+    m.innerHTML='<div class="box"><h2>Borrar marcajes del servidor</h2>'+
+      '<p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.5">'+
+      'Se borran de la hoja de cálculo, para siempre. Sirve para dejar limpias las pruebas antes del arranque real.</p>'+
+      '<div class="frow">'+
+        '<div><label>Desde</label><input type="date" id="bD" value="'+hoyISO()+'"></div>'+
+        '<div><label>Hasta</label><input type="date" id="bH" value="'+hoyISO()+'"></div>'+
+      '</div>'+
+      '<div id="bOut" style="font-size:13px;color:var(--muted);margin-top:8px"></div>'+
+      '<div style="display:flex;gap:10px;margin-top:16px">'+
+        '<button class="btn btn-line" id="bX">Cancelar</button>'+
+        '<button class="btn" id="bG" style="background:var(--danger)">Borrar</button></div></div>';
+    document.body.appendChild(m);
+    m.querySelector('#bX').onclick=()=>m.remove();
+    m.querySelector('#bG').onclick=async ()=>{
+      const d=m.querySelector('#bD').value, h=m.querySelector('#bH').value;
+      if(!d||!h){ m.querySelector('#bOut').textContent='Elige las dos fechas'; return; }
+      if(d>h){ m.querySelector('#bOut').textContent='La fecha inicial es posterior a la final'; return; }
+      if(!confirm('Se borrarán TODOS los marcajes entre '+fechaCorta(d)+' y '+fechaCorta(h)+'.\n\nNo se puede deshacer. ¿Continuar?')) return;
+      m.querySelector('#bOut').textContent='Borrando…';
+      try{
+        const r = await api('borrar', {desde:d, hasta:h}, {timeout:40000});
+        if(r && r.ok){
+          MAR = MAR.filter(x=>!(x.fecha>=d && x.fecha<=h));
+          saveMar();
+          m.remove(); renderTab();
+          apiOut('<span style="color:var(--ok)"><b>✓ '+r.borrados+' marcaje'+(r.borrados===1?'':'s')+' borrado'+(r.borrados===1?'':'s')+'.</b></span>');
+        }else{
+          m.querySelector('#bOut').innerHTML='<span style="color:var(--danger)">'+esc((r&&r.error)||'Error')+'</span>';
+        }
+      }catch(e){ m.querySelector('#bOut').innerHTML='<span style="color:var(--danger)">'+esc(e.message)+'</span>'; }
+    };
+  };
+
   const bCola = $('#apiCola');
   if(bCola) bCola.onclick = async ()=>{ apiOut('Reintentando…'); await enviarCola(); renderTab(); };
 
@@ -5157,12 +5208,19 @@ function avisoDemo(){
 
 /* ---------- TAB: CÓDIGO QR ---------- */
 function tabQr(b){
-  // Sin parámetros ni ancla: el QR debe llevar la dirección limpia
-  const url = load('ca_url', location.origin + location.pathname);
+  // El QR tiene que llevar la dirección del servidor incrustada. Si no, quien lo
+  // escanee abre una app sin configurar: no vería el padrón ni podría marcar.
+  // Basta una vez: al abrirlo, el celular guarda la dirección y ya no la necesita.
+  const base = location.origin + location.pathname;
+  const sugerida = hayServidor() ? base + '?api=' + encodeURIComponent(CFG.apiUrl) : base;
+  const url = load('ca_url', sugerida);
   b.innerHTML =
   '<div class="cfgrid">'+
     '<div class="cfg"><h3>Dirección de la aplicación</h3>'+
-    '<p class="hint">Pega aquí la dirección web donde publicaste esta página. Es la que abrirán los celulares al escanear el QR. '+
+    '<p class="hint">'+(hayServidor()
+      ? 'Ya viene con la dirección de tu servidor incrustada (la parte <b>?api=</b>). <b>No se la quites:</b> es lo que deja configurado cada celular la primera vez que abre el enlace. Después basta la dirección corta. '
+      : '')+
+    'Es la dirección que abrirán los celulares al escanear el QR. '+
     'Debe empezar con <b>https://</b> — el GPS no funciona en direcciones inseguras.</p>'+
     '<div class="frow"><div><label>URL</label><input id="qU" value="'+esc(url)+'" placeholder="https://miempresa.github.io/asistencia/"></div></div>'+
     '<button class="btn btn-sm" id="qGen" style="width:100%">Generar código QR</button>'+
