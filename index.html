@@ -2641,6 +2641,12 @@ const DEF_CFG = {
     {id:'T2', nombre:'Comercial',      entrada:'10:00', salida:'19:00', trabajaSab:true,  sabEntrada:'10:00', sabSalida:'14:00'}
   ],
   adminPass:'robles2026',
+
+  /* Clave de solo lectura, para Gerencia y Dirección: ven el tablero, el análisis
+     y el historial, pero no pueden editar nada ni entrar a Configuración.
+     Vacía = solo existe el acceso de administrador. */
+  vistaPass:'',
+
   intentosMax:3,
   bloqueoMin:15,
 
@@ -3807,9 +3813,20 @@ function boot(){
    ============================================================ */
 let TAB='hoy';
 
+/* ---------- ROLES ----------
+   'admin' → administración: ve y edita todo
+   'vista' → Gerencia y Dirección: ven los reportes, no pueden tocar nada
+
+   Esto evita ediciones por accidente y ordena quién administra el sistema.
+   No es una barrera de seguridad: la clave viaja en el navegador y alguien con
+   conocimientos técnicos podría leerla. Para eso haría falta validar contra el
+   servidor, que es el siguiente paso natural. */
+let ROL = 'admin';
+const soloVista = ()=> ROL === 'vista';
+
 function pedirPass(){
   const m=document.createElement('div'); m.className='modal';
-  m.innerHTML = '<div class="box"><h2>Acceso administrador</h2>'+
+  m.innerHTML = '<div class="box"><h2>Acceso al panel</h2>'+
     '<p class="lead" style="font-size:14px">Ingresa la clave para ver los reportes de asistencia.</p>'+
     '<input class="input input-sm" id="pw" type="password" placeholder="Clave" autocomplete="off">'+
     '<div id="pwErr"></div>'+
@@ -3820,8 +3837,11 @@ function pedirPass(){
   document.body.appendChild(m);
   const inp=m.querySelector('#pw'); setTimeout(()=>inp.focus(),80);
   const go=()=>{
-    if(inp.value===CFG.adminPass){ m.remove(); abrirAdmin(); }
-    else { m.querySelector('#pwErr').innerHTML='<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">Clave incorrecta</div>'; inp.value=''; inp.focus(); }
+    const v = inp.value;
+    if(v === CFG.adminPass){ ROL='admin'; m.remove(); abrirAdmin(); return; }
+    if(CFG.vistaPass && v === CFG.vistaPass){ ROL='vista'; m.remove(); abrirAdmin(); return; }
+    m.querySelector('#pwErr').innerHTML='<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">Clave incorrecta</div>';
+    inp.value=''; inp.focus();
   };
   m.querySelector('#pwOk').onclick=go;
   inp.onkeydown=e=>{ if(e.key==='Enter') go(); };
@@ -3832,7 +3852,16 @@ function abrirAdmin(){
   $('#appMarcaje').classList.add('hidden');
   $('#appAdmin').classList.remove('hidden');
   $('#adTitle').textContent = CFG.empresa + ' · Asistencia';
-  $('#adSub').textContent = fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase()) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos';
+  $('#adSub').innerHTML = esc(fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase())) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos' +
+    (soloVista() ? ' · <b style="opacity:.95">Solo lectura</b>' : '');
+
+  // En solo lectura no existen las pestañas que editan
+  const ocultas = soloVista() ? ['emp','cfg','qr'] : [];
+  $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
+  if(ocultas.indexOf(TAB)>=0){
+    TAB='hoy';
+    $$('#adTabs .tab').forEach(x=>x.classList.toggle('on', x.dataset.tab==='hoy'));
+  }
   renderTab();
 
   // Al abrir el panel se trae lo del servidor: administración siempre ve lo último
@@ -3846,6 +3875,8 @@ function abrirAdmin(){
   }
 }
 $('#btnExit').addEventListener('click', ()=>{
+  ROL='admin';                       // al salir se olvida el rol: la próxima vez se vuelve a pedir clave
+  $$('#adTabs .tab').forEach(t=>t.classList.remove('hidden'));
   $('#appAdmin').classList.add('hidden');
   $('#appMarcaje').classList.remove('hidden');
   if(location.hash==='#admin') location.hash='';
@@ -3860,6 +3891,8 @@ $('#adTabs').addEventListener('click', e=>{
 
 function renderTab(){
   const b=$('#adBody');
+  // Cerrojo: aunque alguien fuerce la pestaña, en solo lectura no se abre
+  if(soloVista() && ['emp','cfg','qr'].indexOf(TAB)>=0) TAB='hoy';
   if(TAB==='hoy')  return tabHoy(b);
   if(TAB==='ana')  return tabAnalisis(b);
   if(TAB==='aus')  return tabAus(b);
@@ -3870,7 +3903,7 @@ function renderTab(){
 }
 
 function avisoUbicacion(){
-  if(CFG.ubicacionOk) return '';
+  if(soloVista() || CFG.ubicacionOk) return '';
   return '<div class="alert alert-warn" style="margin-bottom:16px">⚠ <b>Pendiente:</b> la ubicación de la oficina todavía es un valor de ejemplo. '+
          'Ve a <b>Configuración</b>, párate en la puerta de la oficina y toca <b>Capturar ubicación actual</b>. '+
          'Hasta entonces el control por GPS solo advierte, no bloquea.</div>';
@@ -3939,6 +3972,7 @@ function avisoRecepcionRemotos(){
 
 /* Nadie puede identificarse sin al menos un dato: DNI, celular o correo */
 function avisoSinIdentificador(){
+  if(soloVista()) return '';
   const sin = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO' && !normTel(e.dni) && !normTel(e.tel) && !e.email);
   if(!sin.length) return '';
   return '<div class="alert alert-bad" style="margin-bottom:16px">🚫 <b>'+sin.map(e=>esc(e.nombre)).join(', ')+
@@ -3949,7 +3983,7 @@ function avisoSinIdentificador(){
 /* El error más fácil de cometer en el primer reporte: pedir "este mes" cuando el
    sistema lleva dos días andando, y presentar semanas de faltas que nunca ocurrieron. */
 function avisoInicioOperacion(desde){
-  if(!MAR.length) return '';
+  if(soloVista() || !MAR.length) return '';
   if(!CFG.inicioOperacion){
     return '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Falta definir desde cuándo está operando el sistema.</b> '+
       'Mientras no lo definas, todos los días anteriores al lanzamiento se cuentan como inasistencia — y nadie podía marcar entonces. '+
@@ -3965,6 +3999,7 @@ function avisoInicioOperacion(desde){
 
 /* Sin servidor no hay consolidado: es la advertencia más importante del panel */
 function avisoServidor(){
+  if(soloVista()) return '';
   if(hayServidor()){
     if(COLA.length) return '<div class="alert alert-warn" style="margin-bottom:16px">📤 <b>'+COLA.length+
       ' marcaje'+(COLA.length===1?'':'s')+' sin enviar al servidor.</b> Se reintenta solo. '+
@@ -4014,7 +4049,7 @@ function tabHoy(b){
       kpi('Minutos perdidos', minTot, minTot?'k-warn':'k-ok')+
     '</div>'+
     '<div class="toolbar">'+ htmlFiltros('h') +'<div class="grow"></div>'+
-      '<button class="btn btn-sm" id="mHoy" style="align-self:flex-end">Registrar marcaje</button>'+
+      (soloVista()?'':'<button class="btn btn-sm" id="mHoy" style="align-self:flex-end">Registrar marcaje</button>')+
       '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes)+
@@ -4061,7 +4096,7 @@ function tabHoy(b){
     renderTab();
   };
   $('#xHoy').onclick = ()=>exportar(f,f,'Asistencia_'+f);
-  $('#mHoy').onclick = ()=>registroManual(f);
+  const bMan = $('#mHoy'); if(bMan) bMan.onclick = ()=>registroManual(f);
 }
 
 /* Estado de la plantilla: quién está en teletrabajo y quién en comisión de servicio */
@@ -4392,8 +4427,8 @@ function tabAus(b){
       'Las <b>comisiones de servicio</b> cuentan como día trabajado — la persona está laborando fuera de la oficina. '+
       'Vacaciones, descanso médico, permiso y licencia <b>salen del conteo</b>: no suman como asistencia ni como falta.'+
     '</div>'+
-    '<div class="toolbar"><div class="grow"></div>'+
-      '<button class="btn btn-sm" id="auN">Registrar ausencia</button></div>'+
+    (soloVista()?'':'<div class="toolbar"><div class="grow"></div>'+
+      '<button class="btn btn-sm" id="auN">Registrar ausencia</button></div>')+
     (lista.length ?
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
       '<th>Colaborador</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th>Días</th>'+
@@ -4413,16 +4448,17 @@ function tabAus(b){
         '<td style="white-space:normal;min-width:180px">'+esc(a.actividad||a.motivo||'—')+'</td>'+
         '<td>'+(a.autorizadoPor?esc(a.autorizadoPor):'<span class="tag tag-warn" style="font-size:9px">SIN REGISTRAR</span>')+'</td>'+
         '<td>'+(viga?'<span class="tag tag-ok">VIGENTE</span>':a.desde>hoy?'<span class="tag tag-warn">PROGRAMADA</span>':'<span class="tag" style="background:var(--surface-2);color:var(--muted)">CERRADA</span>')+'</td>'+
-        '<td><button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button></td>'+
+        (soloVista()?'<td></td>':'<td><button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button></td>')+
       '</tr>';
     }).join('')+'</tbody></table></div></div>'
     : '<div class="tblwrap"><div class="empty">No hay ausencias registradas.<br>Usa <b>Registrar ausencia</b> para cargar vacaciones, descansos médicos o comisiones de servicio.</div></div>');
 
-  $('#auN').onclick = ()=>editarAus(null);
+  const bAus = $('#auN'); if(bAus) bAus.onclick = ()=>editarAus(null);
   b.querySelectorAll('[data-ed]').forEach(x=>x.onclick=()=>editarAus(x.dataset.ed));
 }
 
 function editarAus(id){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const hoy = hoyISO();
   const a = id ? AUS.find(x=>x.id===id)
               : {id:'', empId:'', tipo:'COMISION', desde:hoy, hasta:hoy, lugar:'', actividad:'', motivo:'', autorizadoPor:''};
@@ -4490,6 +4526,7 @@ function editarAus(id){
    El motivo es obligatorio y el registro queda señalado como MANUAL en el Excel:
    nunca debe confundirse con un marcaje hecho por la propia persona. */
 function registroManual(fechaDef){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const hoy = hoyISO();
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Registrar marcaje manual</h2>'+
@@ -4616,6 +4653,7 @@ function tabEmp(b){
    Entrar uno por uno a 22 fichas para asignar el proyecto es una barrera real.
    Esta pantalla los pone todos juntos y guarda de una sola vez. */
 function asignarProyectos(){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const activos = EMP.filter(e=>e.activo);
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box" style="max-width:560px"><h2>Asignar equipo o proyecto</h2>'+
@@ -4647,6 +4685,7 @@ function asignarProyectos(){
 
 /* ---------- Cargador masivo de DNI ---------- */
 function cargarDniMasivo(){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML =
    '<div class="box" style="max-width:620px"><h2>Cargar DNI desde Excel</h2>'+
@@ -4736,6 +4775,7 @@ function cargarDniMasivo(){
 }
 
 function editarEmp(id){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:''};
   const m=document.createElement('div'); m.className='modal';
   m.innerHTML='<div class="box"><h2>'+(id?'Editar colaborador':'Nuevo colaborador')+'</h2>'+
@@ -4859,7 +4899,13 @@ function tabCfg(b){
   '<p class="hint">Nombre que ven los colaboradores y clave del panel de administración.</p>'+
   '<div class="frow"><div><label>Nombre</label><input id="cEmp" value="'+esc(CFG.empresa)+'"></div>'+
   '<div style="max-width:90px"><label>Sigla</label><input id="cSig" maxlength="2" value="'+esc(CFG.sigla)+'"></div></div>'+
-  '<div class="frow"><div><label>Clave de administrador</label><input id="cPas" value="'+esc(CFG.adminPass)+'"></div></div></div>'+
+  '<div class="frow"><div><label>Clave de administrador</label><input id="cPas" value="'+esc(CFG.adminPass)+'"></div></div>'+
+  '<div class="frow"><div><label>Clave de solo lectura</label><input id="cPasV" value="'+esc(CFG.vistaPass||'')+'" placeholder="Déjala vacía para no habilitarla"></div></div>'+
+  '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.55">'+
+    'Quien entre con la <b>clave de solo lectura</b> ve el tablero, el análisis, las ausencias y el historial, '+
+    'y puede descargar el Excel — pero no puede editar nada ni entrar a Personal, Configuración o Código QR. '+
+    'Es para Gerencia y Dirección.<br>'+
+    '<b>Que sea distinta de la de administrador</b>, o no sirve de nada.</p></div>'+
 
   '<div class="cfg" style="grid-column:1/-1"><h3>Turnos</h3>'+
   '<p class="hint">Horarios asignables a cada colaborador desde la pestaña Personal.</p>'+
@@ -4982,6 +5028,12 @@ function tabCfg(b){
     CFG.empresa=$('#cEmp').value.trim()||'Empresa';
     CFG.sigla=$('#cSig').value.trim()||'P';
     CFG.adminPass=$('#cPas').value||'robles2026';
+    const nv = ($('#cPasV').value||'').trim();
+    if(nv && nv===CFG.adminPass){
+      toast('La clave de solo lectura no puede ser igual a la de administrador');
+      return;
+    }
+    CFG.vistaPass = nv;
     CFG.inicioOperacion=$('#cIni').value||'';
     CFG.apiUrl=($('#cApi').value||'').trim();
     const recAntes = !!CFG.modoRecepcion;
