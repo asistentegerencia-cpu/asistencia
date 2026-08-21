@@ -2686,6 +2686,14 @@ const DEF_CFG = {
     {fecha:'2026-12-25', nombre:'Navidad'}
   ],
 
+  /* Sábados: no todos se trabaja. Aquí van, uno por uno, los que SÍ.
+     El que no esté en la lista no es laborable y no le genera falta a nadie.
+
+     Se eligió así a propósito: si te olvidas de marcar un sábado que sí se
+     trabajó, el sistema simplemente no lo cuenta. Al revés —dar por laborables
+     todos y tener que desmarcar— un olvido generaría 17 faltas falsas. */
+  sabadosTrabajados:[],
+
   /* Cierre de jornada: si no marcó salida, a los N minutos de la hora de salida
      del turno el día se cierra como SALIDA NO REGISTRADA (no inventa la hora). */
   cierreMargenMin:120,
@@ -2922,7 +2930,7 @@ async function sincronizarArranque(){
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
-    ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo',
+    ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
      'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
@@ -2943,7 +2951,30 @@ async function empujar(accion, datos){
     return (r && r.ok) ? 'servidor' : 'error';
   }catch(e){ return 'error'; }
 }
-const empujarPersonal  = ()=>empujar('personal', EMP);
+
+/* Empujar el padrón REEMPLAZA la hoja entera. Si este navegador tuviera una copia
+   vieja —por ejemplo porque no alcanzó a sincronizar—, se llevaría por delante a
+   quien se haya dado de alta desde otro lado. Ya pasó dos veces.
+
+   Por eso antes de escribir se relee el servidor y se fusiona: se conserva lo que
+   este navegador cambió, y se recupera lo que el servidor tenga y aquí falte.
+   Nadie desaparece por accidente. */
+async function empujarPersonal(){
+  if(!hayServidor()) return 'local';
+  try{
+    const r = await api('arranque', {}, {timeout:20000});
+    if(r && r.ok && Array.isArray(r.emp) && r.emp.length){
+      const aqui = new Set(EMP.map(e=>e.id));
+      const rescatados = r.emp.filter(e=>!aqui.has(e.id));
+      if(rescatados.length){
+        EMP = EMP.concat(rescatados).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+        saveEmp();
+        toast('Se recuperaron '+rescatados.length+' colaborador'+(rescatados.length===1?'':'es')+' que faltaban aquí');
+      }
+    }
+  }catch(e){ /* sin conexión: se envía lo que hay */ }
+  return empujar('personal', EMP);
+}
 const empujarConfig    = ()=>empujar('config',   CFG);
 const empujarAusencias = ()=>empujar('ausencia', AUS);
 
@@ -3041,13 +3072,29 @@ function rangoFechas(desde, hasta){
   return out;
 }
 
+/* ¿Se trabaja este sábado? Solo los que estén en el calendario. */
+function sabadoTrabajado(fechaISO){
+  return (CFG.sabadosTrabajados||[]).indexOf(fechaISO) >= 0;
+}
+
+/* Los sábados del año, para pintar el calendario de Configuración */
+function sabadosDelAnio(anio){
+  const out = [];
+  const d = new Date(anio, 0, 1);
+  while(d.getDay() !== 6) d.setDate(d.getDate()+1);
+  while(d.getFullYear() === anio){ out.push(hoyISO(d)); d.setDate(d.getDate()+7); }
+  return out;
+}
+
 /* Horario que aplica a un empleado en una fecha dada. null = no labora. */
 function horarioDe(emp, fechaISO){
   if(esFeriado(fechaISO)) return null;
   const t = getTurno(emp.turno);
   const d = new Date(fechaISO+'T12:00:00').getDay();
   if(d===0) return null;                               // domingo
-  if(d===6) return t.trabajaSab ? {in:t.sabEntrada,out:t.sabSalida} : null;
+  // Sábado: primero decide el calendario si la empresa trabaja ese día concreto,
+  // y después el turno si a esa gente le toca sábado y con qué horario.
+  if(d===6) return (sabadoTrabajado(fechaISO) && t.trabajaSab) ? {in:t.sabEntrada,out:t.sabSalida} : null;
   return {in:t.entrada, out:t.salida};
 }
 
@@ -4012,6 +4059,22 @@ function avisoServidor(){
     'Configúralo en <b>Configuración → Servidor</b>.</div>';
 }
 
+/* Si hay marcajes de alguien que ya no está en el padrón, es que se borró su fila.
+   Esa persona no puede marcar y su historial queda huérfano: hay que avisarlo fuerte. */
+function avisoPadronHuerfano(){
+  if(soloVista() || !MAR.length) return '';
+  const ids = new Set(EMP.map(e=>e.id));
+  const perdidos = {};
+  MAR.forEach(m=>{ if(m.empId && !ids.has(m.empId)) perdidos[m.empId] = m.nombre || m.empId; });
+  const lista = Object.keys(perdidos);
+  if(!lista.length) return '';
+  return '<div class="alert alert-bad" style="margin-bottom:16px">🚨 <b>Hay marcajes de gente que ya no está en el padrón:</b> '+
+    lista.map(id=>esc(perdidos[id])).join(', ')+'.<br>'+
+    'Se borró su fila de la hoja. <b>No pueden marcar</b> y su historial quedó suelto. '+
+    'Vuelve a agregarlos en <b>Personal</b> con el mismo código ('+lista.join(', ')+').<br>'+
+    '<b>Para no perder a nadie:</b> si quieres quitar un DNI, borra solo esa celda — nunca la fila entera.</div>';
+}
+
 function avisoProyectos(){
   if(!CFG.usaProyectos) return '';
   const sin = EMP.filter(e=>e.activo && !e.proyecto).length;
@@ -4039,7 +4102,7 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoDemo() + avisoServidor() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  b.innerHTML = avisoDemo() + avisoPadronHuerfano() + avisoServidor() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
@@ -4920,8 +4983,45 @@ function tabCfg(b){
   '</tr>').join('')+'</tbody></table></div>'+
   '<button class="btn btn-sm btn-line" id="tAdd" style="margin-top:12px">+ Agregar turno</button></div>'+
 
+  /* ---- Calendario de sábados ---- */
+  (function(){
+    const hoy = hoyISO();
+    const anio = +hoy.slice(0,4);
+    const marcados = CFG.sabadosTrabajados||[];
+    // Los sábados que quedan del año, más los ya marcados aunque sean pasados
+    const lista = Array.from(new Set(
+      sabadosDelAnio(anio).filter(f=>f>=hoy).concat(marcados)
+    )).sort();
+    const prox = lista.filter(f=>f>=hoy).slice(0,3);
+    const trabajados = prox.filter(f=>marcados.indexOf(f)>=0);
+    return '<div class="cfg" style="grid-column:1/-1"><h3>Sábados que se trabaja</h3>'+
+    '<p class="hint">Marca los sábados en que sí se labora. <b>El que no marques no genera falta a nadie.</b> '+
+    'Es a propósito: olvidar marcar uno no pasa nada, pero dar por laborables todos y olvidar desmarcar '+
+    'te llenaría el reporte de faltas que no ocurrieron.<br>'+
+    'El horario de cada sábado sale del turno de cada persona, abajo en <b>Turnos</b>.</p>'+
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;max-height:230px;overflow-y:auto;padding:2px">'+
+      lista.map(f=>{
+        const on = marcados.indexOf(f)>=0;
+        const d = new Date(f+'T12:00:00');
+        const fer = esFeriado(f);
+        return '<label class="sabChip" data-f="'+f+'" style="display:flex;align-items:center;gap:7px;padding:8px 12px;'+
+          'border:1.5px solid '+(on?'var(--primary)':'var(--line)')+';border-radius:9px;cursor:pointer;font-size:13.5px;'+
+          'background:'+(on?'var(--primary)':'var(--surface)')+';color:'+(on?'#fff':'var(--text)')+';font-weight:'+(on?'650':'500')+'">'+
+          '<input type="checkbox" '+(on?'checked':'')+' style="margin:0;cursor:pointer">'+
+          '<span>'+d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+'</span>'+
+          (fer?'<span style="font-size:10px;opacity:.8">feriado</span>':'')+
+        '</label>';
+      }).join('')+
+    '</div>'+
+    '<p style="font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.55">'+
+      '<b>'+marcados.length+'</b> sábado'+(marcados.length===1?'':'s')+' marcado'+(marcados.length===1?'':'s')+' en el año. '+
+      (prox.length
+        ? 'Los próximos tres: '+prox.map(f=>{const d=new Date(f+'T12:00:00');return fechaCorta(f)+' '+(trabajados.indexOf(f)>=0?'<b style="color:var(--ok)">se trabaja</b>':'<span style="color:var(--muted)">no</span>');}).join(' · ')
+        : 'No quedan sábados este año.')+
+    '</p></div>'+
+
   /* ---- Feriados ---- */
-  '<div class="cfg" style="grid-column:1/-1"><h3>Feriados</h3>'+
+  '<div class="cfg" style="grid-column:1/-1"><h3>Feriados</h3>'; })()+
   '<p class="hint">Los días marcados aquí no son laborables para nadie: no generan falta ni tardanza. '+
   'Vienen precargados los feriados nacionales de Perú 2026 — <b>confírmalos con administración</b> y agrega los propios de la empresa.</p>'+
   '<div class="tblscroll" style="max-height:260px;overflow-y:auto"><table><thead><tr>'+
@@ -5127,6 +5227,25 @@ function tabCfg(b){
 
   const bCola = $('#apiCola');
   if(bCola) bCola.onclick = async ()=>{ apiOut('Reintentando…'); await enviarCola(); renderTab(); };
+
+  /* Calendario de sábados — se guarda al instante, sin depender de "Guardar configuración" */
+  $$('.sabChip').forEach(chip=>{
+    chip.onclick = e=>{
+      e.preventDefault();
+      const f = chip.dataset.f;
+      const lista = (CFG.sabadosTrabajados||[]).slice();
+      const i = lista.indexOf(f);
+      if(i>=0) lista.splice(i,1); else lista.push(f);
+      CFG.sabadosTrabajados = lista.sort();
+      saveCfg(); renderTab();
+      empujarConfig().then(r=>{
+        const d = new Date(f+'T12:00:00');
+        const txt = d.getDate()+' de '+MESES[d.getMonth()];
+        if(r==='error') toast('⚠ Guardado aquí, pero NO llegó al servidor');
+        else toast(i>=0 ? 'Sábado '+txt+': ya no se trabaja' : 'Sábado '+txt+': se trabaja');
+      });
+    };
+  });
 
   /* Feriados */
   $('#fAdd').onclick = ()=>{
