@@ -2786,6 +2786,11 @@ const saveCola= ()=>save(K.cola,COLA);
   // Quien abrió la app antes de que existiera el servidor tiene apiUrl:'' guardado,
   // y eso pisaría la URL incrustada. Se adopta la del archivo si aquí no hay ninguna.
   if(!CFG.apiUrl && DEF_CFG.apiUrl){ CFG.apiUrl = DEF_CFG.apiUrl; saveCfg(); }
+  // Si quedó guardada con basura pegada, se repara sola al abrir
+  if(CFG.apiUrl){
+    const limpia = limpiarApiUrl(CFG.apiUrl);
+    if(limpia !== CFG.apiUrl){ CFG.apiUrl = limpia; saveCfg(); }
+  }
 
   if(!CFG.proyectos || !CFG.proyectos.length){ CFG.proyectos = DEF_CFG.proyectos; saveCfg(); }
   if(!CFG.feriados){ CFG.feriados = DEF_CFG.feriados; saveCfg(); }
@@ -2800,6 +2805,17 @@ const saveCola= ()=>save(K.cola,COLA);
    Regla de oro: un problema de red NUNCA debe dejar a alguien sin marcar. Si el
    envío falla, el marcaje se guarda en la cola local y se reintenta solo. */
 
+/* Limpia la dirección del servidor. Al copiarla y pegarla se arrastra basura con
+   una facilidad enorme —espacios, saltos de línea, el texto del enlace— y como
+   igual empieza con https:// la app la daba por buena y todos los marcajes
+   terminaban en la cola sin que nadie entendiera por qué. */
+function limpiarApiUrl(u){
+  let s = String(u||'').trim().replace(/\s+/g,' ');
+  const m = s.match(/https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_\-]+\/exec/);
+  if(m) return m[0];                       // se queda con la dirección y descarta el resto
+  return s.split(/\s/)[0];                 // otro servidor: corta en el primer espacio
+}
+
 const hayServidor = ()=> !!(CFG.apiUrl && /^https:\/\//.test(CFG.apiUrl));
 
 /* La URL del servidor puede llegar por la dirección: .../?api=https://...exec
@@ -2807,7 +2823,7 @@ const hayServidor = ()=> !!(CFG.apiUrl && /^https:\/\//.test(CFG.apiUrl));
    el QR la lleve incorporada. Queda guardada en el navegador de quien la abre. */
 (function apiDesdeUrl(){
   try{
-    const u = new URLSearchParams(location.search).get('api');
+    const u = limpiarApiUrl(new URLSearchParams(location.search).get('api'));
     if(u && /^https:\/\//.test(u) && u !== CFG.apiUrl){
       CFG.apiUrl = u; saveCfg();
       history.replaceState(null, '', location.pathname + location.hash);
@@ -5135,7 +5151,7 @@ function tabCfg(b){
     }
     CFG.vistaPass = nv;
     CFG.inicioOperacion=$('#cIni').value||'';
-    CFG.apiUrl=($('#cApi').value||'').trim();
+    CFG.apiUrl=limpiarApiUrl($('#cApi').value);
     const recAntes = !!CFG.modoRecepcion;
     CFG.modoRecepcion = $('#cRec').value==='1';
     // Al pasar a recepción, soltar la vinculación que hubiera quedado de antes
@@ -5147,7 +5163,13 @@ function tabCfg(b){
 
   /* Servidor */
   const apiOut = m => { const o=$('#apiOut'); if(o) o.innerHTML = m; };
-  const guardarUrl = ()=>{ CFG.apiUrl = ($('#cApi').value||'').trim(); saveCfg(); return CFG.apiUrl; };
+  const guardarUrl = ()=>{
+    const antes = $('#cApi').value;
+    CFG.apiUrl = limpiarApiUrl(antes);
+    $('#cApi').value = CFG.apiUrl;                       // que se vea limpia en pantalla
+    if(antes.trim() !== CFG.apiUrl) toast('Se limpió la dirección: tenía texto de más');
+    saveCfg(); return CFG.apiUrl;
+  };
 
   $('#apiTest').onclick = async ()=>{
     if(!guardarUrl()){ apiOut('<span style="color:var(--danger)">Pega primero la URL del servidor.</span>'); return; }
