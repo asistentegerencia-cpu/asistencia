@@ -2650,7 +2650,7 @@ const DEF_CFG = {
     {id:'T1', nombre:'Administrativo', entrada:'09:00', salida:'18:00', trabajaSab:true,  sabEntrada:'09:00', sabSalida:'13:00'},
     {id:'T2', nombre:'Comercial',      entrada:'10:00', salida:'19:00', trabajaSab:true,  sabEntrada:'10:00', sabSalida:'14:00'}
   ],
-  adminPass:'robles2026',
+  adminPass:'',
 
   /* Clave de solo lectura, para Gerencia y Dirección: ven el tablero, el análisis
      y el historial, pero no pueden editar nada ni entrar a Configuración.
@@ -2730,7 +2730,7 @@ const DEF_CFG = {
 
      Va incrustada a propósito: así los 23 celulares quedan configurados con solo
      abrir el enlace, sin que nadie toque el panel. Instalada el 20/08/2026. */
-  apiUrl:''
+  apiUrl:'https://script.google.com/macros/s/AKfycbzDxCXUBLhCkqISHvwjkBKECQ8Q4id4_WEbu7SUD-5fy91YGncbl5pRsspdxcZ1Wl7R/exec'
 };
 
 /* Tipos de ausencia. cuenta:
@@ -2864,10 +2864,16 @@ function jsonp(url, ms){
   });
 }
 
+/* Clave con la que este navegador está autenticado ante el servidor.
+   Vive solo en memoria: al recargar hay que volver a entrar al panel.
+   El celular que marca no tiene ninguna, y no la necesita. */
+let CLAVE = '';
+
 async function api(accion, datos, opts){
   opts = opts || {};
   if(!hayServidor()) throw new Error('No hay servidor configurado');
   const cuerpo = Object.assign({accion}, datos||{});
+  if(CLAVE) cuerpo.clave = CLAVE;
   const ms = opts.timeout || 15000;
 
   // 1) POST sin cabeceras propias: así el navegador no dispara preflight,
@@ -2957,6 +2963,8 @@ async function sincronizarArranque(){
   const r = await api('arranque', {}, {timeout:20000});
   if(!r || !r.ok) return false;
 
+  // El padrón solo viene si hay clave. El celular que marca no lo recibe:
+  // identifica preguntándole al servidor de a una persona.
   if(Array.isArray(r.emp) && r.emp.length){ EMP = r.emp; saveEmp(); }
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.cfg){
@@ -3388,15 +3396,13 @@ function renderId(){
 
   const a = $('#idAlert'); a.innerHTML='';
 
-  // Sin padrón no se puede identificar a nadie, y decir "DNI inválido" sería
-  // mentirle a la persona: su DNI está bien, lo que falta es la lista.
-  if(!EMP.some(e=>e.activo)){
-    a.innerHTML = hayServidor()
-      ? '<div class="alert alert-warn">Cargando el registro de personal…</div>'
-      : '<div class="alert alert-bad" style="text-align:left"><b>La app no está configurada.</b><br>'+
-        'No es tu DNI: falta conectarla con el servidor.<br><br>'+
-        '<b>Escanea otra vez el código QR de la puerta</b> y, cuando abra, vuelve a agregarla a tu pantalla de inicio.'+
-        '<br><br>Si sigue igual, avísale a Administración.</div>';
+  // Sin servidor Y sin padrón local no hay forma de identificar a nadie.
+  // Decir "DNI inválido" sería mentirle: su DNI está bien, falta la conexión.
+  if(!hayServidor() && !EMP.some(e=>e.activo)){
+    a.innerHTML = '<div class="alert alert-bad" style="text-align:left"><b>La app no está configurada.</b><br>'+
+      'No es tu DNI: falta conectarla con el servidor.<br><br>'+
+      '<b>Escanea el código QR de la puerta</b> para abrirla correctamente.'+
+      '<br><br>Si sigue igual, avísale a Administración.</div>';
     $('#btnId').disabled = true; $('#inpId').disabled = true;
     return;
   }
@@ -3413,18 +3419,38 @@ function renderId(){
   }
 }
 
-function intentarId(){
+async function intentarId(){
   const rec = !!CFG.modoRecepcion;
   const lock = load(K.lock,null);
   if(!rec && lock && lock.hasta > Date.now()) return renderId();
 
   const val = $('#inpId').value;
-  const emp = findEmp(val);
   const a = $('#idAlert');
+  let emp = findEmp(val);          // primero en lo que haya guardado aquí
 
-  // Si no hay padrón cargado, el problema no es de la persona: no se le cuenta
-  // el intento ni se la bloquea. Bloquear a alguien por un error nuestro es lo peor.
-  if(!emp && !EMP.some(e=>e.activo)) return renderId();
+  // Si no está en local y hay servidor, se le pregunta al servidor por ESA persona.
+  // Nunca se descarga el padrón completo: así la app puede llevar la dirección del
+  // servidor adentro sin exponer los datos de los 20.
+  if(!emp && hayServidor()){
+    const btn = $('#btnId');
+    btn.disabled = true; btn.textContent = 'Verificando…';
+    try{
+      const r = await api('identificar', {ident: val}, {timeout:15000});
+      if(r && r.ok && r.emp){
+        emp = r.emp;
+        // Se guarda solo a esta persona, para poder marcar aunque después se caiga la red
+        const i = EMP.findIndex(x=>x.id===emp.id);
+        if(i>=0) EMP[i] = Object.assign({}, EMP[i], emp); else EMP.push(emp);
+        saveEmp();
+      }
+    }catch(e){
+      btn.disabled = false; btn.textContent = 'Continuar';
+      a.innerHTML = '<div class="alert alert-bad">Sin conexión con el servidor. '+
+                    'Revisa tu internet e inténtalo otra vez.</div>';
+      return;
+    }
+    btn.disabled = false; btn.textContent = 'Continuar';
+  }
 
   if(!emp){
     LOG.unshift({ts:Date.now(), tipo:'ID_FALLIDO', valor:String(val).slice(0,40)});
@@ -4044,12 +4070,34 @@ function pedirPass(){
     '</div></div>';
   document.body.appendChild(m);
   const inp=m.querySelector('#pw'); setTimeout(()=>inp.focus(),80);
-  const go=()=>{
+  const err = t=>{ m.querySelector('#pwErr').innerHTML='<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">'+esc(t)+'</div>'; inp.value=''; inp.focus(); };
+  const btn = m.querySelector('#pwOk');
+
+  const go = async ()=>{
     const v = inp.value;
-    if(v === CFG.adminPass){ ROL='admin'; m.remove(); abrirAdmin(); return; }
-    if(CFG.vistaPass && v === CFG.vistaPass){ ROL='vista'; m.remove(); abrirAdmin(); return; }
-    m.querySelector('#pwErr').innerHTML='<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">Clave incorrecta</div>';
-    inp.value=''; inp.focus();
+    if(!v) return;
+
+    // Con servidor, la clave la valida el servidor: así no viaja dentro del
+    // archivo publicado, que está en un repositorio público.
+    if(hayServidor()){
+      btn.disabled = true; btn.textContent = 'Verificando…';
+      try{
+        const r = await api('entrar', {clave:v}, {timeout:15000});
+        btn.disabled = false; btn.textContent = 'Entrar';
+        if(r && r.ok && r.rol){
+          CLAVE = v; ROL = r.rol;
+          m.remove(); abrirAdmin(); return;
+        }
+        return err('Clave incorrecta');
+      }catch(e){
+        btn.disabled = false; btn.textContent = 'Entrar';
+        // Sin conexión se cae al modo local, para no dejar a administración afuera
+      }
+    }
+
+    if(v === CFG.adminPass){ ROL='admin'; CLAVE=v; m.remove(); abrirAdmin(); return; }
+    if(CFG.vistaPass && v === CFG.vistaPass){ ROL='vista'; CLAVE=v; m.remove(); abrirAdmin(); return; }
+    err('Clave incorrecta');
   };
   m.querySelector('#pwOk').onclick=go;
   inp.onkeydown=e=>{ if(e.key==='Enter') go(); };
@@ -4083,7 +4131,7 @@ function abrirAdmin(){
   }
 }
 $('#btnExit').addEventListener('click', ()=>{
-  ROL='admin';                       // al salir se olvida el rol: la próxima vez se vuelve a pedir clave
+  ROL='admin'; CLAVE='';             // al salir se olvidan rol y clave: la próxima vez se vuelve a pedir
   $$('#adTabs .tab').forEach(t=>t.classList.remove('hidden'));
   $('#appAdmin').classList.add('hidden');
   $('#appMarcaje').classList.remove('hidden');
