@@ -3875,13 +3875,20 @@ const yaInstalada = ()=>
 function plataforma(){
   const ua = navigator.userAgent;
   const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+
   if(ios){
-    // En iPhone solo Safari puede instalar. Chrome y el navegador de WhatsApp no.
-    const safari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) && !/FBAN|FBAV|Instagram|Line/.test(ua);
-    return safari ? 'ios-safari' : 'ios-otro';
+    // Solo el Safari de verdad puede instalar. El navegador que abre WhatsApp por
+    // dentro no puede, y su identificación se parece muchísimo a la de Safari.
+    // Lo que sí los distingue: Safari pone "Version/17.0" y el de WhatsApp no.
+    // Y navigator.standalone solo existe en Safari; dentro de otra app, no.
+    const otroNavegador = /CriOS|FxiOS|EdgiOS|OPiOS|Chrome/.test(ua);
+    const esSafariReal  = /Version\/\d/.test(ua) && typeof navigator.standalone !== 'undefined';
+    if(otroNavegador || !esSafariReal) return 'ios-otro';
+    return 'ios-safari';
   }
+
   if(/Android/.test(ua)){
-    const enApp = /; wv\)/.test(ua) || /FBAN|FBAV|Instagram|Line/.test(ua);
+    const enApp = /; wv\)/.test(ua) || /FBAN|FBAV|Instagram|Line|WhatsApp/.test(ua);
     return enApp ? 'android-enapp' : 'android';
   }
   return 'escritorio';
@@ -3916,6 +3923,15 @@ function pintarInstalar(){
       if(r && r.outcome==='accepted'){ promptInstalar=null; c.innerHTML=''; }
     };
   }
+  else if(p==='android'){
+    // Chrome no siempre ofrece el botón de entrada: espera a que la persona
+    // use un poco la página. Mientras tanto, el camino a mano.
+    c.innerHTML = caja(
+      '<b>Instala la app en tu celular</b><br>'+
+      'Toca el menú <b>⋮</b> arriba a la derecha y elige <b>Instalar aplicación</b> '+
+      '(o <b>Añadir a pantalla principal</b>).<br><br>'+
+      'Así marcas con un toque desde tu pantalla de inicio, sin buscar el enlace ni escanear el QR cada día.');
+  }
   else if(p==='ios-safari'){
     c.innerHTML = caja(
       '<b>Agrega la app a tu pantalla de inicio</b><br>'+
@@ -3926,15 +3942,20 @@ function pintarInstalar(){
   }
   else if(p==='ios-otro'){
     c.innerHTML = caja(
-      '<b>Ábrelo en Safari para instalarlo</b><br>'+
-      'Estás usando otro navegador y desde aquí no se puede instalar. '+
-      'Copia esta dirección, ábrela en <b>Safari</b>, y ahí podrás agregarla a tu pantalla de inicio.');
+      '<b>⚠️ Ábrelo en Safari</b><br>'+
+      'Estás viendo esto dentro de otra aplicación (WhatsApp, Chrome, Instagram) y <b>desde aquí no se puede instalar</b>.<br><br>'+
+      '1. Toca <b>Compartir</b> <span style="font-size:15px">⬆️</span> o el menú <b>⋯</b><br>'+
+      '2. Elige <b>Abrir en Safari</b><br>'+
+      '3. Ya en Safari, agrégalo a tu pantalla de inicio<br><br>'+
+      '<b>Importante:</b> marca siempre desde el ícono, no desde el enlace de WhatsApp.');
   }
   else if(p==='android-enapp'){
     c.innerHTML = caja(
-      '<b>Ábrelo en Chrome</b><br>'+
-      'Estás viendo esto dentro de otra aplicación. Toca el menú <b>⋮</b> arriba a la derecha y elige '+
-      '<b>Abrir en Chrome</b>. Desde ahí vas a poder instalarlo en tu pantalla de inicio.');
+      '<b>⚠️ Ábrelo en Chrome</b><br>'+
+      'Estás viendo esto dentro de otra aplicación y <b>desde aquí no se puede instalar</b>.<br><br>'+
+      'Toca el menú <b>⋮</b> arriba a la derecha y elige <b>Abrir en Chrome</b>. '+
+      'Desde ahí vas a poder instalarlo en tu pantalla de inicio.<br><br>'+
+      '<b>Importante:</b> marca siempre desde el ícono, no desde el enlace de WhatsApp.');
   }
   else { c.innerHTML=''; return; }
 
