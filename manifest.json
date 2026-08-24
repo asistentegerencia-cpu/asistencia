@@ -2,7 +2,7 @@
   "name": "Asistencia Grupo Robles",
   "short_name": "Asistencia",
   "description": "Marcaje de entrada y salida",
-  "_comentario_start_url": "A propósito NO se define start_url. Sin él, la app instalada arranca en la misma dirección desde la que se instaló — que es la del QR e incluye ?api=, la dirección del servidor. Si se fijara aquí, el ícono abriría una app sin servidor: sin padrón y sin poder marcar. Y no puede ir escrita en este archivo porque el repositorio es público.",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
