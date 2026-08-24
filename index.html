@@ -3,9 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="theme-color" content="#16294A">
+<meta name="theme-color" content="#224370">
 <title>Control de Asistencia</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128337;</text></svg>">
+
+<!-- App instalable. Los archivos viven junto al index.html en la carpeta publicada;
+     si se abre el archivo suelto, el navegador los ignora y todo sigue funcionando. -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Asistencia">
+<meta name="mobile-web-app-capable" content="yes">
 <style>
 :root{
   --bg:#F4F7F6; --surface:#FFFFFF; --surface-2:#EDF2F0;
@@ -229,6 +238,7 @@ tr:hover td{background:#FAFCFB}
         </div>
         <button class="btn" id="btnId">Continuar</button>
         <p id="idHint" style="font-size:12.5px;color:var(--muted);margin:14px 0 0;line-height:1.6;text-align:center">📍 Tu celular te pedirá permiso para compartir tu ubicación.<br>Toca <b>Permitir</b> — se usa solo para confirmar que estás en la oficina.</p>
+        <div id="instalar"></div>
       </div>
       <div class="note">
         ¿Problemas para ingresar? Comunícate con Administración.<br>
@@ -3386,6 +3396,8 @@ function renderId(){
     return;
   }
 
+  pintarInstalar();
+
   const lock = load(K.lock,null);
   if(!CFG.modoRecepcion && lock && lock.hasta > Date.now()){
     const seg = Math.ceil((lock.hasta-Date.now())/60000);
@@ -3845,6 +3857,97 @@ $('#lnkChange').addEventListener('click', e=>{
 window.addEventListener('pageshow', ()=>{
   if(!$('#viewId').classList.contains('hidden')) $('#inpId').value='';
 });
+
+/* ---------- 7b. INSTALAR LA APP ----------
+   Instalada en la pantalla de inicio, la app tiene su propio espacio de datos,
+   fijo. Eso es lo que hace que el identificador del celular deje de cambiar
+   —da igual si escanearon el QR o abrieron desde WhatsApp— y que la vinculación
+   por dispositivo pueda funcionar de verdad.
+
+   Android ofrece un botón. iPhone no: hay que explicarle el camino a mano, y
+   solo funciona desde Safari. */
+
+let promptInstalar = null;
+
+const yaInstalada = ()=>
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+function plataforma(){
+  const ua = navigator.userAgent;
+  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  if(ios){
+    // En iPhone solo Safari puede instalar. Chrome y el navegador de WhatsApp no.
+    const safari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua) && !/FBAN|FBAV|Instagram|Line/.test(ua);
+    return safari ? 'ios-safari' : 'ios-otro';
+  }
+  if(/Android/.test(ua)){
+    const enApp = /; wv\)/.test(ua) || /FBAN|FBAV|Instagram|Line/.test(ua);
+    return enApp ? 'android-enapp' : 'android';
+  }
+  return 'escritorio';
+}
+
+window.addEventListener('beforeinstallprompt', e=>{
+  e.preventDefault();
+  promptInstalar = e;
+  pintarInstalar();
+});
+window.addEventListener('appinstalled', ()=>{ promptInstalar=null; pintarInstalar(); });
+
+function pintarInstalar(){
+  const c = $('#instalar');
+  if(!c) return;
+  if(yaInstalada() || load('ca_noInstalar', false)){ c.innerHTML=''; return; }
+
+  const p = plataforma();
+  const caja = (contenido)=>
+    '<div style="margin-top:16px;padding:14px;border:1.5px dashed var(--primary);border-radius:12px;'+
+    'background:rgba(34,67,112,.04);font-size:13px;line-height:1.6;text-align:left">'+contenido+
+    '<div style="text-align:center;margin-top:10px"><a href="#" id="insNo" style="font-size:12px;color:var(--muted)">Ahora no</a></div></div>';
+
+  if(p==='android' && promptInstalar){
+    c.innerHTML = caja(
+      '<b>Instala la app en tu celular</b><br>'+
+      'Así marcas con un toque desde tu pantalla de inicio, sin buscar el enlace ni escanear el QR cada día.'+
+      '<button class="btn btn-sm" id="insBtn" style="width:100%;margin-top:10px">📲 Instalar aplicación</button>');
+    $('#insBtn').onclick = async ()=>{
+      promptInstalar.prompt();
+      const r = await promptInstalar.userChoice;
+      if(r && r.outcome==='accepted'){ promptInstalar=null; c.innerHTML=''; }
+    };
+  }
+  else if(p==='ios-safari'){
+    c.innerHTML = caja(
+      '<b>Agrega la app a tu pantalla de inicio</b><br>'+
+      '1. Toca el botón <b>Compartir</b> <span style="font-size:15px">⬆️</span> abajo en la barra de Safari<br>'+
+      '2. Baja y elige <b>Añadir a pantalla de inicio</b><br>'+
+      '3. Toca <b>Añadir</b><br><br>'+
+      'Desde ahí marcas con un toque, sin volver a escanear el QR.');
+  }
+  else if(p==='ios-otro'){
+    c.innerHTML = caja(
+      '<b>Ábrelo en Safari para instalarlo</b><br>'+
+      'Estás usando otro navegador y desde aquí no se puede instalar. '+
+      'Copia esta dirección, ábrela en <b>Safari</b>, y ahí podrás agregarla a tu pantalla de inicio.');
+  }
+  else if(p==='android-enapp'){
+    c.innerHTML = caja(
+      '<b>Ábrelo en Chrome</b><br>'+
+      'Estás viendo esto dentro de otra aplicación. Toca el menú <b>⋮</b> arriba a la derecha y elige '+
+      '<b>Abrir en Chrome</b>. Desde ahí vas a poder instalarlo en tu pantalla de inicio.');
+  }
+  else { c.innerHTML=''; return; }
+
+  const no = $('#insNo');
+  if(no) no.onclick = e=>{ e.preventDefault(); save('ca_noInstalar', true); c.innerHTML=''; };
+}
+
+/* Registrar el service worker: es lo que permite instalar y abrir sin internet */
+if('serviceWorker' in navigator && location.protocol==='https:'){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{ /* sin él la app funciona igual */ });
+  });
+}
 
 /* ---------- 8. ARRANQUE ---------- */
 function boot(){
