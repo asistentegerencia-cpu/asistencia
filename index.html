@@ -2699,6 +2699,9 @@ const DEF_CFG = {
   /* Cada persona queda atada al primer celular desde el que marca. Desde otro,
      el servidor rechaza. Evita que alguien marque por un compañero.
      No evita que le presten el celular desbloqueado: eso no lo resuelve el software. */
+  /* A dónde avisar al instante si alguien intenta marcar por otro. Vacío = sin avisos. */
+  correoAlertas:'',
+
   exigirDispositivo:false,
 
   /* Sábados: no todos se trabaja. Aquí van, uno por uno, los que SÍ.
@@ -2924,6 +2927,38 @@ function nuevoCid(){
   return 'C' + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
 }
 
+/* Descripción legible del equipo desde el que se marca, para la auditoría.
+   Android suele decir el modelo ("Redmi Note 12"); iPhone no lo revela, solo dice
+   "iPhone". Sirve para reconocer un aparato, no como prueba: es un dato que el
+   propio navegador declara y alguien con conocimientos podría alterarlo. */
+function infoEquipo(){
+  const ua = navigator.userAgent;
+  let modelo = '', so = '', nav = '';
+
+  const mAnd = ua.match(/Android\s+([\d.]+);\s*([^;)]+?)(?:\s+Build|\)|;)/);
+  if(mAnd){ so = 'Android '+mAnd[1]; modelo = mAnd[2].trim().replace(/\s+/g,' '); }
+  else if(/iPhone|iPad|iPod/.test(ua)){
+    modelo = /iPad/.test(ua) ? 'iPad' : 'iPhone';
+    const v = ua.match(/OS (\d+)[_.](\d+)/);
+    so = v ? 'iOS '+v[1]+'.'+v[2] : 'iOS';
+  }
+  else if(/Windows NT/.test(ua)) { modelo='PC'; so='Windows'; }
+  else if(/Mac OS X/.test(ua))   { modelo='Mac'; so='macOS'; }
+
+  if(/FBAN|FBAV/.test(ua))            nav='Facebook';
+  else if(/Instagram/.test(ua))       nav='Instagram';
+  else if(/; wv\)/.test(ua))          nav='dentro de otra app';
+  else if(/CriOS/.test(ua))           nav='Chrome';
+  else if(/EdgiOS|Edg\//.test(ua))    nav='Edge';
+  else if(/OPR\/|OPiOS/.test(ua))     nav='Opera';
+  else if(/Firefox|FxiOS/.test(ua))   nav='Firefox';
+  else if(/Chrome\//.test(ua))        nav='Chrome';
+  else if(/Safari/.test(ua))          nav='Safari';
+
+  if(yaInstalada()) nav = (nav?nav+' · ':'') + 'app instalada';
+  return [modelo, so, nav].filter(Boolean).join(' · ') || 'desconocido';
+}
+
 /* Identificador estable de este navegador, para la auditoría del servidor */
 function idDispositivo(){
   let d = localStorage.getItem('ca_devid');
@@ -2970,7 +3005,7 @@ async function sincronizarArranque(){
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
-     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo'].forEach(k=>{
+     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -3567,7 +3602,8 @@ function pedirSalidaPendiente(emp){
     const datos = {
       ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid,
       tipo:'SALIDA', fecha:p.fecha, hora, origen:'DECLARADO', gps:'off',
-      motivo:'Declarada por el colaborador al día siguiente', deviceId: idDispositivo()
+      motivo:'Declarada por el colaborador al día siguiente',
+      deviceId: idDispositivo(), equipo: infoEquipo(), confirmar:true
     };
     MAR.push({
       id:'M'+Date.now()+Math.floor(Math.random()*900+100), cid,
@@ -3648,9 +3684,11 @@ function pintarBoton(emp){
     btn.disabled = true;
     if(GEO.estado==='error'){
       // el problema es el permiso o la señal, no la distancia
-      hint.textContent = 'Necesitamos tu ubicación para validar el marcaje';
+      hint.textContent = 'Activa tu ubicación para poder marcar';
       al.innerHTML =
-        '<div class="alert alert-bad">'+esc(GEO.msg)+'.</div>'+
+        '<div class="alert alert-bad" style="text-align:left"><b>'+esc(GEO.msg)+'.</b><br>'+
+        'Sin ubicación activada <b>no se puede registrar tu asistencia</b>. '+
+        'Actívala y vuelve a intentar — solo se usa en este momento, para confirmar que estás en la oficina.</div>'+
         '<div style="display:flex;gap:10px;margin-bottom:14px">'+
           '<button class="btn btn-line" id="gpsRetry">Reintentar</button>'+
           '<button class="btn btn-line" id="gpsHelp">¿Cómo lo activo?</button>'+
@@ -3779,13 +3817,30 @@ async function marcar(){
     btn.disabled = true;
     $('#mkBtnLabel').textContent = 'REGISTRANDO…';
     $('#mkBtnHint').textContent  = 'Un momento';
+    const datosMarcaje = {
+      ident: emp.dni || emp.tel || emp.email || emp.id,
+      id: emp.id, cid, tipo,
+      lat: GEO.lat==null?'':GEO.lat, lng: GEO.lng==null?'':GEO.lng,
+      gps: GEO.estado, deviceId: idDispositivo(), equipo: infoEquipo()
+    };
     try{
-      const r = await api('marcar', {
-        ident: emp.dni || emp.tel || emp.email || emp.id,
-        id: emp.id, cid, tipo,
-        lat: GEO.lat==null?'':GEO.lat, lng: GEO.lng==null?'':GEO.lng,
-        gps: GEO.estado, deviceId: idDispositivo()
-      }, {timeout:15000});
+      let r = await api('marcar', datosMarcaje, {timeout:15000});
+
+      // Este celular ya marcó hoy por otra persona: se pregunta antes de seguir.
+      // No se bloquea —a veces es un celular prestado de verdad— pero queda
+      // constancia y le llega un aviso a administración.
+      if(r && r.motivo==='celular_compartido'){
+        const otros = (r.otros||[]).join(', ');
+        const sigue = confirm(
+          'Este celular ya marcó hoy por '+otros+'.\n\n'+
+          '¿Seguro que quieres marcar ahora por '+emp.nombre+'?\n\n'+
+          'Marcar por otra persona queda registrado y se avisa a Administración.');
+        if(!sigue){
+          btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
+          return renderMark();
+        }
+        r = await api('marcar', Object.assign({}, datosMarcaje, {confirmar:true}), {timeout:15000});
+      }
 
       if(r && r.ok && r.marcaje){
         reg = Object.assign({}, reg, r.marcaje, {ts: new Date(r.marcaje.fecha+'T'+r.marcaje.hora+':00').getTime(), srv:true});
@@ -3813,9 +3868,7 @@ async function marcar(){
       // Sin conexión: se guarda localmente y se reintenta después
       pendiente = true;
       reg.pendiente = true;
-      COLA.push({cid, ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, tipo,
-                 lat: GEO.lat==null?'':GEO.lat, lng: GEO.lng==null?'':GEO.lng,
-                 gps: GEO.estado, deviceId: idDispositivo()});
+      COLA.push(Object.assign({}, datosMarcaje, {confirmar:true}));
       saveCola();
       MAR.push(reg); saveMar();
     }
@@ -4298,7 +4351,29 @@ function anomalias(desde, hasta){
     }
   });
 
-  // 2) Marcajes hechos fuera de la zona de la oficina
+  // 2) Una persona marcando desde varios celulares.
+  //    Es la otra cara de la suplantación: alguien marca por ti desde su teléfono,
+  //    o tú marcas la entrada en uno y la salida en otro sin estar ahí.
+  const porPersona = {};
+  regs.forEach(m=>{
+    if(!m.dispositivo || !m.empId) return;
+    (porPersona[m.empId] = porPersona[m.empId] || {nombre:m.nombre, devs:new Set()}).devs.add(m.dispositivo);
+  });
+  Object.keys(porPersona).forEach(id=>{
+    const p = porPersona[id];
+    if(p.devs.size < 2) return;
+    out.push({
+      nivel: p.devs.size >= 3 ? 'grave' : 'aviso',
+      tipo: 'Una persona, varios celulares',
+      detalle: p.nombre + ' marcó desde ' + p.devs.size + ' celulares distintos',
+      pista: p.devs.size >= 3
+        ? 'Tres o más equipos es mucho. Revísalo con esa persona.'
+        : 'Puede ser que abra la app desde WhatsApp unas veces y desde el navegador otras. '+
+          'Si se repite, pídele que la instale y marque siempre desde el ícono.'
+    });
+  });
+
+  // 3) Marcajes hechos fuera de la zona de la oficina
   const fuera = regs.filter(m=>m.fueraZona && m.dist!=null);
   if(fuera.length){
     const porPersona = {};
@@ -4942,7 +5017,8 @@ function registroManual(fechaDef){
     // Sin esto el marcaje manual se pierde en la siguiente sincronizacion
     if(hayServidor()){
       api('marcar', {ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid: cidM,
-                     tipo, fecha, hora, origen:'MANUAL', motivo, registradoPor, gps:'off'},
+                     tipo, fecha, hora, origen:'MANUAL', motivo, registradoPor, gps:'off',
+                     deviceId: idDispositivo(), equipo: infoEquipo()},
           {timeout:20000})
         .then(r=>{ if(r && r.ok && r.marcaje){ integrarMarcaje(r.marcaje); renderTab(); toast('Marcaje enviado al servidor'); }
                    else toast('⚠ Guardado aqui, pero el servidor lo rechazo'); })
@@ -5234,6 +5310,17 @@ function tabCfg(b){
     '<button class="btn btn-sm btn-line" id="apiSync">Traer marcajes</button>'+
     '<button class="btn btn-sm btn-line" id="apiBorrar" style="color:var(--danger);border-color:var(--danger)">Borrar marcajes de un rango</button>'+
   '</div>'+
+  '<div class="frow" style="margin-top:14px"><div><label>Correos para avisos de suplantación</label>'+
+    '<input id="cMail" value="'+esc(CFG.correoAlertas||'')+'" placeholder="uno@empresa.com, otro@empresa.com"></div></div>'+
+  '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px;line-height:1.55">'+
+    'Te llega un correo <b>al instante</b> cuando un celular marca por otra persona, o cuando alguien '+
+    'intenta marcar desde un equipo que no es el suyo. Solo esas dos señales: si llegaran diez correos '+
+    'al día, nadie los miraría.<br>'+
+    '<b>Puedes poner varios</b>, separados por coma. Déjalo vacío para no recibir ninguno.'+
+    (function(){
+      const n = (CFG.correoAlertas||'').split(/[,;\s]+/).filter(x=>x.trim() && x.indexOf('@')>0).length;
+      return n ? '<br><span style="color:var(--ok)">✓ '+n+' destinatario'+(n===1?'':'s')+' configurado'+(n===1?'':'s')+'.</span>' : '';
+    })()+'</p>'+
   '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
   (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
     ' esperando enviarse.</b> Se reintenta solo cada dos minutos.'+
@@ -5454,6 +5541,7 @@ function tabCfg(b){
     CFG.vistaPass = nv;
     CFG.inicioOperacion=$('#cIni').value||'';
     CFG.exigirDispositivo = $('#cDev').value==='1';
+    CFG.correoAlertas = ($('#cMail').value||'').trim();
     CFG.apiUrl=limpiarApiUrl($('#cApi').value);
     const recAntes = !!CFG.modoRecepcion;
     CFG.modoRecepcion = $('#cRec').value==='1';
