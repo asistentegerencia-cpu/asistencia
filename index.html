@@ -3388,10 +3388,15 @@ function renderId(){
 
   const a = $('#idAlert'); a.innerHTML='';
 
-  // Publicada sin padrón dentro (repositorio público): la lista llega del servidor.
-  // Mientras no haya llegado, no dejar escribir: diría "no encontramos ese dato".
-  if(hayServidor() && !EMP.some(e=>e.activo)){
-    a.innerHTML = '<div class="alert alert-warn">Cargando el registro de personal…</div>';
+  // Sin padrón no se puede identificar a nadie, y decir "DNI inválido" sería
+  // mentirle a la persona: su DNI está bien, lo que falta es la lista.
+  if(!EMP.some(e=>e.activo)){
+    a.innerHTML = hayServidor()
+      ? '<div class="alert alert-warn">Cargando el registro de personal…</div>'
+      : '<div class="alert alert-bad" style="text-align:left"><b>La app no está configurada.</b><br>'+
+        'No es tu DNI: falta conectarla con el servidor.<br><br>'+
+        '<b>Escanea otra vez el código QR de la puerta</b> y, cuando abra, vuelve a agregarla a tu pantalla de inicio.'+
+        '<br><br>Si sigue igual, avísale a Administración.</div>';
     $('#btnId').disabled = true; $('#inpId').disabled = true;
     return;
   }
@@ -3416,6 +3421,10 @@ function intentarId(){
   const val = $('#inpId').value;
   const emp = findEmp(val);
   const a = $('#idAlert');
+
+  // Si no hay padrón cargado, el problema no es de la persona: no se le cuenta
+  // el intento ni se la bloquea. Bloquear a alguien por un error nuestro es lo peor.
+  if(!emp && !EMP.some(e=>e.activo)) return renderId();
 
   if(!emp){
     LOG.unshift({ts:Date.now(), tipo:'ID_FALLIDO', valor:String(val).slice(0,40)});
