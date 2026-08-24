@@ -2686,6 +2686,11 @@ const DEF_CFG = {
     {fecha:'2026-12-25', nombre:'Navidad'}
   ],
 
+  /* Cada persona queda atada al primer celular desde el que marca. Desde otro,
+     el servidor rechaza. Evita que alguien marque por un compañero.
+     No evita que le presten el celular desbloqueado: eso no lo resuelve el software. */
+  exigirDispositivo:false,
+
   /* Sábados: no todos se trabaja. Aquí van, uno por uno, los que SÍ.
      El que no esté en la lista no es laborable y no le genera falta a nadie.
 
@@ -2947,7 +2952,7 @@ async function sincronizarArranque(){
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
-     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos'].forEach(k=>{
+     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -3739,6 +3744,13 @@ async function marcar(){
         }
       }else if(r && !r.ok){
         btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
+        // El rechazo por dispositivo merece una explicación en pantalla, no un aviso que se va
+        if(r.motivo==='otro_dispositivo' || r.motivo==='sin_dispositivo'){
+          $('#mkAlert').innerHTML = '<div class="alert alert-bad" style="text-align:left">'+
+            '<b>No puedes marcar desde este celular.</b><br>'+
+            esc(r.error||'')+'</div>';
+          return;
+        }
         toast(r.error || 'El servidor rechazó el marcaje');
         return renderMark();
       }
@@ -4075,6 +4087,73 @@ function avisoServidor(){
     'Configúralo en <b>Configuración → Servidor</b>.</div>';
 }
 
+/* ---------- DETECCIÓN DE ANOMALÍAS ----------
+   No bloquea nada: solo señala lo que merece una mirada. La vinculación por
+   dispositivo previene; esto detecta lo que la prevención no puede impedir. */
+function anomalias(desde, hasta){
+  const regs = MAR.filter(m=>m.fecha>=desde && m.fecha<=hasta);
+  const out = [];
+
+  // 1) Un mismo celular usado por dos personas distintas. Es LA señal de suplantación.
+  const porDisp = {};
+  regs.forEach(m=>{
+    if(!m.dispositivo) return;
+    (porDisp[m.dispositivo] = porDisp[m.dispositivo] || {})[m.empId] = m.nombre;
+  });
+  Object.keys(porDisp).forEach(d=>{
+    const gente = Object.values(porDisp[d]);
+    if(gente.length > 1){
+      out.push({nivel:'grave', tipo:'Un celular, varias personas',
+        detalle: gente.join(', ') + ' marcaron desde el mismo celular',
+        pista:'Es la señal más clara de que alguien marcó por otro. Revisa con ellos.'});
+    }
+  });
+
+  // 2) Marcajes hechos fuera de la zona de la oficina
+  const fuera = regs.filter(m=>m.fueraZona && m.dist!=null);
+  if(fuera.length){
+    const porPersona = {};
+    fuera.forEach(m=>{ (porPersona[m.nombre]=porPersona[m.nombre]||[]).push(m); });
+    Object.keys(porPersona).forEach(n=>{
+      const ms = porPersona[n];
+      const lejos = Math.max.apply(null, ms.map(m=>m.dist));
+      out.push({nivel: lejos>1000?'grave':'aviso', tipo:'Marcaje lejos de la oficina',
+        detalle: n+' · '+ms.length+' marcaje'+(ms.length===1?'':'s')+', el más lejano a '+
+                 (lejos>=1000?(lejos/1000).toFixed(1)+' km':lejos+' m'),
+        pista: lejos>1000 ? 'A esa distancia no estaba en la oficina.'
+                          : 'Puede ser imprecisión del GPS. Con el radio en '+CFG.radio+' m, revisa si se repite.'});
+    });
+  }
+
+  // 3) Marcajes sin GPS: no se puede saber desde dónde se hicieron
+  const sinGps = regs.filter(m=>m.origen==='APP' && (m.gps==='error'||m.gps==='off'));
+  if(sinGps.length > regs.length*0.3 && regs.length>=5){
+    out.push({nivel:'aviso', tipo:'Muchos marcajes sin ubicación',
+      detalle: sinGps.length+' de '+regs.length+' marcajes no registraron dónde se hicieron',
+      pista:'Puede ser que la gente esté negando el permiso de ubicación.'});
+  }
+
+  // 4) Marcajes cargados a mano: legítimos, pero conviene tenerlos a la vista
+  const manuales = regs.filter(m=>m.origen==='MANUAL');
+  if(manuales.length){
+    out.push({nivel:'info', tipo:'Marcajes cargados a mano',
+      detalle: manuales.length+' registro'+(manuales.length===1?'':'s')+' que no hizo el propio colaborador',
+      pista:'Cada uno tiene su motivo anotado. Se ven en el Historial.'});
+  }
+  return out;
+}
+
+function avisoAnomalias(desde, hasta){
+  if(soloVista()) return '';
+  const a = anomalias(desde, hasta);
+  const graves = a.filter(x=>x.nivel==='grave');
+  if(!graves.length) return '';
+  return '<div class="alert alert-bad" style="margin-bottom:16px">🚨 <b>'+graves.length+
+    ' señal'+(graves.length===1?'':'es')+' que conviene revisar:</b><br>'+
+    graves.map(g=>'· '+esc(g.detalle)).join('<br>')+
+    '<br><span style="font-weight:400">El detalle está en la pestaña <b>Análisis</b>.</span></div>';
+}
+
 /* Si hay marcajes de alguien que ya no está en el padrón, es que se borró su fila.
    Esa persona no puede marcar y su historial queda huérfano: hay que avisarlo fuerte. */
 function avisoPadronHuerfano(){
@@ -4118,7 +4197,7 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoDemo() + avisoPadronHuerfano() + avisoServidor() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  b.innerHTML = avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
@@ -4394,6 +4473,21 @@ function analisisHTML(desde, hasta, ahora){
             '<span style="font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap">'+min2hhmm(r.a.minutos)+'</span>'+
           '</div>').join('')+'</div>') : '')+
     '</div>'+
+
+    (function(){
+      const a = anomalias(desde, hasta);
+      if(!a.length) return '<div class="cfg" style="margin-bottom:18px"><h3>Control de suplantación</h3>'+
+        '<p class="hint" style="margin:0">✓ Sin señales de alerta en el periodo. Ningún celular marcó por más de una persona.</p></div>';
+      const color = n => n==='grave'?'var(--danger)' : n==='aviso'?'var(--warn)' : 'var(--muted)';
+      const icono = n => n==='grave'?'🚨' : n==='aviso'?'⚠️' : 'ℹ️';
+      return '<div class="cfg" style="margin-bottom:18px"><h3>Control de suplantación</h3>'+
+        '<p class="hint">Señales detectadas en el periodo. No bloquean nada: son para que las mires.</p>'+
+        a.map(x=>'<div style="padding:10px 0;border-top:1px solid var(--line)">'+
+          '<div style="font-size:13.5px;font-weight:650;color:'+color(x.nivel)+'">'+icono(x.nivel)+' '+esc(x.tipo)+'</div>'+
+          '<div style="font-size:13.5px;margin-top:3px">'+esc(x.detalle)+'</div>'+
+          '<div style="font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.5">'+esc(x.pista)+'</div>'+
+        '</div>').join('')+'</div>';
+    })()+
 
     '<h3 style="font-size:15px;margin:0 0 10px">Data final por colaborador</h3>'+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
@@ -4957,6 +5051,25 @@ function tabCfg(b){
     '<button class="btn btn-sm btn-line" id="apiCola" style="margin-top:8px">Reintentar ahora</button></div>' : '')+
   '</div>'+
 
+  /* ---- Vinculación por dispositivo ---- */
+  '<div class="cfg" style="grid-column:1/-1"><h3>Un celular por persona</h3>'+
+  '<p class="hint">Cada colaborador queda atado al primer celular desde el que marca. Desde otro, el servidor lo rechaza. '+
+  'Es lo que evita que alguien marque por un compañero.<br>'+
+  '<b>Lo que no evita:</b> que le presten el celular desbloqueado. Eso se ataca con política, no con software.</p>'+
+  '<div class="frow"><div><label>Control de dispositivo</label><select id="cDev">'+
+    opt('0','Desactivado — cualquiera puede marcar desde cualquier celular', CFG.exigirDispositivo?'1':'0')+
+    opt('1','Activado — cada quien solo desde el suyo', CFG.exigirDispositivo?'1':'0')+
+  '</select></div></div>'+
+  (CFG.exigirDispositivo
+    ? '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px;line-height:1.55">'+
+      'Cuando alguien cambie de teléfono, pierda el suyo o limpie los datos del navegador, '+
+      '<b>no va a poder marcar hasta que le liberes el vínculo</b> aquí abajo. Cuenta con unas cuantas al mes.</p>'
+    : '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px;line-height:1.55">'+
+      'Mientras esté desactivado, cualquiera que sepa un DNI puede marcar por esa persona.</p>')+
+  '<div id="devLista">'+
+    '<button class="btn btn-sm btn-line" id="devVer">Ver celulares vinculados</button>'+
+  '</div></div>'+
+
   '<div class="cfg"><h3>Inicio de operación</h3>'+
   '<p class="hint">El primer día que el sistema estuvo funcionando. Los días anteriores no cuentan como falta: '+
   'nadie podía marcar porque el sistema no existía. Sin esto, pedir el reporte del mes en la primera semana '+
@@ -5151,6 +5264,7 @@ function tabCfg(b){
     }
     CFG.vistaPass = nv;
     CFG.inicioOperacion=$('#cIni').value||'';
+    CFG.exigirDispositivo = $('#cDev').value==='1';
     CFG.apiUrl=limpiarApiUrl($('#cApi').value);
     const recAntes = !!CFG.modoRecepcion;
     CFG.modoRecepcion = $('#cRec').value==='1';
@@ -5249,6 +5363,42 @@ function tabCfg(b){
 
   const bCola = $('#apiCola');
   if(bCola) bCola.onclick = async ()=>{ apiOut('Reintentando…'); await enviarCola(); renderTab(); };
+
+  /* Celulares vinculados: ver y liberar */
+  $('#devVer').onclick = async ()=>{
+    const cont = $('#devLista');
+    cont.innerHTML = '<p style="font-size:13px;color:var(--muted);margin:0">Consultando…</p>';
+    try{
+      const r = await api('arranque', {}, {timeout:25000});
+      const devs = (r && r.dispositivos) || {};
+      const conCel = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO' && devs[e.id]);
+      const sinCel = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO' && !devs[e.id]);
+      cont.innerHTML =
+        '<div class="tblscroll"><table><thead><tr><th>Colaborador</th><th>Celular vinculado</th><th></th></tr></thead><tbody>'+
+        (conCel.length ? conCel.map(e=>'<tr>'+
+          '<td class="name">'+esc(e.nombre)+'</td>'+
+          '<td class="num" style="font-size:12px;color:var(--muted)">'+esc(String(devs[e.id]).slice(0,14))+'…</td>'+
+          '<td><button class="btn btn-sm btn-line devLib" data-id="'+e.id+'" data-n="'+esc(e.nombre)+'">Liberar</button></td>'+
+        '</tr>').join('') : '<tr><td colspan="3"><div class="empty">Todavía nadie tiene celular vinculado.</div></td></tr>')+
+        '</tbody></table></div>'+
+        (sinCel.length ? '<p style="font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.55">'+
+          '<b>Sin vincular ('+sinCel.length+'):</b> '+sinCel.map(e=>esc(e.nombre)).join(', ')+
+          '.<br>Se vinculan solos la primera vez que marcan.</p>' : '')+
+        '<button class="btn btn-sm btn-line" id="devVer2" style="margin-top:12px">Actualizar lista</button>';
+      $('#devVer2').onclick = $('#devVer').onclick;
+      $$('.devLib').forEach(b=>b.onclick = async ()=>{
+        if(!confirm('Se libera el celular de '+b.dataset.n+'.\n\nLa próxima vez que marque, quedará vinculado al teléfono que use.\n\n¿Continuar?')) return;
+        b.disabled = true; b.textContent = 'Liberando…';
+        try{
+          const rr = await api('liberar', {id:b.dataset.id}, {timeout:25000});
+          if(rr && rr.ok){ toast('Celular de '+b.dataset.n+' liberado'); $('#devVer').onclick(); }
+          else toast('No se pudo liberar');
+        }catch(e){ toast('Sin conexión con el servidor'); b.disabled=false; b.textContent='Liberar'; }
+      });
+    }catch(e){
+      cont.innerHTML = '<p style="font-size:13px;color:var(--danger);margin:0">No se pudo consultar: '+esc(e.message)+'</p>';
+    }
+  };
 
   /* Calendario de sábados — se guarda al instante, sin depender de "Guardar configuración" */
   $$('.sabChip').forEach(chip=>{
