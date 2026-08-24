@@ -3000,6 +3000,14 @@ async function empujar(accion, datos){
    Nadie desaparece por accidente. */
 async function empujarPersonal(){
   if(!hayServidor()) return 'local';
+
+  // Nunca enviar un padrón vacío: si este navegador no tiene la lista, lo que
+  // corresponde es no tocar nada, no borrarle el padrón a todos.
+  if(!EMP.length){
+    toast('No se envió: este navegador no tiene el padrón cargado');
+    return 'error';
+  }
+
   try{
     const r = await api('arranque', {}, {timeout:20000});
     if(r && r.ok && Array.isArray(r.emp) && r.emp.length){
