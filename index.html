@@ -3885,9 +3885,15 @@ async function marcar(){
       // constancia y le llega un aviso a administración.
       if(r && r.motivo==='celular_compartido'){
         const otros = (r.otros||[]).join(', ');
+        // Son dos situaciones distintas y conviene decirle a la persona cuál es:
+        // que este celular ya marcó hoy por alguien, o que este celular es de alguien.
         const sigue = confirm(
-          'Este celular ya marcó hoy por '+otros+'.\n\n'+
+          (r.esDeOtro ? 'Este celular está vinculado a '+otros+'.'
+                      : 'Este celular ya marcó hoy por '+otros+'.')+'\n\n'+
           '¿Seguro que quieres marcar ahora por '+emp.nombre+'?\n\n'+
+          (r.esDeOtro
+            ? 'Si continúas, este celular pasará a ser el de '+emp.nombre+'.\n'
+            : '')+
           'Marcar por otra persona queda registrado y se avisa a Administración.');
         if(!sigue){
           btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
@@ -5308,7 +5314,7 @@ function tabDisp(b){
         if(!confirm('Se liberará el vínculo de '+e.nombre+'.\n\nEl próximo celular desde el que marque quedará como el suyo. ¿Continuar?')) return;
         btn.disabled = true; btn.textContent = 'Liberando…';
         try{
-          const r = await api('liberar', {empId:e.id}, {timeout:30000});
+          const r = await api('liberar', {id:e.id}, {timeout:30000});
           if(r && r.ok){ delete DISP[e.id]; toast('Vínculo liberado'); }
           else toast('No se pudo liberar: '+((r&&r.error)||'sin respuesta'));
         }catch(err){ toast('Sin conexión con el servidor'); }
