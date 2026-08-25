@@ -302,6 +302,7 @@ tr:hover td{background:#FAFCFB}
     <div class="tab" data-tab="aus">Ausencias</div>
     <div class="tab" data-tab="hist">Historial</div>
     <div class="tab" data-tab="emp">Personal</div>
+    <div class="tab" data-tab="disp">Celulares</div>
     <div class="tab" data-tab="cfg">Configuración</div>
     <div class="tab" data-tab="qr">Código QR</div>
   </div>
@@ -2770,6 +2771,7 @@ let DEV = load(K.dev, null);
 let LOG = load(K.log, []);
 let AUS = load(K.aus, []);
 let COLA = load(K.cola, []);          // marcajes hechos sin conexión, esperando sincronizar
+let DISP = {};                        // empId -> celular vinculado, según el servidor
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -3002,6 +3004,7 @@ async function sincronizarArranque(){
   // identifica preguntándole al servidor de a una persona.
   if(Array.isArray(r.emp) && r.emp.length){ EMP = r.emp; saveEmp(); }
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
+  if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
@@ -3094,6 +3097,39 @@ async function sincronizarMarcajes(desde, hasta){
   }).concat(r.marcajes);
   saveMar();
   return true;
+}
+
+/* Reconcilia los marcajes de UNA persona contra el servidor.
+
+   Hace falta porque el celular guarda su propia copia de lo que marcó. Si
+   administración borra un marcaje equivocado desde el panel, ese celular no se
+   enteraba: seguía mostrando "jornada completa" y no dejaba volver a marcar, sin
+   forma de arreglarlo desde el aparato. Y no podía comprobarlo por su cuenta
+   porque 'reporte' exige clave de administración.
+
+   Lo que sigue en la cola no se toca: eso todavía no llegó al servidor y borrarlo
+   sería perder un marcaje de verdad. */
+async function sincronizarMios(emp, desde, hasta){
+  if(!hayServidor() || !emp || !emp.dni) return false;
+  desde = desde || hoyISO();
+  hasta = hasta || hoyISO();
+
+  let r;
+  try{
+    r = await api('mios', {ident:emp.dni, empId:emp.id, desde:desde, hasta:hasta}, {timeout:15000});
+  }catch(e){ return false; }
+  if(!r || !r.ok || !Array.isArray(r.marcajes)) return false;
+
+  const enCola = new Set(COLA.map(x=>x.cid).filter(Boolean));
+  const antes = MAR.length;
+  MAR = MAR.filter(m=>{
+    if(m.empId !== emp.id) return true;                      // de otra persona: no me meto
+    if(m.fecha < desde || m.fecha > hasta) return true;      // fuera del rango consultado
+    if(m.cid && enCola.has(m.cid)) return true;              // sin enviar todavía: se queda
+    return false;                                            // en el rango manda el servidor
+  }).concat(r.marcajes.map(m=>Object.assign({}, m, {srv:true, pendiente:false})));
+  saveMar();
+  return MAR.length !== antes;
 }
 
 window.addEventListener('online', ()=>{ enviarCola(); });
@@ -3557,6 +3593,16 @@ function renderMark(){
   pintarDia(emp);
   pedirSalidaPendiente(emp);
   pedirUbicacion(()=>{ pintarGps(); pintarBoton(emp); });
+
+  // Preguntar al servidor qué marcó esta persona de verdad. Si administración le
+  // borró un marcaje, aquí es donde este celular se entera y se vuelve a pintar.
+  sincronizarMios(emp).then(cambio=>{
+    if(!cambio) return;
+    if($('#viewMark').classList.contains('hidden')) return;   // ya se fue de esta pantalla
+    pintarBoton(emp);
+    pintarDia(emp);
+    pedirSalidaPendiente(emp);
+  });
 }
 
 /* --- Salida sin registrar de un día anterior ---
@@ -4215,6 +4261,7 @@ function renderTab(){
   if(TAB==='aus')  return tabAus(b);
   if(TAB==='hist') return tabHist(b);
   if(TAB==='emp')  return tabEmp(b);
+  if(TAB==='disp') return tabDisp(b);
   if(TAB==='cfg')  return tabCfg(b);
   if(TAB==='qr')   return tabQr(b);
 }
@@ -4476,7 +4523,7 @@ function tabHoy(b){
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes)+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Horario</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+
+      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Horario</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
     (filas.length ? filas.map(r=>{
       const j=r.j;
@@ -4498,12 +4545,18 @@ function tabHoy(b){
         '<td class="num">'+salTxt+'</td>'+
         '<td class="num">'+perm+'</td>'+
         '<td>'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
-        '<td>'+zona+'</td></tr>';
-    }).join('') : '<tr><td colspan="'+(CFG.usaProyectos?11:10)+'"><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
+        '<td>'+zona+'</td>'+
+        (soloVista()?'':'<td>'+((j.entrada||j.salida)
+          ? '<button class="btn btn-sm btn-line" data-corr="'+esc(r.e.id)+'">Corregir</button>'
+          : '')+'</td>')+'</tr>';
+    }).join('') : '<tr><td colspan="'+((CFG.usaProyectos?11:10)+(soloVista()?0:1))+'"><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
     '</tbody></table></div></div>'+
     notaExentos();
 
   wireFiltros('h', ()=>renderTab());
+  Array.from(document.querySelectorAll('[data-corr]')).forEach(btn=>{
+    btn.onclick = ()=>corregirMarcajes(btn.dataset.corr, hoyISO());
+  });
   // "Actualizar" tiene que traer lo del servidor: es lo que uno espera al tocarlo
   $('#rHoy').onclick = async ()=>{
     const b = $('#rHoy');
@@ -4825,8 +4878,8 @@ function tabHist(b){
       '</div>'+
       (regs.length ?
       '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th><th>Estado</th><th>Min.</th><th>Distancia</th></tr></thead><tbody>'+
-      regs.map(m=>'<tr>'+
+      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th><th>Estado</th><th>Min.</th><th>Distancia</th>'+(soloVista()?'':'<th></th>')+'</tr></thead><tbody>'+
+      regs.map((m,idx)=>'<tr>'+
         '<td class="num">'+fechaCorta(m.fecha)+'</td>'+
         '<td class="name">'+esc(m.nombre)+'</td>'+
         '<td>'+esc(m.area)+'</td>'+
@@ -4835,8 +4888,20 @@ function tabHist(b){
         '<td>'+esc(m.estado)+'</td>'+
         '<td class="num">'+((m.tardanza||m.anticipada)? (m.tardanza||m.anticipada)+"'" : '—')+'</td>'+
         '<td class="num">'+(m.dist==null?'—':(m.dist>=1000?(m.dist/1000).toFixed(1)+' km':m.dist+' m'))+'</td>'+
+        (soloVista()?'':'<td><button class="btn btn-sm btn-line" data-delm="'+idx+'" style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>')+
       '</tr>').join('')+'</tbody></table></div></div>'
       : '<div class="tblwrap"><div class="empty">No hay marcajes en el rango seleccionado.</div></div>');
+
+    Array.from($('#hOut').querySelectorAll('[data-delm]')).forEach(btn=>{
+      btn.onclick = async ()=>{
+        const m = regs[Number(btn.dataset.delm)];
+        if(!confirm('Se borrará la '+m.tipo.toLowerCase()+' de las '+m.hora+' de '+m.nombre+
+                    ' del '+fechaCorta(m.fecha)+'.\n\nNo se puede deshacer. ¿Continuar?')) return;
+        btn.disabled = true; btn.textContent = 'Borrando…';
+        if(await borrarMarcaje(m)) toast('Marcaje borrado');
+        go();
+      };
+    });
   };
   $('#hGo').onclick = go;
   $('#hX').onclick  = ()=>exportar($('#fI').value, $('#fF').value, 'Asistencia_'+$('#fI').value+'_a_'+$('#fF').value);
@@ -4962,6 +5027,79 @@ function editarAus(id){
    Alguien olvidó marcar, se quedó sin batería o llegó con el GPS bloqueado.
    El motivo es obligatorio y el registro queda señalado como MANUAL en el Excel:
    nunca debe confundirse con un marcaje hecho por la propia persona. */
+/* Borra UN marcaje suelto.
+
+   Hace falta a diario: alguien toca el botón al pasar y le queda una salida que no
+   corresponde. Antes lo único que había era borrar todo un rango de fechas, que para
+   corregir una marca es desproporcionado.
+
+   Borra en los tres sitios donde puede estar, o el marcaje reaparece:
+     - el servidor (la copia buena)
+     - MAR de este navegador
+     - la cola, si todavía no había llegado a enviarse
+   Y deja constancia en la auditoría de quién lo quitó. */
+async function borrarMarcaje(m){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return false; }
+
+  if(m.srv && m.id && hayServidor()){
+    try{
+      const r = await api('borrar', {id:m.id}, {timeout:30000});
+      if(!r || !r.ok){ toast('El servidor no pudo borrarlo: '+((r&&r.error)||'sin respuesta')); return false; }
+    }catch(e){ toast('Sin conexión con el servidor. No se borró nada.'); return false; }
+  }
+
+  MAR  = MAR.filter(x => !((m.cid && x.cid===m.cid) || (m.id && x.id===m.id)));
+  COLA = COLA.filter(x => !(m.cid && x.cid===m.cid));
+  saveMar(); saveCola();
+
+  LOG.unshift({ts:Date.now(), tipo:'MARCAJE_BORRADO',
+               valor:(m.nombre||'')+' · '+m.tipo+' '+m.hora+' del '+m.fecha});
+  LOG = LOG.slice(0,300); save(K.log, LOG);
+  return true;
+}
+
+/* Los marcajes de una persona en un día, cada uno con su botón para quitarlo.
+   Se muestra la lista en vez de un aspa suelto en la tabla: así se ve exactamente
+   qué se va a borrar antes de tocarlo. */
+function corregirMarcajes(empId, fecha){
+  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  const emp = EMP.find(e=>e.id===empId);
+  if(!emp) return;
+
+  const m = document.createElement('div'); m.className='modal';
+  const pintar = ()=>{
+    const ms = marcajesDe(empId, fecha);
+    m.innerHTML = '<div class="box"><h2>Corregir marcajes</h2>'+
+      '<p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.5">'+
+        '<b>'+esc(emp.nombre)+'</b> · '+fechaCorta(fecha)+'<br>'+
+        'Quita el marcaje que no corresponde. Se borra también del servidor y no se puede deshacer.</p>'+
+      (ms.length ?
+        '<div class="tblwrap"><table><thead><tr><th>Tipo</th><th>Hora</th><th>Estado</th><th>Origen</th><th></th></tr></thead><tbody>'+
+        ms.map((x,i)=>'<tr>'+
+          '<td><span class="tag '+(x.tipo==='ENTRADA'?'tag-ok':'tag-warn')+'">'+esc(x.tipo)+'</span></td>'+
+          '<td class="num" style="font-weight:700">'+esc(x.hora)+'</td>'+
+          '<td>'+esc(x.estado||'—')+'</td>'+
+          '<td>'+esc(x.origen||'APP')+(x.pendiente?' <span class="tag tag-warn" style="font-size:9px">SIN ENVIAR</span>':'')+'</td>'+
+          '<td><button class="btn btn-sm btn-line" data-q="'+i+'" style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>'+
+        '</tr>').join('')+'</tbody></table></div>'
+        : '<div class="empty">Esta persona no tiene marcajes ese día.</div>')+
+      '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn btn-line" id="cX">Cerrar</button></div></div>';
+
+    m.querySelector('#cX').onclick = ()=>{ m.remove(); renderTab(); };
+    Array.from(m.querySelectorAll('[data-q]')).forEach(btn=>{
+      btn.onclick = async ()=>{
+        const x = ms[Number(btn.dataset.q)];
+        if(!confirm('Se borrará la '+x.tipo.toLowerCase()+' de las '+x.hora+' de '+emp.nombre+'.\n\nNo se puede deshacer. ¿Continuar?')) return;
+        btn.disabled = true; btn.textContent = 'Borrando…';
+        if(await borrarMarcaje(x)) toast('Marcaje borrado');
+        pintar();
+      };
+    });
+  };
+  pintar();
+  document.body.appendChild(m);
+}
+
 function registroManual(fechaDef){
   if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
   const hoy = hoyISO();
@@ -5053,6 +5191,132 @@ function avisoDni(){
     d.map(x=>esc(x.dni)+' ('+x.quienes.map(esc).join(' y ')+')').join(' · ')+
     '. Corrígelo o esas personas se confundirán entre sí al marcar.</div>';
   return out;
+}
+
+/* ---------- TAB: CELULARES ----------
+   Responde a una pregunta concreta de administración: ¿desde qué teléfono marca
+   cada quien? Y su consecuencia: ¿hay alguien marcando por otro?
+
+   Ojo con la diferencia, porque son dos cosas distintas:
+     - VINCULADO es un candado. Solo existe si "un celular por persona" está
+       encendido en Configuración; a partir de ahí esa persona no puede marcar
+       desde otro aparato.
+     - USADO es lo que de hecho pasó, y sale de los propios marcajes. Existe
+       siempre, esté el candado puesto o no.
+
+   El identificador del celular lo genera la app y vive en ese navegador. Sirve
+   para reconocer un aparato, no como prueba: si alguien reinstala la app o entra
+   de incógnito, aparece como un celular distinto. */
+function tabDisp(b){
+  const candado = String(CFG.exigirDispositivo) === 'true' || CFG.exigirDispositivo === true;
+
+  // Lo que de verdad pasó, según los marcajes que hay en este panel
+  const porPersona = {};   // empId -> { dispositivo -> {n, ultimo, equipo} }
+  const porEquipo  = {};   // dispositivo -> Set de empId
+  MAR.forEach(m=>{
+    if(!m.dispositivo || !m.empId) return;
+    const p = porPersona[m.empId] = porPersona[m.empId] || {};
+    const d = p[m.dispositivo] = p[m.dispositivo] || {n:0, ultimo:'', equipo:''};
+    d.n++;
+    if(m.fecha > d.ultimo) d.ultimo = m.fecha;
+    if(m.equipo && !d.equipo) d.equipo = m.equipo;
+    (porEquipo[m.dispositivo] = porEquipo[m.dispositivo] || new Set()).add(m.empId);
+  });
+
+  const nombreDe = id => { const e = EMP.find(x=>x.id===id); return e ? e.nombre : '(dado de baja)'; };
+  const compartidos = Object.keys(porEquipo).filter(d=>porEquipo[d].size > 1);
+
+  const filas = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').map(e=>{
+    const usados = porPersona[e.id] || {};
+    const ids = Object.keys(usados).sort((a,b)=> usados[b].ultimo.localeCompare(usados[a].ultimo));
+    return {e, usados, ids, vinculado: DISP[e.id] || ''};
+  });
+
+  const sinMarcar = filas.filter(r=>!r.ids.length);
+  const variosEq  = filas.filter(r=>r.ids.length > 1);
+
+  b.innerHTML =
+    '<div class="alert '+(candado?'alert-ok':'alert-warn')+'" style="margin-bottom:16px">'+
+      (candado
+        ? '🔒 <b>Un celular por persona está ACTIVADO.</b> Cada quien quedó amarrado al primer teléfono desde el que marcó y no puede usar otro. Para permitirle cambiar de equipo, libéralo en esta pantalla.'
+        : '🔓 <b>Un celular por persona está APAGADO.</b> Cualquiera puede marcar desde cualquier teléfono, así que abajo no hay vínculos: lo que ves es el teléfono que cada quien <b>viene usando</b>, sacado de sus marcajes. Para poner el candado, ve a <b>Configuración</b>.')+
+    '</div>'+
+    (compartidos.length
+      ? '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Un mismo celular marcó por más de una persona.</b><br>'+
+        compartidos.map(d=>'<b>'+esc(nombreEquipo(porPersona, d))+'</b> ('+esc(d.slice(0,10))+'…): '+
+          Array.from(porEquipo[d]).map(x=>esc(nombreDe(x))).join(' y ')).join('<br>')+
+        '<br>Es la señal más clara de que alguien marcó por un compañero. Revísalo.</div>'
+      : '')+
+    (variosEq.length
+      ? '<div class="alert alert-warn" style="margin-bottom:16px">'+
+        variosEq.map(r=>'<b>'+esc(r.e.nombre)+'</b> ha marcado desde '+r.ids.length+' teléfonos distintos.').join('<br>')+
+        '<br>Puede ser que haya cambiado de equipo o reinstalado la app. Si no, conviene preguntar.</div>'
+      : '')+
+    '<div class="kpis">'+
+      kpi('Ya marcaron alguna vez', (filas.length - sinMarcar.length) + ' / ' + filas.length, 'k-ok')+
+      kpi('Nunca marcaron', sinMarcar.length, sinMarcar.length?'k-warn':'k-ok')+
+      kpi('Celulares distintos', Object.keys(porEquipo).length, '')+
+      kpi('Celulares compartidos', compartidos.length, compartidos.length?'k-bad':'k-ok')+
+    '</div>'+
+    '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+      '<th>Colaborador</th><th>Área</th><th>Celular que usa</th><th>Identificador</th>'+
+      '<th>Marcajes</th><th>Último</th><th>'+(candado?'Vínculo':'')+'</th>'+
+    '</tr></thead><tbody>'+
+    filas.map(r=>{
+      if(!r.ids.length){
+        return '<tr><td class="name">'+esc(r.e.nombre)+'</td><td>'+esc(r.e.area)+'</td>'+
+          '<td colspan="4"><span class="tag tag-warn">TODAVÍA NO MARCA DESDE NINGÚN CELULAR</span></td><td></td></tr>';
+      }
+      return r.ids.map((d,i)=>{
+        const u = r.usados[d];
+        const compartido = porEquipo[d].size > 1;
+        return '<tr>'+
+          '<td class="name">'+(i===0?esc(r.e.nombre):'<span style="color:var(--muted)">↳ mismo colaborador</span>')+'</td>'+
+          '<td>'+(i===0?esc(r.e.area):'')+'</td>'+
+          '<td>'+(u.equipo?esc(u.equipo):'<span style="color:var(--muted)">no quedó registrado</span>')+
+            (compartido?' <span class="tag tag-bad" style="font-size:9px">COMPARTIDO</span>':'')+'</td>'+
+          '<td class="num" style="font-size:12px;color:var(--muted)">'+esc(d.slice(0,12))+'…</td>'+
+          '<td class="num">'+u.n+'</td>'+
+          '<td class="num">'+fechaCorta(u.ultimo)+'</td>'+
+          '<td>'+(candado
+            ? (r.vinculado===d
+                ? '<span class="tag tag-ok">VINCULADO</span> '+(soloVista()?'':'<button class="btn btn-sm btn-line" data-lib="'+esc(r.e.id)+'">Liberar</button>')
+                : (r.vinculado?'<span class="tag tag-warn" style="font-size:9px">NO ES EL VINCULADO</span>':''))
+            : '')+'</td>'+
+        '</tr>';
+      }).join('');
+    }).join('')+
+    '</tbody></table></div></div>'+
+    '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
+      'El <b>identificador</b> lo genera la app y se guarda en el navegador de ese celular. '+
+      'Si alguien reinstala la app, borra los datos del navegador o entra de incógnito, aparecerá como un celular nuevo. '+
+      'El <b>modelo</b> es lo que el propio teléfono declara: los Android suelen decirlo, los iPhone solo dicen "iPhone". '+
+      'Sirve para reconocer un aparato, no como prueba.</p>';
+
+  if(candado && !soloVista()){
+    Array.from(b.querySelectorAll('[data-lib]')).forEach(btn=>{
+      btn.onclick = async ()=>{
+        const e = EMP.find(x=>x.id===btn.dataset.lib);
+        if(!confirm('Se liberará el vínculo de '+e.nombre+'.\n\nEl próximo celular desde el que marque quedará como el suyo. ¿Continuar?')) return;
+        btn.disabled = true; btn.textContent = 'Liberando…';
+        try{
+          const r = await api('liberar', {empId:e.id}, {timeout:30000});
+          if(r && r.ok){ delete DISP[e.id]; toast('Vínculo liberado'); }
+          else toast('No se pudo liberar: '+((r&&r.error)||'sin respuesta'));
+        }catch(err){ toast('Sin conexión con el servidor'); }
+        renderTab();
+      };
+    });
+  }
+}
+
+/* El modelo con el que se conoce a un celular, buscándolo entre quienes lo usaron */
+function nombreEquipo(porPersona, disp){
+  for(const empId in porPersona){
+    const u = porPersona[empId][disp];
+    if(u && u.equipo) return u.equipo;
+  }
+  return 'Celular sin modelo registrado';
 }
 
 function tabEmp(b){
