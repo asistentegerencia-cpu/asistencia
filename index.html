@@ -3013,6 +3013,7 @@ async function sincronizarArranque(){
   if(Array.isArray(r.emp) && r.emp.length){ EMP = r.emp; saveEmp(); }
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
+  if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
@@ -4280,6 +4281,20 @@ function renderTab(){
   if(TAB==='qr')   return tabQr(b);
 }
 
+/* Los avisos de suplantación se envían sin interrumpir el marcaje: si el correo
+   falla, nadie se entera. Por eso el panel lo dice en voz alta cuando no hay
+   ninguno configurado — si no, se cree que la vigilancia está puesta y no lo está. */
+function avisoCorreoAlertas(){
+  if(soloVista() || !hayServidor()) return '';
+  if(CFG.tieneCorreoAlertas) return '';
+  const candado = String(CFG.exigirDispositivo)==='true' || CFG.exigirDispositivo===true;
+  return '<div class="alert alert-bad" style="margin-bottom:16px">📧 <b>No hay correo para los avisos.</b> '+
+    (candado
+      ? 'El bloqueo por celular sí está funcionando, pero <b>nadie recibe el aviso</b> cuando alguien intenta marcar por otra persona. '
+      : 'Nadie recibe aviso cuando un celular marca por varias personas. ')+
+    'Ponlo en <b>Configuración → Servidor</b>.</div>';
+}
+
 function avisoUbicacion(){
   if(soloVista() || CFG.ubicacionOk) return '';
   return '<div class="alert alert-warn" style="margin-bottom:16px">⚠ <b>Pendiente:</b> la ubicación de la oficina todavía es un valor de ejemplo. '+
@@ -4522,7 +4537,7 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  b.innerHTML = avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
