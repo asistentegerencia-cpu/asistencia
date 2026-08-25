@@ -2938,7 +2938,15 @@ function infoEquipo(){
   let modelo = '', so = '', nav = '';
 
   const mAnd = ua.match(/Android\s+([\d.]+);\s*([^;)]+?)(?:\s+Build|\)|;)/);
-  if(mAnd){ so = 'Android '+mAnd[1]; modelo = mAnd[2].trim().replace(/\s+/g,' '); }
+  if(mAnd){
+    const v = mAnd[1], mod = mAnd[2].trim().replace(/\s+/g,' ');
+    // Chrome en Android dejó de decir el modelo: manda siempre "Android 10" y "K".
+    // Es una medida de privacidad del navegador, no un error. Mostrar "K · Android 10"
+    // sería inventarle un modelo a un teléfono, así que se dice lo que de verdad se sabe.
+    const oculto = (mod === 'K' || mod === '' || /^Android$/i.test(mod));
+    so = oculto ? 'Android' : 'Android '+v;
+    modelo = oculto ? '' : mod;
+  }
   else if(/iPhone|iPad|iPod/.test(ua)){
     modelo = /iPad/.test(ua) ? 'iPad' : 'iPhone';
     const v = ua.match(/OS (\d+)[_.](\d+)/);
