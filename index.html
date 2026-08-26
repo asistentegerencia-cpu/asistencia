@@ -2772,6 +2772,7 @@ let LOG = load(K.log, []);
 let AUS = load(K.aus, []);
 let COLA = load(K.cola, []);          // marcajes hechos sin conexión, esperando sincronizar
 let DISP = {};                        // empId -> celular vinculado, según el servidor
+let ALERTAS = [];                     // señales de suplantación, las manda el servidor
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -3013,6 +3014,7 @@ async function sincronizarArranque(){
   if(Array.isArray(r.emp) && r.emp.length){ EMP = r.emp; saveEmp(); }
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
+  if(Array.isArray(r.alertas)) ALERTAS = r.alertas;
   if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
@@ -4284,6 +4286,40 @@ function renderTab(){
 /* Los avisos de suplantación se envían sin interrumpir el marcaje: si el correo
    falla, nadie se entera. Por eso el panel lo dice en voz alta cuando no hay
    ninguno configurado — si no, se cree que la vigilancia está puesta y no lo está. */
+/* Las señales de suplantación, a la vista y arriba del todo.
+
+   Existe porque el correo es frágil: puede faltar el permiso, puede agotarse la
+   cuota, puede irse a spam. El servidor las escribe siempre en su propia hoja, se
+   haya podido avisar o no, y aquí se muestran. Si el correo falló, también se dice
+   —callarlo sería peor que no tener aviso, porque da una sensación falsa de control. */
+function avisoAlertas(){
+  if(soloVista() || !ALERTAS.length) return '';
+  const hoy = hoyISO();
+  const ayer = hoyISO(new Date(Date.now()-86400000));
+  const recientes = ALERTAS.filter(a=>a.fecha===hoy || a.fecha===ayer);
+  if(!recientes.length) return '';
+
+  const fallóCorreo = recientes.some(a=>a.correo && a.correo.indexOf('enviado')<0);
+
+  return '<div class="alert alert-bad" style="margin-bottom:16px">'+
+    '🚨 <b>'+recientes.length+' señal'+(recientes.length===1?'':'es')+' de suplantación</b> '+
+    (recientes.some(a=>a.fecha===hoy) ? 'hoy' : 'ayer')+':'+
+    '<div style="margin-top:8px">'+
+    recientes.slice(0,6).map(a=>
+      '<div style="padding:6px 0;border-top:1px solid rgba(0,0,0,.08);font-size:13px;line-height:1.5">'+
+        '<b>'+esc(a.hora)+' · '+esc(a.nombre)+'</b> — '+esc(a.tipo)+'<br>'+
+        '<span style="opacity:.85">'+esc(a.detalle)+'</span>'+
+        (a.equipo ? '<br><span style="opacity:.7;font-size:12px">Equipo: '+esc(a.equipo)+'</span>' : '')+
+      '</div>').join('')+
+    '</div>'+
+    (recientes.length>6 ? '<div style="font-size:12.5px;opacity:.8;margin-top:6px">y '+(recientes.length-6)+' más — están todas en la pestaña Celulares.</div>' : '')+
+    (fallóCorreo
+      ? '<div style="margin-top:10px;font-size:12.5px"><b>Ojo:</b> el correo de aviso no salió. '+
+        'Lo estás viendo aquí porque queda registrado igual, pero revisa el envío o tendrás que mirar el panel para enterarte.</div>'
+      : '')+
+  '</div>';
+}
+
 function avisoCorreoAlertas(){
   if(soloVista() || !hayServidor()) return '';
   if(CFG.tieneCorreoAlertas) return '';
@@ -4537,7 +4573,7 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  b.innerHTML = avisoAlertas() + avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
@@ -5321,6 +5357,26 @@ function tabDisp(b){
       'Si alguien reinstala la app, borra los datos del navegador o entra de incógnito, aparecerá como un celular nuevo. '+
       'El <b>modelo</b> es lo que el propio teléfono declara: los Android suelen decirlo, los iPhone solo dicen "iPhone". '+
       'Sirve para reconocer un aparato, no como prueba.</p>';
+
+  if(ALERTAS.length && !soloVista()){
+    b.insertAdjacentHTML('beforeend',
+      '<h3 style="margin:26px 0 4px;font-size:15px">Señales de suplantación</h3>'+
+      '<p class="hint" style="margin-bottom:10px">Todo lo que el sistema detectó, esté el correo funcionando o no.</p>'+
+      '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+        '<th>Fecha</th><th>Hora</th><th>Colaborador</th><th>Qué pasó</th><th>Detalle</th><th>Equipo</th><th>Correo</th>'+
+      '</tr></thead><tbody>'+
+      ALERTAS.slice(0,40).map(a=>'<tr>'+
+        '<td class="num">'+esc(fechaCorta(a.fecha))+'</td>'+
+        '<td class="num">'+esc(a.hora)+'</td>'+
+        '<td class="name">'+esc(a.nombre)+'</td>'+
+        '<td><span class="tag tag-bad">'+esc(a.tipo)+'</span></td>'+
+        '<td style="white-space:normal;min-width:220px">'+esc(a.detalle)+'</td>'+
+        '<td>'+esc(a.equipo||'—')+'</td>'+
+        '<td>'+(a.correo==='enviado'
+                 ? '<span class="tag tag-ok">enviado</span>'
+                 : '<span class="tag tag-warn" title="'+esc(a.correo)+'">no salió</span>')+'</td>'+
+      '</tr>').join('')+'</tbody></table></div></div>');
+  }
 
   if(candado && !soloVista()){
     Array.from(b.querySelectorAll('[data-lib]')).forEach(btn=>{
