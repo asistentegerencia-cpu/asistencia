@@ -2773,6 +2773,7 @@ let AUS = load(K.aus, []);
 let COLA = load(K.cola, []);          // marcajes hechos sin conexión, esperando sincronizar
 let DISP = {};                        // empId -> celular vinculado, según el servidor
 let ALERTAS = [];                     // señales de suplantación, las manda el servidor
+let DISP_FILAS = null;                // filas de la hoja Dispositivos, para detectar repetidos
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -3015,6 +3016,7 @@ async function sincronizarArranque(){
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
   if(Array.isArray(r.alertas)) ALERTAS = r.alertas;
+  DISP_FILAS = (typeof r.dispositivosFilas === 'number') ? r.dispositivosFilas : null;
   if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
@@ -3801,34 +3803,73 @@ function pintarDia(emp){
 
 /* --- Ayuda: cómo activar la ubicación en el celular --- */
 function ayudaUbicacion(){
+  // Casi todo el equipo usa la app instalada, y ahí NO hay barra de direcciones:
+  // las instrucciones del candado 🔒 no sirven. Se muestra primero lo que aplica
+  // al aparato de quien está mirando, y lo demás queda debajo por si acaso.
+  const inst = yaInstalada();
+  const esAndroid = /Android/i.test(navigator.userAgent);
+  const esIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  const bloque = (titulo, pasos, destacado) =>
+    '<div style="background:'+(destacado?'#EAF2FB':'var(--surface-2)')+
+      ';border:'+(destacado?'2px solid var(--primary)':'1px solid transparent')+
+      ';border-radius:10px;padding:15px 17px;margin-bottom:12px">'+
+    '<div style="font-weight:700;font-size:14px;margin-bottom:9px">'+titulo+
+      (destacado?' <span class="tag tag-ok" style="font-size:9px">TU CASO</span>':'')+'</div>'+
+    '<ol style="margin:0;padding-left:19px;font-size:13.5px;line-height:1.85;color:var(--text)">'+
+      pasos.map(p=>'<li>'+p+'</li>').join('')+
+    '</ol></div>';
+
+  const androidApp = bloque('📱 Android · app instalada', [
+    'Mantén pulsado el <b>ícono de la app</b> en tu pantalla',
+    'Toca <b>Información de la aplicación</b> (o la ⓘ)',
+    'Entra a <b>Permisos</b> → <b>Ubicación</b>',
+    'Elige <b>Permitir</b> (o "Permitir solo mientras se usa la app")',
+    'Vuelve aquí y toca <b>Reintentar</b>'
+  ], esAndroid && inst);
+
+  const androidNav = bloque('📱 Android · desde el navegador', [
+    'Toca el <b>candado 🔒</b> junto a la dirección, arriba',
+    'Entra a <b>Permisos</b> o <b>Configuración del sitio</b>',
+    'Cambia <b>Ubicación</b> a <b>Permitir</b>',
+    'Vuelve aquí y toca <b>Reintentar</b>'
+  ], esAndroid && !inst);
+
+  const iosApp = bloque('🍎 iPhone · app instalada', [
+    'Ve a <b>Ajustes</b> del iPhone y baja hasta encontrar <b>Asistencia</b>',
+    'Toca <b>Ubicación</b> y elige <b>Al usar la app</b>',
+    'Si no aparece: <b>Ajustes → Privacidad y seguridad → Localización</b> y actívala',
+    'Vuelve aquí y toca <b>Reintentar</b>'
+  ], esIOS && inst);
+
+  const iosSafari = bloque('🍎 iPhone · desde Safari', [
+    '<b>Ajustes → Safari → Ubicación</b> y elige <b>Preguntar</b> o <b>Permitir</b>',
+    'Revisa también <b>Ajustes → Privacidad → Localización</b> y que <b>Safari</b> esté activado',
+    'Vuelve aquí y toca <b>Reintentar</b>'
+  ], esIOS && !inst);
+
+  // El que corresponde va primero
+  let orden = [androidApp, androidNav, iosApp, iosSafari];
+  if(esIOS) orden = inst ? [iosApp, iosSafari, androidApp, androidNav]
+                         : [iosSafari, iosApp, androidApp, androidNav];
+  else if(esAndroid) orden = inst ? [androidApp, androidNav, iosApp, iosSafari]
+                                  : [androidNav, androidApp, iosApp, iosSafari];
+
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML =
    '<div class="box"><h2>Activar la ubicación</h2>'+
-   '<p style="font-size:13.5px;color:var(--muted);margin:0 0 18px;line-height:1.6">'+
-   'La primera vez que abres esta página, tu celular te pregunta si permites compartir tu ubicación. '+
-   'Si tocaste <b>Bloquear</b> o <b>No permitir</b>, se activa así:</p>'+
-
-   '<div style="background:var(--surface-2);border-radius:10px;padding:15px 17px;margin-bottom:12px">'+
-   '<div style="font-weight:700;font-size:14px;margin-bottom:9px">📱 Android (Chrome)</div>'+
-   '<ol style="margin:0;padding-left:19px;font-size:13.5px;line-height:1.85;color:var(--text)">'+
-     '<li>Toca el <b>candado 🔒</b> junto a la dirección, arriba</li>'+
-     '<li>Entra a <b>Permisos</b> o <b>Configuración del sitio</b></li>'+
-     '<li>Cambia <b>Ubicación</b> a <b>Permitir</b></li>'+
-     '<li>Vuelve aquí y toca <b>Reintentar</b></li>'+
-   '</ol></div>'+
-
-   '<div style="background:var(--surface-2);border-radius:10px;padding:15px 17px;margin-bottom:12px">'+
-   '<div style="font-weight:700;font-size:14px;margin-bottom:9px">🍎 iPhone (Safari)</div>'+
-   '<ol style="margin:0;padding-left:19px;font-size:13.5px;line-height:1.85;color:var(--text)">'+
-     '<li>Ve a <b>Ajustes → Safari → Ubicación</b> y elige <b>Preguntar</b> o <b>Permitir</b></li>'+
-     '<li>Revisa también <b>Ajustes → Privacidad → Localización</b> y que <b>Safari</b> esté habilitado</li>'+
-     '<li>Vuelve aquí y toca <b>Reintentar</b></li>'+
-   '</ol></div>'+
-
-   '<div class="alert alert-warn" style="margin-bottom:0">'+
-   '<b>Antes que nada:</b> revisa que el <b>GPS del celular esté encendido</b> '+
-   '(el ícono de ubicación en la barra de accesos rápidos). Sin eso, ningún permiso funciona.</div>'+
-
+   '<div class="alert alert-warn" style="margin:0 0 16px">'+
+   '<b>Primero que nada:</b> revisa que el <b>GPS del celular esté encendido</b> — '+
+   'el ícono de ubicación en la barra de accesos rápidos, deslizando desde arriba. '+
+   'Si está apagado, ningún permiso va a funcionar.</div>'+
+   '<p style="font-size:13.5px;color:var(--muted);margin:0 0 16px;line-height:1.6">'+
+   'La primera vez que abriste la app te preguntó si permitías compartir tu ubicación. '+
+   'Si tocaste <b>Bloquear</b> o <b>No permitir</b>, ya no vuelve a preguntar y hay que '+
+   'cambiarlo a mano:</p>'+
+   orden.join('')+
+   '<p style="font-size:12.5px;color:var(--muted);margin:2px 0 0;line-height:1.6">'+
+   'Si aun así no funciona, avisa a Administración: te pueden registrar la entrada a mano '+
+   'para que no te cuente como tardanza.</p>'+
    '<button class="btn" id="ayX" style="margin-top:16px">Entendido</button></div>';
   document.body.appendChild(m);
   m.querySelector('#ayX').onclick = ()=>m.remove();
@@ -5300,7 +5341,19 @@ function tabDisp(b){
   const sinMarcar = filas.filter(r=>!r.ids.length);
   const variosEq  = filas.filter(r=>r.ids.length > 1);
 
+  // Una persona debe tener UN celular y solo uno. El servidor entrega los vínculos
+  // como un mapa por persona, donde una fila repetida quedaría escondida; por eso
+  // manda también el total de filas y aquí se compara.
+  const repetidos = (DISP_FILAS !== null && DISP_FILAS > Object.keys(DISP).length)
+    ? (DISP_FILAS - Object.keys(DISP).length) : 0;
+
   b.innerHTML =
+    (repetidos
+      ? '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Hay '+repetidos+
+        ' fila'+(repetidos===1?'':'s')+' repetida'+(repetidos===1?'':'s')+' en los vínculos.</b> '+
+        'Alguien tiene más de un celular registrado, y solo se está aplicando uno. '+
+        'Ábrelo en tu hoja, pestaña <b>Dispositivos</b>, y borra las filas sobrantes de esa persona.</div>'
+      : '')+
     '<div class="alert '+(candado?'alert-ok':'alert-warn')+'" style="margin-bottom:16px">'+
       (candado
         ? '🔒 <b>Un celular por persona está ACTIVADO.</b> Cada quien quedó amarrado al primer teléfono desde el que marcó y no puede usar otro. Para permitirle cambiar de equipo, libéralo en esta pantalla.'
