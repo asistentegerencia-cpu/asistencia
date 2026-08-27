@@ -2774,6 +2774,7 @@ let COLA = load(K.cola, []);          // marcajes hechos sin conexión, esperand
 let DISP = {};                        // empId -> celular vinculado, según el servidor
 let ALERTAS = [];                     // señales de suplantación, las manda el servidor
 let DISP_FILAS = null;                // filas de la hoja Dispositivos, para detectar repetidos
+let ALE_FECHA = '';                   // día que se está mirando en las señales de suplantación
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -4274,7 +4275,8 @@ function abrirAdmin(){
   $('#appAdmin').classList.remove('hidden');
   $('#adTitle').textContent = CFG.empresa + ' · Asistencia';
   $('#adSub').innerHTML = esc(fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase())) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos' +
-    (soloVista() ? ' · <b style="opacity:.95">Solo lectura</b>' : '');
+    '';   // el acceso de consulta no se anuncia en pantalla: la restricción la
+          // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
   const ocultas = soloVista() ? ['emp','cfg','qr'] : [];
@@ -4335,16 +4337,16 @@ function renderTab(){
    —callarlo sería peor que no tener aviso, porque da una sensación falsa de control. */
 function avisoAlertas(){
   if(soloVista() || !ALERTAS.length) return '';
+  // Solo las del día. Antes se mostraban también las de ayer y se mezclaban dos
+  // jornadas en el mismo aviso, que confunde más de lo que ayuda.
   const hoy = hoyISO();
-  const ayer = hoyISO(new Date(Date.now()-86400000));
-  const recientes = ALERTAS.filter(a=>a.fecha===hoy || a.fecha===ayer);
+  const recientes = ALERTAS.filter(a=>a.fecha===hoy);
   if(!recientes.length) return '';
 
   const fallóCorreo = recientes.some(a=>a.correo && a.correo.indexOf('enviado')<0);
 
   return '<div class="alert alert-bad" style="margin-bottom:16px">'+
-    '🚨 <b>'+recientes.length+' señal'+(recientes.length===1?'':'es')+' de suplantación</b> '+
-    (recientes.some(a=>a.fecha===hoy) ? 'hoy' : 'ayer')+':'+
+    '🚨 <b>'+recientes.length+' señal'+(recientes.length===1?'':'es')+' de suplantación</b> hoy:'+
     '<div style="margin-top:8px">'+
     recientes.slice(0,6).map(a=>
       '<div style="padding:6px 0;border-top:1px solid rgba(0,0,0,.08);font-size:13px;line-height:1.5">'+
@@ -5066,7 +5068,7 @@ function tabAus(b){
 }
 
 function editarAus(id){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const hoy = hoyISO();
   const a = id ? AUS.find(x=>x.id===id)
               : {id:'', empId:'', tipo:'COMISION', desde:hoy, hasta:hoy, lugar:'', actividad:'', motivo:'', autorizadoPor:''};
@@ -5145,7 +5147,7 @@ function editarAus(id){
      - la cola, si todavía no había llegado a enviarse
    Y deja constancia en la auditoría de quién lo quitó. */
 async function borrarMarcaje(m){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return false; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return false; }
 
   if(m.srv && m.id && hayServidor()){
     try{
@@ -5168,7 +5170,7 @@ async function borrarMarcaje(m){
    Se muestra la lista en vez de un aspa suelto en la tabla: así se ve exactamente
    qué se va a borrar antes de tocarlo. */
 function corregirMarcajes(empId, fecha){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const emp = EMP.find(e=>e.id===empId);
   if(!emp) return;
 
@@ -5207,7 +5209,7 @@ function corregirMarcajes(empId, fecha){
 }
 
 function registroManual(fechaDef){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const hoy = hoyISO();
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Registrar marcaje manual</h2>'+
@@ -5423,23 +5425,44 @@ function tabDisp(b){
       'Sirve para reconocer un aparato, no como prueba.</p>';
 
   if(ALERTAS.length && !soloVista()){
+    // Un día a la vez. Ver la lista entera mezcla jornadas y no se entiende qué
+    // pasó cada mañana, que es como se revisa esto en la práctica.
+    if(!ALE_FECHA) ALE_FECHA = hoyISO();
+    const dias = Array.from(new Set(ALERTAS.map(a=>a.fecha))).sort().reverse();
+    if(dias.indexOf(ALE_FECHA) < 0 && dias.length) ALE_FECHA = dias[0];
+
+    const pintarAlertas = ()=>{
+      const delDia = ALERTAS.filter(a=>a.fecha===ALE_FECHA);
+      const cont = $('#aleTabla');
+      if(!cont) return;
+      cont.innerHTML = delDia.length
+        ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+            '<th>Hora</th><th>Colaborador</th><th>Qué pasó</th><th>Detalle</th><th>Equipo</th>'+
+          '</tr></thead><tbody>'+
+          delDia.map(a=>'<tr>'+
+            '<td class="num">'+esc(a.hora)+'</td>'+
+            '<td class="name">'+esc(a.nombre)+'</td>'+
+            '<td><span class="tag tag-bad">'+esc(a.tipo)+'</span></td>'+
+            '<td style="white-space:normal;min-width:220px">'+esc(a.detalle)+'</td>'+
+            '<td>'+esc(a.equipo||'—')+'</td>'+
+          '</tr>').join('')+'</tbody></table></div></div>'
+        : '<div class="tblwrap"><div class="empty">Ninguna señal ese día.</div></div>';
+    };
+
     b.insertAdjacentHTML('beforeend',
       '<h3 style="margin:26px 0 4px;font-size:15px">Señales de suplantación</h3>'+
-      '<p class="hint" style="margin-bottom:10px">Todo lo que el sistema detectó, esté el correo funcionando o no.</p>'+
-      '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-        '<th>Fecha</th><th>Hora</th><th>Colaborador</th><th>Qué pasó</th><th>Detalle</th><th>Equipo</th><th>Correo</th>'+
-      '</tr></thead><tbody>'+
-      ALERTAS.slice(0,40).map(a=>'<tr>'+
-        '<td class="num">'+esc(fechaCorta(a.fecha))+'</td>'+
-        '<td class="num">'+esc(a.hora)+'</td>'+
-        '<td class="name">'+esc(a.nombre)+'</td>'+
-        '<td><span class="tag tag-bad">'+esc(a.tipo)+'</span></td>'+
-        '<td style="white-space:normal;min-width:220px">'+esc(a.detalle)+'</td>'+
-        '<td>'+esc(a.equipo||'—')+'</td>'+
-        '<td>'+(a.correo==='enviado'
-                 ? '<span class="tag tag-ok">enviado</span>'
-                 : '<span class="tag tag-warn" title="'+esc(a.correo)+'">no salió</span>')+'</td>'+
-      '</tr>').join('')+'</tbody></table></div></div>');
+      '<p class="hint" style="margin-bottom:10px">Todo lo que el sistema detectó, esté el correo funcionando o no. Se revisa un día a la vez.</p>'+
+      '<div class="toolbar">'+
+        '<div>'+lbl('Día')+'<select class="sel" id="aleDia">'+
+          dias.map(d=>'<option value="'+d+'"'+(d===ALE_FECHA?' selected':'')+'>'+
+                      fechaCorta(d)+' ('+ALERTAS.filter(x=>x.fecha===d).length+')</option>').join('')+
+        '</select></div>'+
+      '</div>'+
+      '<div id="aleTabla"></div>');
+
+    pintarAlertas();
+    const selAle = $('#aleDia');
+    if(selAle) selAle.onchange = ()=>{ ALE_FECHA = selAle.value; pintarAlertas(); };
   }
 
   if(!soloVista()){
@@ -5504,7 +5527,7 @@ function tabEmp(b){
    Entrar uno por uno a 22 fichas para asignar el proyecto es una barrera real.
    Esta pantalla los pone todos juntos y guarda de una sola vez. */
 function asignarProyectos(){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const activos = EMP.filter(e=>e.activo);
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box" style="max-width:560px"><h2>Asignar equipo o proyecto</h2>'+
@@ -5536,7 +5559,7 @@ function asignarProyectos(){
 
 /* ---------- Cargador masivo de DNI ---------- */
 function cargarDniMasivo(){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML =
    '<div class="box" style="max-width:620px"><h2>Cargar DNI desde Excel</h2>'+
@@ -5626,7 +5649,7 @@ function cargarDniMasivo(){
 }
 
 function editarEmp(id){
-  if(soloVista()){ toast('Tu acceso es de solo lectura'); return; }
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:''};
   const m=document.createElement('div'); m.className='modal';
   m.innerHTML='<div class="box"><h2>'+(id?'Editar colaborador':'Nuevo colaborador')+'</h2>'+
