@@ -2790,6 +2790,9 @@ const saveCola= ()=>save(K.cola,COLA);
   EMP.forEach(e=>{
     if(!e.modalidad){ e.modalidad = e.exento ? 'EXENTO' : 'PRESENCIAL'; tocado = true; }
     if(e.proyecto === undefined){ e.proyecto = ''; tocado = true; }
+    // Nadie cambia de situación por omisión: el que ya estaba cargado queda en
+    // planilla, y administración marca a mano las excepciones.
+    if(e.planilla === undefined){ e.planilla = true; tocado = true; }
     // exento se conserva sincronizado: lo siguen leyendo el respaldo y los reportes antiguos
     const debeExento = e.modalidad === 'EXENTO';
     if(e.exento !== debeExento){ e.exento = debeExento; tocado = true; }
@@ -4336,7 +4339,9 @@ function renderTab(){
    haya podido avisar o no, y aquí se muestran. Si el correo falló, también se dice
    —callarlo sería peor que no tener aviso, porque da una sensación falsa de control. */
 function avisoAlertas(){
-  if(soloVista() || !ALERTAS.length) return '';
+  // También lo ve quien entra a consultar: Gerencia pidió estar al tanto de los
+  // intentos de suplantación, no solo administración.
+  if(!ALERTAS.length) return '';
   // Solo las del día. Antes se mostraban también las de ayer y se mezclaban dos
   // jornadas en el mismo aviso, que confunde más de lo que ayuda.
   const hoy = hoyISO();
@@ -4356,7 +4361,7 @@ function avisoAlertas(){
       '</div>').join('')+
     '</div>'+
     (recientes.length>6 ? '<div style="font-size:12.5px;opacity:.8;margin-top:6px">y '+(recientes.length-6)+' más — están todas en la pestaña Celulares.</div>' : '')+
-    (fallóCorreo
+    (fallóCorreo && !soloVista()
       ? '<div style="margin-top:10px;font-size:12.5px"><b>Ojo:</b> el correo de aviso no salió. '+
         'Lo estás viendo aquí porque queda registrado igual, pero revisa el envío o tendrás que mirar el panel para enterarte.</div>'
       : '')+
@@ -4383,15 +4388,24 @@ function avisoUbicacion(){
 
 /* ---------- FILTROS COMPARTIDOS DEL PANEL ----------
    Proyecto, turno y área se aplican igual en Hoy y en Análisis. */
-let FLT = {proyecto:'', turno:'', area:''};
+let FLT = {proyecto:'', turno:'', area:'', planilla:''};
 
 function filtrarEmp(lista){
   return lista.filter(e=>
     (!FLT.proyecto || (e.proyecto||'') === FLT.proyecto) &&
     (!FLT.turno    || e.turno === FLT.turno) &&
-    (!FLT.area     || e.area  === FLT.area));
+    (!FLT.area     || e.area  === FLT.area) &&
+    aplicaPlanilla(e));
 }
-function hayFiltro(){ return !!(FLT.proyecto || FLT.turno || FLT.area); }
+function hayFiltro(){ return !!(FLT.proyecto || FLT.turno || FLT.area || FLT.planilla); }
+
+/* En planilla o fuera. Se guarda como booleano; quien no lo tenga definido cuenta
+   como en planilla, para no cambiarle la situación a nadie sin que se decida. */
+function enPlanilla(e){ return e.planilla !== false; }
+function aplicaPlanilla(e){
+  if(!FLT.planilla) return true;
+  return FLT.planilla === 'SI' ? enPlanilla(e) : !enPlanilla(e);
+}
 
 function lbl(t){ return '<label style="font-size:12px;font-weight:650;color:var(--muted);display:block;margin-bottom:4px">'+t+'</label>'; }
 
@@ -4409,12 +4423,17 @@ function htmlFiltros(pfx){
     '</select></div>'+
     '<div>'+lbl('Área')+'<select class="sel" id="'+pfx+'A">'+
       opt('','Todas',FLT.area)+ areas.map(a=>opt(a,a,FLT.area)).join('')+
+    '</select></div>'+
+    '<div>'+lbl('Vínculo')+'<select class="sel" id="'+pfx+'L">'+
+      opt('','Todos',FLT.planilla)+
+      opt('SI','En planilla',FLT.planilla)+
+      opt('NO','Fuera de planilla',FLT.planilla)+
     '</select></div>';
 }
 
 function wireFiltros(pfx, alCambiar){
   const set = (campo, id)=>{ const el=$('#'+id); if(el) el.onchange = ()=>{ FLT[campo]=el.value; alCambiar(); }; };
-  set('proyecto', pfx+'P'); set('turno', pfx+'T'); set('area', pfx+'A');
+  set('proyecto', pfx+'P'); set('turno', pfx+'T'); set('area', pfx+'A'); set('planilla', pfx+'L');
 }
 
 /* "__sin" filtra a los que todavía no tienen proyecto asignado */
@@ -4427,7 +4446,8 @@ function plantilla(){
   return EMP.filter(e=>e.activo && e.modalidad!=='EXENTO')
             .filter(e=>aplicaProyecto(e))
             .filter(e=>!FLT.turno || e.turno===FLT.turno)
-            .filter(e=>!FLT.area  || e.area===FLT.area);
+            .filter(e=>!FLT.area  || e.area===FLT.area)
+            .filter(e=>aplicaPlanilla(e));
 }
 
 /* En modo recepción, quien trabaja desde casa no puede llegar al equipo de la puerta.
@@ -4633,7 +4653,12 @@ function tabHoy(b){
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
       '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Horario</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
-    (filas.length ? filas.map(r=>{
+    (filas.length ? bloquesPlanilla(filas) : '<tr><td '+((CFG.usaProyectos?11:10)+(soloVista()?0:1))+'><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
+    '</tbody></table></div></div>'+
+    notaExentos();
+
+  // --- fin del innerHTML de tabHoy ---
+  function filaHoy(r){
       const j=r.j;
       const perm = (j.entrada&&j.salida) ? min2hhmm(toMin(j.salida.hora)-toMin(j.entrada.hora)) : '—';
       const zona = r.e.modalidad==='REMOTO' ? '<span class="tag tag-ok">REMOTO</span>'
@@ -4657,9 +4682,24 @@ function tabHoy(b){
         (soloVista()?'':'<td>'+((j.entrada||j.salida)
           ? '<button class="btn btn-sm btn-line" data-corr="'+esc(r.e.id)+'">Corregir</button>'
           : '')+'</td>')+'</tr>';
-    }).join('') : '<tr><td colspan="'+((CFG.usaProyectos?11:10)+(soloVista()?0:1))+'"><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
-    '</tbody></table></div></div>'+
-    notaExentos();
+  }
+
+  /* Dos grupos: en planilla y fuera. Si todos están en el mismo, no se parte la
+     tabla — una cabecera de grupo sobre una lista homogénea solo estorba. */
+  function bloquesPlanilla(lista){
+    const dentro = lista.filter(r=>enPlanilla(r.e));
+    const fuera  = lista.filter(r=>!enPlanilla(r.e));
+    if(!dentro.length || !fuera.length) return lista.map(filaHoy).join('');
+
+    const cols = (CFG.usaProyectos?11:10)+(soloVista()?0:1);
+    const cabecera = (txt, n, cls)=>
+      '<tr><td colspan="'+cols+'" style="background:var(--surface-2);font-weight:750;'+
+      'font-size:12px;letter-spacing:.04em;color:var(--muted);padding:9px 12px">'+
+      esc(txt)+' · '+n+'</td></tr>';
+
+    return cabecera('EN PLANILLA', dentro.length)+ dentro.map(filaHoy).join('')+
+           cabecera('FUERA DE PLANILLA', fuera.length)+ fuera.map(filaHoy).join('');
+  }
 
   wireFiltros('h', ()=>renderTab());
   Array.from(document.querySelectorAll('[data-corr]')).forEach(btn=>{
@@ -5424,7 +5464,7 @@ function tabDisp(b){
       'El <b>modelo</b> es lo que el propio teléfono declara: los Android suelen decirlo, los iPhone solo dicen "iPhone". '+
       'Sirve para reconocer un aparato, no como prueba.</p>';
 
-  if(ALERTAS.length && !soloVista()){
+  if(ALERTAS.length){
     // Un día a la vez. Ver la lista entera mezcla jornadas y no se entiende qué
     // pasó cada mañana, que es como se revisa esto en la práctica.
     if(!ALE_FECHA) ALE_FECHA = hoyISO();
@@ -5500,7 +5540,7 @@ function tabEmp(b){
       '<button class="btn btn-sm btn-line" id="eBulk">📋 Cargar DNI desde Excel</button>'+
       '<button class="btn btn-sm btn-line" id="eAdd">+ Agregar colaborador</button></div>'+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th><th>DNI</th><th>Cargo</th><th>Área</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Celular</th><th>Correo</th><th>Turno</th><th>Estado</th><th></th>'+
+      '<th>Colaborador</th><th>DNI</th><th>Cargo</th><th>Área</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Celular</th><th>Correo</th><th>Turno</th><th>Vínculo</th><th>Estado</th><th></th>'+
     '</tr></thead><tbody>'+
     EMP.map(e=>'<tr>'+
       '<td class="name">'+esc(e.nombre)+(DEV&&DEV.empId===e.id?' <span class="tag tag-ok">ESTE EQUIPO</span>':'')+'</td>'+
@@ -5510,6 +5550,9 @@ function tabEmp(b){
       '<td class="num">'+(e.tel?esc(e.tel):'—')+'</td>'+
       '<td style="font-size:13px">'+(e.email?esc(e.email):'—')+'</td>'+
       '<td>'+esc(getTurno(e.turno).nombre)+'</td>'+
+      '<td>'+(enPlanilla(e)
+               ? '<span class="tag tag-ok">PLANILLA</span>'
+               : '<span class="tag tag-warn">FUERA</span>')+'</td>'+
       '<td><span class="tag '+(e.activo?'tag-ok':'tag-bad')+'">'+(e.activo?'ACTIVO':'INACTIVO')+'</span>'+ badgeMod(e) +'</td>'+
       '<td><button class="btn btn-sm btn-line eEd" data-id="'+e.id+'">Editar</button></td>'+
     '</tr>').join('')+'</tbody></table></div></div>'+
@@ -5650,7 +5693,7 @@ function cargarDniMasivo(){
 
 function editarEmp(id){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
-  const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:''};
+  const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:'', planilla:true};
   const m=document.createElement('div'); m.className='modal';
   m.innerHTML='<div class="box"><h2>'+(id?'Editar colaborador':'Nuevo colaborador')+'</h2>'+
     fld('Nombre completo','nm',e.nombre)+
@@ -5670,6 +5713,10 @@ function editarEmp(id){
     '</select></div></div>' : '')+
     '<div class="frow"><div><label>Modalidad de trabajo</label><select id="ex">'+
       MODALIDADES.map(x=>'<option value="'+x.id+'"'+(x.id===(e.modalidad||'PRESENCIAL')?' selected':'')+'>'+esc(x.nombre)+'</option>').join('')+
+    '</select></div>'+
+    '<div><label>Vínculo laboral</label><select id="pl">'+
+      '<option value="SI"'+(e.planilla!==false?' selected':'')+'>En planilla</option>'+
+      '<option value="NO"'+(e.planilla===false?' selected':'')+'>Fuera de planilla</option>'+
     '</select></div></div>'+
     '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.5">'+
       '<b>Teletrabajo:</b> marca ingreso y salida como todos, pero sin validación de ubicación, y sí cuenta en el cuadro diario.<br>'+
@@ -5693,7 +5740,8 @@ function editarEmp(id){
       turno:m.querySelector('#tu').value, activo:m.querySelector('#ac').value==='1',
       proyecto: m.querySelector('#pr') ? m.querySelector('#pr').value : (e.proyecto||''),
       modalidad:m.querySelector('#ex').value,
-      exento:m.querySelector('#ex').value==='EXENTO'
+      exento:m.querySelector('#ex').value==='EXENTO',
+      planilla:m.querySelector('#pl').value==='SI'
     };
     if(id){ const i=EMP.findIndex(x=>x.id===id); EMP[i]=o; } else EMP.push(o);
     saveEmp(); m.remove(); renderTab();
