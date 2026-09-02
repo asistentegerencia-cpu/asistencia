@@ -256,6 +256,7 @@ tr:hover td{background:#FAFCFB}
         </div>
         <div class="statusrow"><span class="chip chip-idle" id="gpsChip"><span class="dot"></span><span id="gpsTxt">Verificando ubicación…</span></span></div>
         <div id="mkPend"></div>
+        <div id="mkPermiso" style="margin-top:14px"></div>
         <div id="mkAlert"></div>
         <button class="markbtn mb-in" id="btnMark" disabled>
           <span class="mb-label" id="mkBtnLabel">MARCAR ENTRADA</span>
@@ -302,7 +303,8 @@ tr:hover td{background:#FAFCFB}
     <div class="tab" data-tab="aus">Ausencias</div>
     <div class="tab" data-tab="hist">Historial</div>
     <div class="tab" data-tab="emp">Personal</div>
-    <div class="tab" data-tab="disp">Celulares</div>
+    <div class="tab" data-tab="prog">Programación</div>
+    <div class="tab" data-tab="perm">Permisos</div>
     <div class="tab" data-tab="cfg">Configuración</div>
     <div class="tab" data-tab="qr">Código QR</div>
   </div>
@@ -2648,8 +2650,8 @@ const DEF_CFG = {
   tolerancia:10,
   umbralGrave:30,
   turnos:[
-    {id:'T1', nombre:'Administrativo', entrada:'09:00', salida:'18:00', trabajaSab:true,  sabEntrada:'09:00', sabSalida:'13:00'},
-    {id:'T2', nombre:'Comercial',      entrada:'10:00', salida:'19:00', trabajaSab:true,  sabEntrada:'10:00', sabSalida:'14:00'}
+    {id:'T1', nombre:'Administrativo', entrada:'09:00', salida:'18:00', trabajaSab:true,  sabEntrada:'09:00', sabSalida:'13:00', trabajaDom:false, domEntrada:'10:00', domSalida:'14:00'},
+    {id:'T2', nombre:'Comercial',      entrada:'10:00', salida:'19:00', trabajaSab:true,  sabEntrada:'10:00', sabSalida:'14:00', trabajaDom:true,  domEntrada:'10:00', domSalida:'14:00'}
   ],
   adminPass:'',
 
@@ -2712,6 +2714,7 @@ const DEF_CFG = {
      trabajó, el sistema simplemente no lo cuenta. Al revés —dar por laborables
      todos y tener que desmarcar— un olvido generaría 17 faltas falsas. */
   sabadosTrabajados:[],
+  domingosTrabajados:[],
 
   /* Cierre de jornada: si no marcó salida, a los N minutos de la hora de salida
      del turno el día se cierra como SALIDA NO REGISTRADA (no inventa la hora). */
@@ -2750,6 +2753,44 @@ const TIPOS_AUSENCIA = [
 ];
 const tipoAus = id => TIPOS_AUSENCIA.find(t=>t.id===id) || TIPOS_AUSENCIA[0];
 
+/* Permisos que la persona pide desde su celular y administración resuelve.
+   Aprobar no borra lo que pasó: la hora real se sigue registrando. Lo que cambia
+   es cómo se cuenta, y que quede escrito quién lo autorizó. */
+const TIPOS_PERMISO = [
+  {id:'TARDANZA',     nombre:'Llegar tarde',        pideHora:true,
+   efecto:'Su tardanza queda justificada y no suma minutos perdidos.'},
+  {id:'SALIDA_ANTES', nombre:'Salir antes',         pideHora:true,
+   efecto:'Su salida anticipada no penaliza.'},
+  {id:'DIA',          nombre:'Faltar todo el día',  pideHora:false,
+   efecto:'El día no cuenta como falta ni como asistencia.'},
+  {id:'CASA',         nombre:'Trabajar desde casa', pideHora:false,
+   efecto:'Ese día marca sin validación de ubicación y cuenta como asistido.'}
+];
+const tipoPermiso = id => TIPOS_PERMISO.find(t=>t.id===id) || TIPOS_PERMISO[0];
+
+/* El horario que administración le puso a esa persona ese día concreto, si lo hay.
+   Manda sobre el turno: el equipo de ventas se reparte la jornada y cada quien
+   cubre una franja distinta, cosa que un turno fijo no puede expresar. */
+/* Los tres estados por los que pasa un turno programado.
+   El borrador existe para que la jefa pueda armar la semana sin que a nadie le
+   cambie la jornada a medio hacer. La validación es la confirmación posterior de
+   que esa franja de verdad se cubrió. */
+const ESTADOS_PROG = {
+  BORRADOR:  {nombre:'Borrador',  color:'var(--muted)',  fondo:'var(--surface-2)'},
+  PUBLICADO: {nombre:'Publicado', color:'var(--primary)',fondo:'#EAF2FB'},
+  VALIDADO:  {nombre:'Validado',  color:'var(--ok)',     fondo:'#E9F7EF'}
+};
+const estadoProg = e => ESTADOS_PROG[e] || ESTADOS_PROG.PUBLICADO;
+
+function programacionDe(empId, fechaISO){
+  return PROGRAMACION.find(a=>a.empId===empId && a.fecha===fechaISO) || null;
+}
+
+function permisoAprobado(empId, fechaISO, tipo){
+  return PERMISOS.find(p=>p.estado==='APROBADO' && p.empId===empId &&
+                          p.fecha===fechaISO && p.tipo===tipo) || null;
+}
+
 /* Modalidad de trabajo de cada colaborador */
 const MODALIDADES = [
   {id:'PRESENCIAL', nombre:'Presencial — asiste a la oficina'},
@@ -2775,6 +2816,8 @@ let DISP = {};                        // empId -> celular vinculado, según el s
 let ALERTAS = [];                     // señales de suplantación, las manda el servidor
 let DISP_FILAS = null;                // filas de la hoja Dispositivos, para detectar repetidos
 let ALE_FECHA = '';                   // día que se está mirando en las señales de suplantación
+let PERMISOS = [];                    // solicitudes de permiso, las manda el servidor
+let PROGRAMACION = [];                // horarios asignados a mano, día por día
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -2786,13 +2829,24 @@ const saveCola= ()=>save(K.cola,COLA);
    Hay colaboradores con marcajes reales en su navegador desde la v1.
    Todo campo nuevo se completa aquí; nunca se borra nada. */
 (function migrar(){
-  let tocado = false;
+  let tocado = false, ctocado = false;
   EMP.forEach(e=>{
     if(!e.modalidad){ e.modalidad = e.exento ? 'EXENTO' : 'PRESENCIAL'; tocado = true; }
     if(e.proyecto === undefined){ e.proyecto = ''; tocado = true; }
     // Nadie cambia de situación por omisión: el que ya estaba cargado queda en
     // planilla, y administración marca a mano las excepciones.
     if(e.planilla === undefined){ e.planilla = true; tocado = true; }
+  });
+  // Los turnos guardados antes no conocen el domingo. Se completan apagados: abrir
+  // los domingos es una decisión, no algo que deba pasar por una actualización.
+  (CFG.turnos||[]).forEach(t=>{
+    if(t.trabajaDom === undefined){ t.trabajaDom = false; ctocado = true; }
+    if(!t.domEntrada){ t.domEntrada = t.sabEntrada || '10:00'; ctocado = true; }
+    if(!t.domSalida){  t.domSalida  = t.sabSalida  || '14:00'; ctocado = true; }
+  });
+  if(CFG.domingosTrabajados === undefined){ CFG.domingosTrabajados = []; ctocado = true; }
+  if(ctocado) saveCfg();
+  EMP.forEach(e=>{
     // exento se conserva sincronizado: lo siguen leyendo el respaldo y los reportes antiguos
     const debeExento = e.modalidad === 'EXENTO';
     if(e.exento !== debeExento){ e.exento = debeExento; tocado = true; }
@@ -3020,11 +3074,13 @@ async function sincronizarArranque(){
   if(Array.isArray(r.aus)){ AUS = r.aus; saveAus(); }
   if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
   if(Array.isArray(r.alertas)) ALERTAS = r.alertas;
+  if(Array.isArray(r.permisos)) PERMISOS = r.permisos;
+  if(Array.isArray(r.programacion)) PROGRAMACION = r.programacion;
   DISP_FILAS = (typeof r.dispositivosFilas === 'number') ? r.dispositivosFilas : null;
   if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
-    ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados',
+    ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados','domingosTrabajados',
      'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
@@ -3211,25 +3267,99 @@ function rangoFechas(desde, hasta){
 function sabadoTrabajado(fechaISO){
   return (CFG.sabadosTrabajados||[]).indexOf(fechaISO) >= 0;
 }
+function domingoTrabajado(fechaISO){
+  return (CFG.domingosTrabajados||[]).indexOf(fechaISO) >= 0;
+}
 
 /* Los sábados del año, para pintar el calendario de Configuración */
-function sabadosDelAnio(anio){
+function diasDelAnio(anio, diaSemana){
   const out = [];
   const d = new Date(anio, 0, 1);
-  while(d.getDay() !== 6) d.setDate(d.getDate()+1);
+  while(d.getDay() !== diaSemana) d.setDate(d.getDate()+1);
   while(d.getFullYear() === anio){ out.push(hoyISO(d)); d.setDate(d.getDate()+7); }
   return out;
+}
+function sabadosDelAnio(anio){ return diasDelAnio(anio, 6); }
+
+/* Un calendario de días sueltos que la empresa sí trabaja.
+
+   Se marca lo que SÍ se labora, nunca al revés. Olvidar marcar un día no le genera
+   falta a nadie; en cambio, dar por laborables todos y olvidar desmarcar llenaría
+   el reporte de faltas que no ocurrieron. El error barato es el que no acusa a nadie. */
+function calendarioDia(diaSemana, clave, cls, titulo, nota){
+  const hoy = hoyISO();
+  const anio = +hoy.slice(0,4);
+  const marcados = CFG[clave] || [];
+  const lista = Array.from(new Set(
+    diasDelAnio(anio, diaSemana).filter(f=>f>=hoy).concat(marcados)
+  )).sort();
+  const prox = lista.filter(f=>f>=hoy).slice(0,3);
+  const trabajados = prox.filter(f=>marcados.indexOf(f)>=0);
+  const nom = diaSemana===0 ? 'domingo' : 'sábado';
+
+  return '<div class="cfg" style="grid-column:1/-1"><h3>'+esc(titulo)+'</h3>'+
+  '<p class="hint">Marca los '+nom+'s en que sí se labora. <b>El que no marques no genera falta a nadie.</b><br>'+
+  nota+'</p>'+
+  '<div style="display:flex;flex-wrap:wrap;gap:8px;max-height:230px;overflow-y:auto;padding:2px">'+
+    lista.map(f=>{
+      const on = marcados.indexOf(f)>=0;
+      const d = new Date(f+'T12:00:00');
+      const fer = esFeriado(f);
+      return '<label class="'+cls+'" data-f="'+f+'" style="display:flex;align-items:center;gap:7px;padding:8px 12px;'+
+        'border:1.5px solid '+(on?'var(--primary)':'var(--line)')+';border-radius:9px;cursor:pointer;font-size:13.5px;'+
+        'background:'+(on?'var(--primary)':'var(--surface)')+';color:'+(on?'#fff':'var(--text)')+';font-weight:'+(on?'650':'500')+'">'+
+        '<input type="checkbox" '+(on?'checked':'')+' style="margin:0;cursor:pointer">'+
+        '<span>'+d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+'</span>'+
+        (fer?'<span style="font-size:10px;opacity:.8">feriado</span>':'')+
+      '</label>';
+    }).join('')+
+  '</div>'+
+  '<p style="font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.55">'+
+    '<b>'+marcados.length+'</b> '+nom+(marcados.length===1?'':'s')+' marcado'+(marcados.length===1?'':'s')+' en el año. '+
+    (prox.length
+      ? 'Los próximos tres: '+prox.map(f=>fechaCorta(f)+' '+(trabajados.indexOf(f)>=0?'<b style="color:var(--ok)">se trabaja</b>':'<span style="color:var(--muted)">no</span>')).join(' · ')
+      : 'No quedan '+nom+'s este año.')+
+  '</p></div>';
+}
+
+/* Engancha los chips de un calendario. Guarda al instante, sin depender del botón. */
+function wireCalendario(cls, clave, nom){
+  $$('.'+cls).forEach(chip=>{
+    chip.onclick = e=>{
+      e.preventDefault();
+      const f = chip.dataset.f;
+      const lista = (CFG[clave]||[]).slice();
+      const i = lista.indexOf(f);
+      if(i>=0) lista.splice(i,1); else lista.push(f);
+      CFG[clave] = lista.sort();
+      saveCfg(); renderTab();
+      empujarConfig().then(r=>{
+        const d = new Date(f+'T12:00:00');
+        const txt = d.getDate()+' de '+MESES[d.getMonth()];
+        if(r==='error') toast('⚠ Guardado aquí, pero NO llegó al servidor');
+        else toast(nom+' '+txt+(i>=0 ? ': ya no se trabaja' : ': se trabaja'));
+      });
+    };
+  });
 }
 
 /* Horario que aplica a un empleado en una fecha dada. null = no labora. */
 function horarioDe(emp, fechaISO){
+  // Lo programado a mano manda sobre todo, incluidos feriados y domingos: si
+  // administración puso a alguien ese día, es porque ese día trabaja.
+  const a = programacionDe(emp.id, fechaISO);
+  // Un borrador no le cambia la jornada a nadie: mientras la jefa lo arma, esa
+  // persona sigue con su turno. Solo lo publicado o validado manda.
+  if(a && a.entrada && a.salida && a.estado !== 'BORRADOR')
+    return {in:a.entrada, out:a.salida, programado:a};
   if(esFeriado(fechaISO)) return null;
   const t = getTurno(emp.turno);
   const d = new Date(fechaISO+'T12:00:00').getDay();
-  if(d===0) return null;                               // domingo
-  // Sábado: primero decide el calendario si la empresa trabaja ese día concreto,
-  // y después el turno si a esa gente le toca sábado y con qué horario.
-  if(d===6) return (sabadoTrabajado(fechaISO) && t.trabajaSab) ? {in:t.sabEntrada,out:t.sabSalida} : null;
+  // Domingo y sábado funcionan igual: primero el calendario decide si la empresa
+  // abre ese día concreto, y después el turno decide a quién le toca y con qué
+  // horario. Los domingos la tienda atiende citas, pero solo para comercial.
+  if(d===0) return (domingoTrabajado(fechaISO) && t.trabajaDom) ? {in:t.domEntrada, out:t.domSalida} : null;
+  if(d===6) return (sabadoTrabajado(fechaISO) && t.trabajaSab) ? {in:t.sabEntrada, out:t.sabSalida} : null;
   return {in:t.entrada, out:t.salida};
 }
 
@@ -3300,6 +3430,13 @@ function estadoDia(emp, fechaISO, ahora){
   if(CFG.inicioOperacion && fechaISO < CFG.inicioOperacion && !j.entrada)
     return Object.assign(base, {clase:'SIN_SISTEMA', etiqueta:'—', cls:'tag-ok'});
 
+  // Un permiso de día completo aprobado vale lo mismo que una ausencia autorizada:
+  // el día sale del conteo, ni falta ni asistencia. Si igual marcó, manda el marcaje.
+  const permDia = permisoAprobado(emp.id, fechaISO, 'DIA');
+  if(permDia && !j.entrada){
+    return Object.assign(base, {clase:'JUSTIFICADA', etiqueta:'PERMISO', cls:'tag-warn', permiso:permDia});
+  }
+
   // Una ausencia autorizada manda, salvo que la persona igual haya marcado
   if(aus && !j.entrada){
     const t = tipoAus(aus.tipo);
@@ -3312,7 +3449,19 @@ function estadoDia(emp, fechaISO, ahora){
 
   if(j.entrada){
     const ev = evaluarEntrada(emp, fechaISO, j.entrada.hora);
-    return Object.assign(base, {clase:'ASISTIO', etiqueta:ev.estado, cls:ev.clase, tard:ev.tardanza, ev});
+    // La hora real no se toca; lo que cambia es que esos minutos dejen de contar.
+    // Se decidió así: el reporte no debe castigar una llegada tarde autorizada.
+    const permTar = ev.tardanza > 0 ? permisoAprobado(emp.id, fechaISO, 'TARDANZA') : null;
+    if(permTar){
+      return Object.assign(base, {clase:'ASISTIO', etiqueta:'TARDANZA JUSTIFICADA',
+                                  cls:'tag-ok', tard:0, ev, permiso:permTar});
+    }
+    const permCasa = permisoAprobado(emp.id, fechaISO, 'CASA');
+    const prog = programacionDe(emp.id, fechaISO);
+    const porValidar = !!(prog && prog.estado === 'PUBLICADO' && fechaISO < hoy);
+    return Object.assign(base, {clase:'ASISTIO', etiqueta:ev.estado, cls:ev.clase,
+                                tard:ev.tardanza, ev, permiso:permCasa||null,
+                                prog:prog||null, porValidar});
   }
 
   if(fechaISO > hoy)  return Object.assign(base, {clase:'FUTURO',   etiqueta:'—',           cls:'tag-ok'});
@@ -3331,7 +3480,12 @@ function estadoDia(emp, fechaISO, ahora){
 function salidaDe(emp, fechaISO, ahora){
   ahora = ahora || new Date();
   const j = jornadaDe(emp.id, fechaISO);
-  if(j.salida) return {hora:j.salida.hora, estado:'REGISTRADA', cls:'tag-ok', reg:j.salida};
+  if(j.salida){
+    // Con permiso aprobado, salir antes no es una salida anticipada: era lo pactado.
+    const perm = permisoAprobado(emp.id, fechaISO, 'SALIDA_ANTES');
+    return {hora:j.salida.hora, estado: perm ? 'SALIDA AUTORIZADA' : 'REGISTRADA',
+            cls:'tag-ok', reg:j.salida, permiso:perm||null};
+  }
   if(!j.entrada) return {hora:'—', estado:'', cls:''};
   const hor = horarioDe(emp, fechaISO);
   const vencio = fechaISO < hoyISO(ahora) ||
@@ -3428,6 +3582,12 @@ function gpsPermite(){
   const e = DEV ? EMP.find(x=>x.id===DEV.empId) : null;
   // Teletrabajo y exentos marcan sin validación de ubicación, sea cual sea el modo
   if(e && e.modalidad !== 'PRESENCIAL') return true;
+  // Y quien esté programado desde casa ese día, tampoco
+  if(e){
+    const a = programacionDe(e.id, hoyISO());
+    if(a && a.modalidad === 'REMOTO' && a.estado !== 'BORRADOR') return true;
+    if(permisoAprobado(e.id, hoyISO(), 'CASA')) return true;
+  }
   if(CFG.gpsModo==='off') return true;
   if(CFG.gpsModo==='advertir') return GEO.estado!=='pendiente';
   return GEO.estado==='dentro';                 // modo bloquear
@@ -3608,6 +3768,7 @@ function renderMark(){
   pintarGps();
   pintarBoton(emp);
   pintarDia(emp);
+  pintarPermiso(emp);
   pedirSalidaPendiente(emp);
   pedirUbicacion(()=>{ pintarGps(); pintarBoton(emp); });
 
@@ -3620,6 +3781,92 @@ function renderMark(){
     pintarDia(emp);
     pedirSalidaPendiente(emp);
   });
+}
+
+/* --- Solicitar un permiso ---
+   Se pide desde el propio celular, con el DNI que ya se validó. No decide nada:
+   queda PENDIENTE hasta que administración lo resuelva en el panel. Y no se puede
+   pedir para un día que ya pasó — regularizar lo de ayer es un registro manual,
+   que carga administración y queda a su nombre. */
+function pintarPermiso(emp){
+  const c = $('#mkPermiso');
+  if(!c) return;
+  if(!hayServidor()){ c.innerHTML = ''; return; }
+
+  const mios = PERMISOS.filter(p=>p.empId===emp.id && p.fecha>=hoyISO())
+                       .sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  c.innerHTML =
+    mios.map(p=>{
+      const t = tipoPermiso(p.tipo);
+      const cls = p.estado==='APROBADO' ? 'alert-ok' : p.estado==='RECHAZADO' ? 'alert-bad' : 'alert-warn';
+      return '<div class="alert '+cls+'" style="text-align:left;margin-bottom:10px">'+
+        '<b>'+esc(t.nombre)+'</b> · '+esc(fechaCorta(p.fecha))+' — <b>'+esc(p.estado)+'</b>'+
+        (p.comentario ? '<br><span style="font-size:12.5px">'+esc(p.comentario)+'</span>' : '')+
+      '</div>';
+    }).join('')+
+    '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>';
+
+  const b = $('#btnPermiso');
+  if(b) b.onclick = ()=>solicitarPermiso(emp);
+}
+
+function solicitarPermiso(emp){
+  const hoy = hoyISO();
+  const m = document.createElement('div'); m.className='modal';
+  m.innerHTML = '<div class="box"><h2>Solicitar un permiso</h2>'+
+    '<p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.5">'+
+      'Lo revisa Administración. Hasta que lo apruebe, tu día se cuenta normal.</p>'+
+    '<div class="frow"><div><label>¿Qué necesitas?</label><select id="pkT">'+
+      TIPOS_PERMISO.map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join('')+
+    '</select></div></div>'+
+    '<p id="pkEf" style="font-size:12px;color:var(--muted);margin:-6px 0 12px;line-height:1.5"></p>'+
+    '<div class="frow">'+
+      '<div><label>¿Qué día?</label><input type="date" id="pkF" value="'+hoy+'" min="'+hoy+'"></div>'+
+      '<div id="pkHora"><label>¿A qué hora?</label><input type="time" id="pkH"></div>'+
+    '</div>'+
+    '<div class="frow"><div><label>Motivo</label><input id="pkM" placeholder="Cita médica, trámite…" maxlength="120"></div></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px">'+
+      '<button class="btn btn-line" id="pkX">Cancelar</button>'+
+      '<button class="btn" id="pkG">Enviar</button></div></div>';
+  document.body.appendChild(m);
+
+  const pintarEfecto = ()=>{
+    const t = tipoPermiso(m.querySelector('#pkT').value);
+    m.querySelector('#pkEf').textContent = 'Si te lo aprueban: '+t.efecto;
+    m.querySelector('#pkHora').style.display = t.pideHora ? '' : 'none';
+  };
+  m.querySelector('#pkT').onchange = pintarEfecto;
+  pintarEfecto();
+
+  m.querySelector('#pkX').onclick = ()=>m.remove();
+  m.querySelector('#pkG').onclick = async ()=>{
+    const tipo = m.querySelector('#pkT').value;
+    const fecha = m.querySelector('#pkF').value;
+    const motivo = m.querySelector('#pkM').value.trim();
+    if(!fecha){ toast('Elige el día'); return; }
+    if(fecha < hoy){ toast('No se puede pedir para un día que ya pasó'); return; }
+    if(motivo.length < 4){ toast('Escribe el motivo'); return; }
+
+    const b = m.querySelector('#pkG');
+    b.disabled = true; b.textContent = 'Enviando…';
+    try{
+      const r = await api('permiso', {ident: emp.dni || emp.id, tipo, fecha,
+                                      hora: m.querySelector('#pkH').value || '',
+                                      motivo}, {timeout:20000});
+      if(r && r.ok){
+        if(r.permiso) PERMISOS = PERMISOS.filter(p=>p.id!==r.permiso.id).concat([r.permiso]);
+        m.remove();
+        toast(r.duplicado ? (r.aviso||'Ya tenías una solicitud pendiente') : 'Solicitud enviada');
+        renderMark();
+      }else{
+        b.disabled = false; b.textContent = 'Enviar';
+        toast((r && r.error) || 'No se pudo enviar');
+      }
+    }catch(e){
+      b.disabled = false; b.textContent = 'Enviar';
+      toast('Sin conexión. Inténtalo de nuevo.');
+    }
+  };
 }
 
 /* --- Salida sin registrar de un día anterior ---
@@ -4282,7 +4529,7 @@ function abrirAdmin(){
           // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
-  const ocultas = soloVista() ? ['emp','cfg','qr'] : [];
+  const ocultas = soloVista() ? ['cfg','qr'] : [];
   $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
   if(ocultas.indexOf(TAB)>=0){
     TAB='hoy';
@@ -4318,13 +4565,15 @@ $('#adTabs').addEventListener('click', e=>{
 function renderTab(){
   const b=$('#adBody');
   // Cerrojo: aunque alguien fuerce la pestaña, en solo lectura no se abre
-  if(soloVista() && ['emp','cfg','qr'].indexOf(TAB)>=0) TAB='hoy';
+  if(TAB==='disp') TAB='emp';   // Celulares se fusionó con Personal
+  if(soloVista() && ['cfg','qr'].indexOf(TAB)>=0) TAB='hoy';
   if(TAB==='hoy')  return tabHoy(b);
   if(TAB==='ana')  return tabAnalisis(b);
   if(TAB==='aus')  return tabAus(b);
   if(TAB==='hist') return tabHist(b);
   if(TAB==='emp')  return tabEmp(b);
-  if(TAB==='disp') return tabDisp(b);
+  if(TAB==='prog') return tabProgramacion(b);
+  if(TAB==='perm') return tabPermisos(b);
   if(TAB==='cfg')  return tabCfg(b);
   if(TAB==='qr')   return tabQr(b);
 }
@@ -4651,7 +4900,7 @@ function tabHoy(b){
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes)+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Horario</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
+      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
     (filas.length ? bloquesPlanilla(filas) : '<tr><td '+((CFG.usaProyectos?11:10)+(soloVista()?0:1))+'><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
     '</tbody></table></div></div>'+
@@ -4670,12 +4919,17 @@ function tabHoy(b){
         '<td class="name">'+esc(r.e.nombre)+'<div style="font-size:12px;color:var(--muted);font-weight:400">'+esc(r.e.cargo)+'</div></td>'+
         (CFG.usaProyectos?'<td>'+(r.e.proyecto?esc(nomProyecto(r.e.proyecto)):'<span style="color:var(--muted)">—</span>')+'</td>':'')+
         '<td>'+esc(r.e.area)+'</td>'+
-        '<td class="num">'+(r.hor? r.hor.in+'–'+r.hor.out : '—')+'</td>'+
         '<td class="num" style="font-weight:700">'+(j.entrada?j.entrada.hora:'—')+
-          (j.entrada&&j.entrada.origen&&j.entrada.origen!=='APP'?' <span class="tag tag-warn" style="font-size:9px">'+j.entrada.origen+'</span>':'')+'</td>'+
-        '<td><span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span></td>'+
+          (j.entrada&&j.entrada.origen&&j.entrada.origen!=='APP'?' <span class="tag tag-warn" style="font-size:9px">'+j.entrada.origen+'</span>':'')+
+          esperada(r.hor && r.hor.in)+'</td>'+
+        '<td><span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span>'+
+          (r.porValidar ? ' <span class="tag tag-warn" style="font-size:9px">POR VALIDAR</span>' : '')+
+          (r.prog && r.prog.estado==='VALIDADO' ? ' <span class="tag tag-ok" style="font-size:9px">VALIDADO</span>' : '')+
+          (r.permiso ? ' <span class="tag tag-warn" style="font-size:9px" title="'+
+            esc(tipoPermiso(r.permiso.tipo).nombre+' · '+r.permiso.motivo+
+                (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">PERMISO</span>' : '')+'</td>'+
         '<td class="num">'+(r.tard? r.tard+"'":'—')+'</td>'+
-        '<td class="num">'+salTxt+'</td>'+
+        '<td class="num">'+salTxt+ esperada(r.hor && r.hor.out) +'</td>'+
         '<td class="num">'+perm+'</td>'+
         '<td>'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
         '<td>'+zona+'</td>'+
@@ -4691,7 +4945,7 @@ function tabHoy(b){
     const fuera  = lista.filter(r=>!enPlanilla(r.e));
     if(!dentro.length || !fuera.length) return lista.map(filaHoy).join('');
 
-    const cols = (CFG.usaProyectos?11:10)+(soloVista()?0:1);
+    const cols = (CFG.usaProyectos?10:9)+(soloVista()?0:1);
     const cabecera = (txt, n, cls)=>
       '<tr><td colspan="'+cols+'" style="background:var(--surface-2);font-weight:750;'+
       'font-size:12px;letter-spacing:.04em;color:var(--muted);padding:9px 12px">'+
@@ -4771,6 +5025,14 @@ function notaExentos(){
     (ex.length===1?'':'n')+' en este cuadro: '+ ex.map(e=>esc(e.nombre)).join(', ')+
     '. Puedes cambiarlo en la pestaña Personal.</p>';
 }
+/* La hora que le tocaba, en pequeño y debajo de la que marcó.
+   Se muestra siempre que haya horario, aunque no haya marcado: así se ve a qué
+   hora debía entrar quien todavía no aparece. */
+function esperada(h){
+  if(!h) return '';
+  return '<div style="font-size:11px;color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums">'+esc(h)+'</div>';
+}
+
 function kpi(l,v,c){ return '<div class="kpi '+(c||'')+'"><div class="kl">'+l+'</div><div class="kv">'+v+'</div></div>'; }
 
 /* ---------- GRÁFICO DE BARRAS ----------
@@ -5026,15 +5288,17 @@ function tabHist(b){
       '</div>'+
       (regs.length ?
       '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th><th>Estado</th><th>Min.</th><th>Distancia</th>'+(soloVista()?'':'<th></th>')+'</tr></thead><tbody>'+
+      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th><th>Le tocaba</th><th>Estado</th><th>Min.</th><th>Situación</th><th>Distancia</th>'+(soloVista()?'':'<th></th>')+'</tr></thead><tbody>'+
       regs.map((m,idx)=>'<tr>'+
         '<td class="num">'+fechaCorta(m.fecha)+'</td>'+
         '<td class="name">'+esc(m.nombre)+'</td>'+
         '<td>'+esc(m.area)+'</td>'+
         '<td><span class="tag '+(m.tipo==='ENTRADA'?'tag-ok':'tag-warn')+'">'+m.tipo+'</span></td>'+
         '<td class="num" style="font-weight:700">'+m.hora+'</td>'+
+        '<td class="num" style="color:var(--muted)">'+horarioDeMarcaje(m)+'</td>'+
         '<td>'+esc(m.estado)+'</td>'+
         '<td class="num">'+((m.tardanza||m.anticipada)? (m.tardanza||m.anticipada)+"'" : '—')+'</td>'+
+        '<td style="white-space:normal;min-width:170px;font-size:12.5px">'+situacionDe(m)+'</td>'+
         '<td class="num">'+(m.dist==null?'—':(m.dist>=1000?(m.dist/1000).toFixed(1)+' km':m.dist+' m'))+'</td>'+
         (soloVista()?'':'<td><button class="btn btn-sm btn-line" data-delm="'+idx+'" style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>')+
       '</tr>').join('')+'</tbody></table></div></div>'
@@ -5056,11 +5320,455 @@ function tabHist(b){
   go();
 }
 
+/* La hora que le correspondía a ESE marcaje: entrada o salida según el tipo,
+   y según el turno que tenga esa persona en esa fecha. */
+/* Qué pasaba ese día con esa persona: si tenía un turno programado, si fue desde
+   casa, si había un permiso aprobado, o si era un día que normalmente no se trabaja.
+   El historial sin esto no se explica solo: un domingo de 9 a 6 parece un error. */
+function situacionDe(m){
+  const partes = [];
+  const a = programacionDe(m.empId, m.fecha);
+  if(a && a.entrada){
+    const est = estadoProg(a.estado);
+    partes.push('<b style="color:'+est.color+'">Programado '+esc(a.entrada)+'–'+esc(a.salida)+'</b>'+
+      (a.modalidad==='REMOTO' ? ' · <span style="color:var(--warn)">desde casa</span>' : '')+
+      ' · '+est.nombre+
+      (a.nota ? '<div style="color:var(--muted)">'+esc(a.nota)+'</div>' : ''));
+  }
+  const perm = PERMISOS.filter(p=>p.estado==='APROBADO' && p.empId===m.empId && p.fecha===m.fecha);
+  perm.forEach(p=>partes.push('<span class="tag tag-warn" style="font-size:9px">PERMISO</span> '+
+    esc(tipoPermiso(p.tipo).nombre)+(p.motivo?' · '+esc(p.motivo):'')));
+
+  if(!partes.length){
+    const d = new Date(m.fecha+'T12:00:00').getDay();
+    const fer = esFeriado(m.fecha);
+    if(fer)        partes.push('<span style="color:var(--muted)">Feriado: '+esc(fer.nombre)+'</span>');
+    else if(d===0) partes.push('<span style="color:var(--muted)">Domingo'+(domingoTrabajado(m.fecha)?' de apertura':'')+'</span>');
+    else if(d===6) partes.push('<span style="color:var(--muted)">Sábado'+(sabadoTrabajado(m.fecha)?' laborable':'')+'</span>');
+  }
+  if(m.origen && m.origen!=='APP')
+    partes.push('<span class="tag tag-warn" style="font-size:9px">'+esc(m.origen)+'</span>'+(m.motivo?' '+esc(m.motivo):''));
+  return partes.join('<br>') || '<span style="color:var(--muted)">—</span>';
+}
+
+function horarioDeMarcaje(m){
+  const e = EMP.find(x=>x.id===m.empId);
+  if(!e) return '—';
+  const h = horarioDe(e, m.fecha);
+  if(!h) return '—';
+  return m.tipo === 'ENTRADA' ? h.in : h.out;
+}
+
 function resumen(i,f,empId){
   const regs = MAR.filter(m=>m.fecha>=i && m.fecha<=f && (!empId||m.empId===empId));
   const dias = new Set(regs.map(m=>m.fecha)).size;
   const ent  = regs.filter(m=>m.tipo==='ENTRADA');
   return {dias, tardanzas: ent.filter(m=>m.tardanza>0).length, minutos: ent.reduce((s,m)=>s+(m.tardanza||0),0)};
+}
+
+/* ---------- TAB: PROGRAMACIÓN ----------
+   Una cuadrícula de la semana: filas las personas, columnas los días. Sirve para
+   repartir la jornada cuando el turno fijo no alcanza — el caso que la motivó es
+   el domingo, con la tienda abierta todo el día y ventas cubriendo franjas.
+
+   Lo que se ve en cada casilla es lo que esa persona tiene ESE día: si hay algo
+   programado se muestra en azul, y si no, el horario que le da su turno, en gris.
+   Así se lee de un vistazo qué está cubierto y qué no. */
+let PROG_SEM = '';      // lunes de la semana que se está viendo
+let PROG_AREA = '';     // área que se está programando
+let PROG_VISTA = 'sem'; // 'sem' para armar, 'mes' para presentar
+let PROG_MES = '';      // mes que se está mirando en el calendario
+
+function lunesDe(fechaISO){
+  const d = new Date(fechaISO+'T12:00:00');
+  const dia = d.getDay();                 // 0 domingo … 6 sábado
+  d.setDate(d.getDate() - ((dia+6)%7));    // retrocede hasta el lunes
+  return hoyISO(d);
+}
+
+function tabProgramacion(b){
+  if(!PROG_SEM) PROG_SEM = lunesDe(hoyISO());
+  const areas = Array.from(new Set(EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').map(e=>e.area))).sort();
+  if(!PROG_AREA) PROG_AREA = areas.indexOf('VENTAS')>=0 ? 'VENTAS' : (areas[0]||'');
+  const gente = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO' && (!PROG_AREA || e.area===PROG_AREA))
+                   .sort((a,c)=>a.nombre.localeCompare(c.nombre));
+  const idsArea = gente.map(e=>e.id);
+
+  const barra =
+    '<div class="toolbar">'+
+      '<div>'+lbl('Área')+'<select class="sel" id="prA">'+
+        areas.map(a=>'<option value="'+esc(a)+'"'+(a===PROG_AREA?' selected':'')+'>'+esc(a)+'</option>').join('')+
+      '</select></div>'+
+      '<div>'+lbl('Vista')+'<select class="sel" id="prV">'+
+        '<option value="sem"'+(PROG_VISTA==='sem'?' selected':'')+'>Semana — para armar</option>'+
+        '<option value="mes"'+(PROG_VISTA==='mes'?' selected':'')+'>Calendario del mes</option>'+
+      '</select></div>'+
+      '<div style="align-self:flex-end;display:flex;gap:8px">'+
+        '<button class="btn btn-sm btn-line" id="prAnt">‹ Anterior</button>'+
+        '<button class="btn btn-sm btn-line" id="prHoy">Hoy</button>'+
+        '<button class="btn btn-sm btn-line" id="prSig">Siguiente ›</button>'+
+      '</div>'+
+      '<div class="grow"></div>'+
+    '</div>';
+
+  b.innerHTML = (PROG_VISTA==='mes' ? vistaMes(gente, idsArea, barra) : vistaSemana(gente, idsArea, barra));
+
+  $('#prA').onchange = ()=>{ PROG_AREA = $('#prA').value; renderTab(); };
+  $('#prV').onchange = ()=>{ PROG_VISTA = $('#prV').value; renderTab(); };
+  const salto = PROG_VISTA==='mes' ? 'mes' : 7;
+  $('#prAnt').onclick = ()=>moverPeriodo(-1);
+  $('#prSig').onclick = ()=>moverPeriodo(1);
+  $('#prHoy').onclick = ()=>{ PROG_SEM = lunesDe(hoyISO()); PROG_MES = hoyISO().slice(0,7); renderTab(); };
+
+  if(soloVista()) return;
+  Array.from(b.querySelectorAll('[data-prog]')).forEach(td=>{
+    td.onclick = ()=>{
+      const [empId, fecha] = td.dataset.prog.split('|');
+      editarProgramacion(empId, fecha);
+    };
+  });
+  const pub = $('#prPub'); if(pub) pub.onclick = ()=>publicarSemana(idsArea);
+  const val = $('#prVal'); if(val) val.onclick = ()=>validarTurnos(idsArea);
+}
+
+function moverPeriodo(n){
+  if(PROG_VISTA==='mes'){
+    const d = new Date(PROG_MES+'-01T12:00:00');
+    d.setMonth(d.getMonth()+n);
+    PROG_MES = hoyISO(d).slice(0,7);
+  }else{
+    const d = new Date(PROG_SEM+'T12:00:00'); d.setDate(d.getDate()+7*n);
+    PROG_SEM = hoyISO(d);
+  }
+  renderTab();
+}
+
+/* El horario que le toca a alguien un día por su turno, sin contar la programación.
+   Es lo que se muestra en gris de fondo: lo que pasaría si nadie programa nada. */
+function horarioBase(e, fecha){
+  const t = getTurno(e.turno);
+  if(esFeriado(fecha)) return null;
+  const d = new Date(fecha+'T12:00:00').getDay();
+  if(d===0) return (t.trabajaDom && domingoTrabajado(fecha)) ? {in:t.domEntrada,out:t.domSalida} : null;
+  if(d===6) return (t.trabajaSab && sabadoTrabajado(fecha)) ? {in:t.sabEntrada,out:t.sabSalida} : null;
+  return {in:t.entrada, out:t.salida};
+}
+
+/* ---- Vista de semana: la cuadrícula para armar ---- */
+function vistaSemana(gente, idsArea, barra){
+  const hoy = hoyISO();
+  const dias = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(PROG_SEM+'T12:00:00'); d.setDate(d.getDate()+i);
+    dias.push(hoyISO(d));
+  }
+  const dentro = a => idsArea.indexOf(a.empId)>=0 && dias.indexOf(a.fecha)>=0;
+  const borradores = PROGRAMACION.filter(a=>dentro(a) && a.estado==='BORRADOR').length;
+  const porValidar = PROGRAMACION.filter(a=>dentro(a) && a.estado==='PUBLICADO' && a.fecha<hoy).length;
+
+  const casilla = (e, fecha)=>{
+    const a = programacionDe(e.id, fecha);
+    const base = horarioBase(e, fecha);
+    const est = a ? estadoProg(a.estado) : null;
+    const cel = a
+      ? '<b style="color:'+est.color+'">'+esc(a.entrada)+'–'+esc(a.salida)+'</b>'+
+        (a.modalidad==='REMOTO' ? '<div style="font-size:10px;color:var(--warn)">desde casa</div>' : '')+
+        '<div style="font-size:10px;color:'+est.color+'">'+est.nombre+'</div>'+
+        (a.nota ? '<div style="font-size:10px;color:var(--muted)">'+esc(a.nota)+'</div>' : '')
+      : (base ? '<span style="color:var(--muted)">'+esc(base.in)+'–'+esc(base.out)+'</span>'
+              : '<span style="color:var(--muted);font-size:11px">'+(esFeriado(fecha)?'feriado':'libre')+'</span>');
+    return '<td style="text-align:center;'+(a?'background:'+est.fondo+';':'')+(soloVista()?'':'cursor:pointer')+'"'+
+           (soloVista()?'':' data-prog="'+esc(e.id)+'|'+fecha+'"')+'>'+cel+'</td>';
+  };
+
+  const nomDia = fecha=>{
+    const d = new Date(fecha+'T12:00:00');
+    return '<div'+(fecha===hoy?' style="color:var(--primary)"':'')+'>'+DIAS[d.getDay()].slice(0,3)+
+      '<div style="font-size:11px;color:var(--muted);font-weight:400">'+d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+'</div></div>';
+  };
+
+  return '<div class="alert alert-ok" style="margin-bottom:16px">'+
+      'Aquí se reparte la jornada cuando el turno fijo no alcanza — el domingo, con la tienda '+
+      'abierta todo el día y el equipo cubriendo franjas distintas.<br>'+
+      '<b>Arma la semana, publícala, y al terminar valida los turnos que sí se cubrieron.</b> '+
+      'Mientras esté en borrador no le cambia la jornada a nadie.'+
+    '</div>'+ barra +
+    (soloVista() ? '' :
+      '<div style="display:flex;gap:8px;margin:-6px 0 14px;flex-wrap:wrap">'+
+        (borradores ? '<button class="btn btn-sm" id="prPub">Publicar la semana ('+borradores+')</button>' : '')+
+        (porValidar ? '<button class="btn btn-sm btn-line" id="prVal">Validar turnos cumplidos ('+porValidar+')</button>' : '')+
+      '</div>')+
+    (gente.length
+      ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+          '<th>Colaborador</th>'+ dias.map(f2=>'<th style="text-align:center">'+nomDia(f2)+'</th>').join('')+
+        '</tr></thead><tbody>'+
+        gente.map(e=>'<tr>'+
+          '<td class="name">'+esc(e.nombre)+
+            '<div style="font-size:11.5px;color:var(--muted);font-weight:400">'+esc(getTurno(e.turno).nombre)+'</div></td>'+
+          dias.map(f2=>casilla(e,f2)).join('')+
+        '</tr>').join('')+
+        '</tbody></table></div></div>'
+      : '<div class="tblwrap"><div class="empty">No hay colaboradores en esa área.</div></div>')+
+    leyendaProg();
+}
+
+/* ---- Vista de mes: el calendario, para presentar ---- */
+function vistaMes(gente, idsArea, barra){
+  if(!PROG_MES) PROG_MES = hoyISO().slice(0,7);
+  const hoy = hoyISO();
+  const primero = new Date(PROG_MES+'-01T12:00:00');
+  const anio = primero.getFullYear(), mes = primero.getMonth();
+  const ultimo = new Date(anio, mes+1, 0).getDate();
+
+  // La cuadrícula arranca el lunes de la semana del día 1
+  const inicio = new Date(primero);
+  inicio.setDate(inicio.getDate() - ((primero.getDay()+6)%7));
+
+  const celdas = [];
+  for(let i=0;i<42;i++){
+    const d = new Date(inicio); d.setDate(d.getDate()+i);
+    celdas.push({fecha: hoyISO(d), delMes: d.getMonth()===mes, dia: d.getDate()});
+    if(i>=34 && d.getMonth()!==mes) break;
+  }
+
+  const nombreCorto = n => { const p=n.split(' '); return p[0]+(p[1]?' '+p[1][0]+'.':''); };
+
+  const celda = c=>{
+    const turnos = PROGRAMACION
+      .filter(a=>a.fecha===c.fecha && idsArea.indexOf(a.empId)>=0 && a.entrada)
+      .sort((x,y)=>x.entrada.localeCompare(y.entrada));
+    const fer = esFeriado(c.fecha);
+    return '<td style="vertical-align:top;padding:6px;min-width:118px;height:92px;'+
+      (c.delMes?'':'background:var(--surface-2);opacity:.55;')+
+      (c.fecha===hoy?'box-shadow:inset 0 0 0 2px var(--primary);':'')+'">'+
+      '<div style="font-size:12px;font-weight:700;color:'+(c.fecha===hoy?'var(--primary)':'var(--muted)')+'">'+c.dia+
+        (fer?' <span style="font-size:9px;font-weight:400">feriado</span>':'')+'</div>'+
+      turnos.map(a=>{
+        const est = estadoProg(a.estado);
+        return '<div style="margin-top:3px;padding:3px 5px;border-radius:5px;background:'+est.fondo+
+          ';border-left:3px solid '+est.color+';font-size:11px;line-height:1.35">'+
+          '<b>'+esc(a.entrada)+'–'+esc(a.salida)+'</b>'+
+          (a.modalidad==='REMOTO'?' <span style="color:var(--warn)">casa</span>':'')+
+          '<div style="color:var(--muted)">'+esc(nombreCorto(a.nombre))+'</div>'+
+        '</div>';
+      }).join('')+
+    '</td>';
+  };
+
+  const filas = [];
+  for(let i=0;i<celdas.length;i+=7) filas.push(celdas.slice(i,i+7));
+  const total = PROGRAMACION.filter(a=>a.fecha.slice(0,7)===PROG_MES && idsArea.indexOf(a.empId)>=0 && a.entrada).length;
+
+  return '<div class="alert alert-ok" style="margin-bottom:16px">'+
+      '<b>'+esc(MESES[mes].charAt(0).toUpperCase()+MESES[mes].slice(1))+' '+anio+' · '+esc(PROG_AREA)+'</b> — '+
+      total+' turno'+(total===1?'':'s')+' programado'+(total===1?'':'s')+'. '+
+      'Cada casilla muestra quién cubre qué franja ese día.'+
+    '</div>'+ barra +
+    '<div class="tblwrap"><div class="tblscroll"><table style="table-layout:fixed"><thead><tr>'+
+      ['lunes','martes','miércoles','jueves','viernes','sábado','domingo']
+        .map(d=>'<th style="text-align:center;font-size:11.5px">'+d+'</th>').join('')+
+    '</tr></thead><tbody>'+
+    filas.map(fila=>'<tr>'+fila.map(celda).join('')+'</tr>').join('')+
+    '</tbody></table></div></div>'+
+    leyendaProg();
+}
+
+function leyendaProg(){
+  return '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.7">'+
+    Object.keys(ESTADOS_PROG).map(k=>{
+      const e = ESTADOS_PROG[k];
+      return '<span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:'+e.fondo+
+        ';border-left:3px solid '+e.color+';vertical-align:middle;margin-right:5px"></span><b>'+e.nombre+'</b>';
+    }).join(' &nbsp;·&nbsp; ')+
+    '<br><b>Borrador:</b> se está armando, no le cambia la jornada a nadie. '+
+    '<b>Publicado:</b> vale, y cuenta para la asistencia. '+
+    '<b>Validado:</b> la jefatura confirmó que ese turno se cubrió.'+
+    '<br>Quien esté programado <b>desde casa</b> marca ese día sin validación de ubicación.</p>';
+}
+
+/* Publicar deja de ser borrador: recién ahí el horario cuenta para la asistencia. */
+async function publicarSemana(idsArea){
+  const dias = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(PROG_SEM+'T12:00:00'); d.setDate(d.getDate()+i);
+    dias.push(hoyISO(d));
+  }
+  const cambios = PROGRAMACION.filter(a=>a.estado==='BORRADOR' &&
+                    idsArea.indexOf(a.empId)>=0 && dias.indexOf(a.fecha)>=0);
+  if(!cambios.length) return;
+  if(!confirm('Se publicarán '+cambios.length+' turno'+(cambios.length===1?'':'s')+' de esta semana.\n\n'+
+              'A partir de ahí cuentan para la asistencia de esas personas. ¿Continuar?')) return;
+  cambios.forEach(a=>a.estado='PUBLICADO');
+  renderTab();
+  try{
+    const r = await api('programar', {datos:cambios}, {timeout:40000});
+    toast(r && r.ok ? 'Semana publicada' : '⚠ Publicado aquí, pero NO llegó al servidor');
+  }catch(e){ toast('⚠ Publicado aquí, pero NO llegó al servidor'); }
+}
+
+/* Validar es la confirmación de la jefatura de que ese turno se cubrió. */
+async function validarTurnos(idsArea){
+  const hoy = hoyISO();
+  const dias = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(PROG_SEM+'T12:00:00'); d.setDate(d.getDate()+i);
+    dias.push(hoyISO(d));
+  }
+  const cambios = PROGRAMACION.filter(a=>a.estado==='PUBLICADO' && a.fecha<hoy &&
+                    idsArea.indexOf(a.empId)>=0 && dias.indexOf(a.fecha)>=0);
+  if(!cambios.length) return;
+  if(!confirm('Se validarán '+cambios.length+' turno'+(cambios.length===1?'':'s')+' ya cumplidos.\n\n'+
+              'Es la confirmación de que esas franjas sí se cubrieron. ¿Continuar?')) return;
+  cambios.forEach(a=>{ a.estado='VALIDADO'; a.validadoPor='Administración'; a.validadoEl=hoy; });
+  renderTab();
+  try{
+    const r = await api('programar', {datos:cambios}, {timeout:40000});
+    toast(r && r.ok ? 'Turnos validados' : '⚠ Validado aquí, pero NO llegó al servidor');
+  }catch(e){ toast('⚠ Validado aquí, pero NO llegó al servidor'); }
+}
+
+function editarProgramacion(empId, fecha){
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  const e = EMP.find(x=>x.id===empId);
+  if(!e) return;
+  const a = programacionDe(empId, fecha) || {entrada:'', salida:'', modalidad:'PRESENCIAL', nota:''};
+  const d = new Date(fecha+'T12:00:00');
+
+  const m = document.createElement('div'); m.className='modal';
+  m.innerHTML = '<div class="box"><h2>Horario del día</h2>'+
+    '<p style="font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.5">'+
+      '<b>'+esc(e.nombre)+'</b><br>'+esc(DIAS[d.getDay()])+', '+d.getDate()+' de '+MESES[d.getMonth()]+'</p>'+
+    '<div class="frow">'+
+      '<div><label>Entrada</label><input type="time" id="pgE" value="'+esc(a.entrada)+'"></div>'+
+      '<div><label>Salida</label><input type="time" id="pgS" value="'+esc(a.salida)+'"></div>'+
+    '</div>'+
+    '<div class="frow"><div><label>Dónde trabaja</label><select id="pgM">'+
+      '<option value="PRESENCIAL"'+(a.modalidad!=='REMOTO'?' selected':'')+'>En la oficina</option>'+
+      '<option value="REMOTO"'+(a.modalidad==='REMOTO'?' selected':'')+'>Desde casa (marca sin ubicación)</option>'+
+    '</select></div></div>'+
+    '<div class="frow"><div><label>Nota (opcional)</label><input id="pgN" value="'+esc(a.nota||'')+'" maxlength="60" placeholder="Turno mañana"></div></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px">'+
+      '<button class="btn btn-line" id="pgX">Cancelar</button>'+
+      (a.entrada ? '<button class="btn btn-line" id="pgQ" style="color:var(--danger);border-color:var(--danger)">Quitar</button>' : '')+
+      '<button class="btn" id="pgG">Guardar</button></div></div>';
+  document.body.appendChild(m);
+
+  const enviar = async (entrada, salida)=>{
+    // Nace en borrador: la jefa arma la semana entera y después la publica de una vez.
+    const reg = {empId, nombre:e.nombre, fecha, entrada, salida,
+                 modalidad: m.querySelector('#pgM').value, nota: m.querySelector('#pgN').value.trim(),
+                 estado: (a && a.estado) ? a.estado : 'BORRADOR',
+                 validadoPor: a.validadoPor||'', validadoEl: a.validadoEl||''};
+    PROGRAMACION = PROGRAMACION.filter(x=>!(x.empId===empId && x.fecha===fecha));
+    if(entrada && salida) PROGRAMACION.push(reg);
+    m.remove(); renderTab();
+    try{
+      const r = await api('programar', {datos:[reg]}, {timeout:30000});
+      if(!r || !r.ok) toast('Guardado aquí, pero NO llegó al servidor');
+      else toast(entrada ? 'Horario asignado' : 'Horario quitado');
+    }catch(err){ toast('⚠ Guardado aquí, pero NO llegó al servidor'); }
+  };
+
+  m.querySelector('#pgX').onclick = ()=>m.remove();
+  const q = m.querySelector('#pgQ');
+  if(q) q.onclick = ()=>enviar('','');
+  m.querySelector('#pgG').onclick = ()=>{
+    const en = m.querySelector('#pgE').value, sa = m.querySelector('#pgS').value;
+    if(!en || !sa){ toast('Pon entrada y salida'); return; }
+    if(toMin(sa) <= toMin(en)){ toast('La salida debe ser posterior a la entrada'); return; }
+    enviar(en, sa);
+  };
+}
+
+/* ---------- TAB: PERMISOS ----------
+   Lo que el personal pide desde su celular. Los pendientes van arriba y sin
+   revolver con lo ya resuelto: si se mezclan, lo que falta atender se pierde.
+   Aprobar o rechazar solo lo puede hacer administración; el acceso de consulta
+   los ve pero no los toca. */
+function tabPermisos(b){
+  const hoy = hoyISO();
+  const pend = PERMISOS.filter(p=>p.estado==='PENDIENTE')
+                       .sort((a,b2)=>a.fecha.localeCompare(b2.fecha));
+  const resueltos = PERMISOS.filter(p=>p.estado!=='PENDIENTE')
+                            .sort((a,b2)=>b2.fecha.localeCompare(a.fecha));
+
+  const fila = (p, conBotones)=>{
+    const t = tipoPermiso(p.tipo);
+    const vencido = p.fecha < hoy;
+    return '<tr>'+
+      '<td class="name">'+esc(p.nombre)+'</td>'+
+      '<td><span class="tag '+(p.tipo==='DIA'?'tag-warn':'tag-ok')+'">'+esc(t.nombre)+'</span></td>'+
+      '<td class="num">'+esc(fechaCorta(p.fecha))+
+        (vencido && p.estado==='PENDIENTE'
+          ? '<div style="font-size:11px;color:var(--danger)">ya pasó</div>' : '')+'</td>'+
+      '<td class="num">'+esc(p.hora||'—')+'</td>'+
+      '<td style="white-space:normal;min-width:180px">'+esc(p.motivo)+'</td>'+
+      '<td>'+(p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>'
+             : p.estado==='RECHAZADO' ? '<span class="tag tag-bad">RECHAZADO</span>'
+             : '<span class="tag tag-warn">PENDIENTE</span>')+
+        (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+'</td>'+
+      '<td style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
+      (soloVista() ? '<td></td>'
+        : '<td>'+(conBotones
+            ? '<div style="display:flex;gap:6px">'+
+              '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
+              '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'+
+              '</div>'
+            : '')+'</td>')+
+    '</tr>';
+  };
+
+  const cabecera = '<thead><tr><th>Colaborador</th><th>Qué pide</th><th>Día</th><th>Hora</th>'+
+    '<th>Motivo</th><th>Estado</th><th>Comentario</th>'+(soloVista()?'<th></th>':'<th></th>')+'</tr></thead>';
+
+  b.innerHTML =
+    (pend.length
+      ? '<div class="alert alert-warn" style="margin-bottom:16px">⏳ <b>'+pend.length+
+        ' solicitud'+(pend.length===1?'':'es')+' esperando tu respuesta.</b> '+
+        'Mientras no las resuelvas, esos días se cuentan como cualquier otro.</div>'
+      : '<div class="alert alert-ok" style="margin-bottom:16px">✓ No hay solicitudes pendientes.</div>')+
+
+    (pend.length
+      ? '<h3 style="margin:0 0 8px;font-size:15px">Pendientes</h3>'+
+        '<div class="tblwrap"><div class="tblscroll"><table>'+cabecera+'<tbody>'+
+        pend.map(p=>fila(p,true)).join('')+'</tbody></table></div></div>'
+      : '')+
+
+    (resueltos.length
+      ? '<h3 style="margin:26px 0 8px;font-size:15px">Ya resueltos</h3>'+
+        '<div class="tblwrap"><div class="tblscroll"><table>'+cabecera+'<tbody>'+
+        resueltos.slice(0,60).map(p=>fila(p,false)).join('')+'</tbody></table></div></div>'
+      : '')+
+
+    '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
+      'El permiso <b>no borra lo que pasó</b>: la hora real se sigue registrando. Lo que cambia es cómo se cuenta. '+
+      TIPOS_PERMISO.map(t=>'<br><b>'+esc(t.nombre)+':</b> '+esc(t.efecto)).join('')+
+    '</p>';
+
+  if(soloVista()) return;
+
+  const resolver = async (id, decision)=>{
+    const p = PERMISOS.find(x=>x.id===id);
+    if(!p) return;
+    const t = tipoPermiso(p.tipo);
+    const txt = decision==='APROBADO'
+      ? 'Aprobar «'+t.nombre+'» de '+p.nombre+' para el '+fechaCorta(p.fecha)+'.'
+      : 'Rechazar «'+t.nombre+'» de '+p.nombre+' para el '+fechaCorta(p.fecha)+'.';
+    const com = prompt(txt+'\n\nComentario (opcional, lo verá esa persona):', '');
+    if(com === null) return;
+    try{
+      const r = await api('resolver', {id, decision, comentario:com,
+                                       resueltoPor: 'Administración'}, {timeout:30000});
+      if(r && r.ok){
+        p.estado = decision; p.comentario = com; p.resueltoPor = 'Administración';
+        toast(decision==='APROBADO' ? 'Permiso aprobado' : 'Permiso rechazado');
+        renderTab();
+      }else toast((r && r.error) || 'No se pudo guardar');
+    }catch(e){ toast('Sin conexión con el servidor'); }
+  };
+
+  Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolver(x.dataset.ok,'APROBADO'));
+  Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolver(x.dataset.no,'RECHAZADO'));
 }
 
 /* ---------- TAB: AUSENCIAS Y COMISIONES DE SERVICIO ---------- */
@@ -5341,194 +6049,56 @@ function avisoDni(){
   return out;
 }
 
-/* ---------- TAB: CELULARES ----------
-   Responde a una pregunta concreta de administración: ¿desde qué teléfono marca
-   cada quien? Y su consecuencia: ¿hay alguien marcando por otro?
+/* ---------- SEÑALES DE SUPLANTACIÓN ----------
+   Vivían en una pestaña aparte junto a los celulares. Se juntaron con Personal
+   porque son la misma conversación: quién es cada quien, desde qué teléfono marca
+   y qué pasó cuando no cuadró. */
+function seccionSenales(){
+  if(!ALERTAS.length) return '';
+  if(!ALE_FECHA) ALE_FECHA = hoyISO();
+  const dias = Array.from(new Set(ALERTAS.map(a=>a.fecha))).sort().reverse();
+  if(dias.indexOf(ALE_FECHA) < 0 && dias.length) ALE_FECHA = dias[0];
 
-   Ojo con la diferencia, porque son dos cosas distintas:
-     - VINCULADO es un candado. Solo existe si "un celular por persona" está
-       encendido en Configuración; a partir de ahí esa persona no puede marcar
-       desde otro aparato.
-     - USADO es lo que de hecho pasó, y sale de los propios marcajes. Existe
-       siempre, esté el candado puesto o no.
-
-   El identificador del celular lo genera la app y vive en ese navegador. Sirve
-   para reconocer un aparato, no como prueba: si alguien reinstala la app o entra
-   de incógnito, aparece como un celular distinto. */
-function tabDisp(b){
-  const candado = String(CFG.exigirDispositivo) === 'true' || CFG.exigirDispositivo === true;
-
-  // Lo que de verdad pasó, según los marcajes que hay en este panel
-  const porPersona = {};   // empId -> { dispositivo -> {n, ultimo, equipo} }
-  const porEquipo  = {};   // dispositivo -> Set de empId
-  MAR.forEach(m=>{
-    if(!m.dispositivo || !m.empId) return;
-    const p = porPersona[m.empId] = porPersona[m.empId] || {};
-    const d = p[m.dispositivo] = p[m.dispositivo] || {n:0, ultimo:'', equipo:''};
-    d.n++;
-    if(m.fecha > d.ultimo) d.ultimo = m.fecha;
-    if(m.equipo && !d.equipo) d.equipo = m.equipo;
-    (porEquipo[m.dispositivo] = porEquipo[m.dispositivo] || new Set()).add(m.empId);
-  });
-
-  const nombreDe = id => { const e = EMP.find(x=>x.id===id); return e ? e.nombre : '(dado de baja)'; };
-  const compartidos = Object.keys(porEquipo).filter(d=>porEquipo[d].size > 1);
-
-  const filas = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').map(e=>{
-    const usados = porPersona[e.id] || {};
-    const ids = Object.keys(usados).sort((a,b)=> usados[b].ultimo.localeCompare(usados[a].ultimo));
-    return {e, usados, ids, vinculado: DISP[e.id] || ''};
-  });
-
-  const sinMarcar = filas.filter(r=>!r.ids.length);
-  const variosEq  = filas.filter(r=>r.ids.length > 1);
-
-  // Una persona debe tener UN celular y solo uno. El servidor entrega los vínculos
-  // como un mapa por persona, donde una fila repetida quedaría escondida; por eso
-  // manda también el total de filas y aquí se compara.
   const repetidos = (DISP_FILAS !== null && DISP_FILAS > Object.keys(DISP).length)
     ? (DISP_FILAS - Object.keys(DISP).length) : 0;
 
-  b.innerHTML =
-    (repetidos
-      ? '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Hay '+repetidos+
+  return (repetidos
+      ? '<div class="alert alert-bad" style="margin-top:22px">⚠ <b>Hay '+repetidos+
         ' fila'+(repetidos===1?'':'s')+' repetida'+(repetidos===1?'':'s')+' en los vínculos.</b> '+
-        'Alguien tiene más de un celular registrado, y solo se está aplicando uno. '+
-        'Ábrelo en tu hoja, pestaña <b>Dispositivos</b>, y borra las filas sobrantes de esa persona.</div>'
+        'Alguien tiene más de un celular registrado y solo se aplica uno. Ábrelo en tu hoja, '+
+        'pestaña <b>Dispositivos</b>, y borra las filas sobrantes.</div>'
       : '')+
-    '<div class="alert '+(candado?'alert-ok':'alert-warn')+'" style="margin-bottom:16px">'+
-      (candado
-        ? '🔒 <b>Un celular por persona está ACTIVADO.</b> Cada quien quedó amarrado al primer teléfono desde el que marcó y no puede usar otro. Para permitirle cambiar de equipo, libéralo en esta pantalla.'
-        : '🔓 <b>Un celular por persona está APAGADO.</b> Cualquiera puede marcar desde cualquier teléfono, así que abajo no hay vínculos: lo que ves es el teléfono que cada quien <b>viene usando</b>, sacado de sus marcajes. Para poner el candado, ve a <b>Configuración</b>.')+
-    '</div>'+
-    (compartidos.length
-      ? '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Un mismo celular marcó por más de una persona.</b><br>'+
-        compartidos.map(d=>'<b>'+esc(nombreEquipo(porPersona, d))+'</b> ('+esc(d.slice(0,10))+'…): '+
-          Array.from(porEquipo[d]).map(x=>esc(nombreDe(x))).join(' y ')).join('<br>')+
-        '<br>Es la señal más clara de que alguien marcó por un compañero. Revísalo.</div>'
-      : '')+
-    (variosEq.length
-      ? '<div class="alert alert-warn" style="margin-bottom:16px">'+
-        variosEq.map(r=>'<b>'+esc(r.e.nombre)+'</b> ha marcado desde '+r.ids.length+' teléfonos distintos.').join('<br>')+
-        '<br>Puede ser que haya cambiado de equipo o reinstalado la app. Si no, conviene preguntar.</div>'
-      : '')+
-    '<div class="kpis">'+
-      kpi('Ya marcaron alguna vez', (filas.length - sinMarcar.length) + ' / ' + filas.length, 'k-ok')+
-      kpi('Nunca marcaron', sinMarcar.length, sinMarcar.length?'k-warn':'k-ok')+
-      kpi('Celulares distintos', Object.keys(porEquipo).length, '')+
-      kpi('Celulares compartidos', compartidos.length, compartidos.length?'k-bad':'k-ok')+
-    '</div>'+
-    '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th><th>Área</th><th>Celular que usa</th><th>Identificador</th>'+
-      '<th>Marcajes</th><th>Último</th><th>Vínculo</th>'+
-    '</tr></thead><tbody>'+
-    filas.map(r=>{
-      if(!r.ids.length){
-        // Sin marcajes en el rango que tiene cargado el panel. Pero puede tener
-        // vínculo igual: vive en otra hoja y no depende de los marcajes. Decir aquí
-        // "no tiene celular" sería mentir, y lleva a liberar a quien no hace falta
-        // o a no entender por qué el sistema la rechaza.
-        return '<tr><td class="name">'+esc(r.e.nombre)+'</td><td>'+esc(r.e.area)+'</td>'+
-          (r.vinculado
-            ? '<td colspan="2"><span class="tag tag-ok">CELULAR VINCULADO</span> '+
-              '<span style="font-size:12px;color:var(--muted)">'+esc(r.vinculado.slice(0,12))+'…</span></td>'+
-              '<td colspan="2" style="font-size:12.5px;color:var(--muted)">Sin marcajes en el periodo consultado</td>'+
-              '<td>'+(soloVista()?'':'<button class="btn btn-sm btn-line" data-lib="'+esc(r.e.id)+'">Liberar</button>')+'</td>'
-            : '<td colspan="4"><span class="tag tag-warn">SIN CELULAR VINCULADO</span> '+
-              '<span style="font-size:12.5px;color:var(--muted)">— se vinculará al primer celular desde el que marque</span></td><td></td>')+
-        '</tr>';
-      }
-      return r.ids.map((d,i)=>{
-        const u = r.usados[d];
-        const compartido = porEquipo[d].size > 1;
-        return '<tr>'+
-          '<td class="name">'+(i===0?esc(r.e.nombre):'<span style="color:var(--muted)">↳ mismo colaborador</span>')+'</td>'+
-          '<td>'+(i===0?esc(r.e.area):'')+'</td>'+
-          '<td>'+(u.equipo?esc(u.equipo):'<span style="color:var(--muted)">no quedó registrado</span>')+
-            (compartido?' <span class="tag tag-bad" style="font-size:9px">COMPARTIDO</span>':'')+'</td>'+
-          '<td class="num" style="font-size:12px;color:var(--muted)">'+esc(d.slice(0,12))+'…</td>'+
-          '<td class="num">'+u.n+'</td>'+
-          '<td class="num">'+fechaCorta(u.ultimo)+'</td>'+
-          '<td>'+(r.vinculado===d
-              ? '<span class="tag tag-ok">VINCULADO</span> '+(soloVista()?'':'<button class="btn btn-sm btn-line" data-lib="'+esc(r.e.id)+'">Liberar</button>')
-              : (r.vinculado
-                  ? '<span class="tag tag-bad" style="font-size:9px">NO ES EL VINCULADO</span>'
-                  : '<span style="font-size:12px;color:var(--muted)">sin vínculo</span>'))+'</td>'+
-        '</tr>';
-      }).join('');
-    }).join('')+
-    '</tbody></table></div></div>'+
-    '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
-      'El <b>identificador</b> lo genera la app y se guarda en el navegador de ese celular. '+
-      'Si alguien reinstala la app, borra los datos del navegador o entra de incógnito, aparecerá como un celular nuevo. '+
-      'El <b>modelo</b> es lo que el propio teléfono declara: los Android suelen decirlo, los iPhone solo dicen "iPhone". '+
-      'Sirve para reconocer un aparato, no como prueba.</p>';
-
-  if(ALERTAS.length){
-    // Un día a la vez. Ver la lista entera mezcla jornadas y no se entiende qué
-    // pasó cada mañana, que es como se revisa esto en la práctica.
-    if(!ALE_FECHA) ALE_FECHA = hoyISO();
-    const dias = Array.from(new Set(ALERTAS.map(a=>a.fecha))).sort().reverse();
-    if(dias.indexOf(ALE_FECHA) < 0 && dias.length) ALE_FECHA = dias[0];
-
-    const pintarAlertas = ()=>{
-      const delDia = ALERTAS.filter(a=>a.fecha===ALE_FECHA);
-      const cont = $('#aleTabla');
-      if(!cont) return;
-      cont.innerHTML = delDia.length
-        ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-            '<th>Hora</th><th>Colaborador</th><th>Qué pasó</th><th>Detalle</th><th>Equipo</th>'+
-          '</tr></thead><tbody>'+
-          delDia.map(a=>'<tr>'+
-            '<td class="num">'+esc(a.hora)+'</td>'+
-            '<td class="name">'+esc(a.nombre)+'</td>'+
-            '<td><span class="tag tag-bad">'+esc(a.tipo)+'</span></td>'+
-            '<td style="white-space:normal;min-width:220px">'+esc(a.detalle)+'</td>'+
-            '<td>'+esc(a.equipo||'—')+'</td>'+
-          '</tr>').join('')+'</tbody></table></div></div>'
-        : '<div class="tblwrap"><div class="empty">Ninguna señal ese día.</div></div>';
-    };
-
-    b.insertAdjacentHTML('beforeend',
-      '<h3 style="margin:26px 0 4px;font-size:15px">Señales de suplantación</h3>'+
-      '<p class="hint" style="margin-bottom:10px">Todo lo que el sistema detectó, esté el correo funcionando o no. Se revisa un día a la vez.</p>'+
-      '<div class="toolbar">'+
-        '<div>'+lbl('Día')+'<select class="sel" id="aleDia">'+
-          dias.map(d=>'<option value="'+d+'"'+(d===ALE_FECHA?' selected':'')+'>'+
-                      fechaCorta(d)+' ('+ALERTAS.filter(x=>x.fecha===d).length+')</option>').join('')+
-        '</select></div>'+
-      '</div>'+
-      '<div id="aleTabla"></div>');
-
-    pintarAlertas();
-    const selAle = $('#aleDia');
-    if(selAle) selAle.onchange = ()=>{ ALE_FECHA = selAle.value; pintarAlertas(); };
-  }
-
-  if(!soloVista()){
-    Array.from(b.querySelectorAll('[data-lib]')).forEach(btn=>{
-      btn.onclick = async ()=>{
-        const e = EMP.find(x=>x.id===btn.dataset.lib);
-        if(!confirm('Se liberará el vínculo de '+e.nombre+'.\n\nEl próximo celular desde el que marque quedará como el suyo. ¿Continuar?')) return;
-        btn.disabled = true; btn.textContent = 'Liberando…';
-        try{
-          const r = await api('liberar', {id:e.id}, {timeout:30000});
-          if(r && r.ok){ delete DISP[e.id]; toast('Vínculo liberado'); }
-          else toast('No se pudo liberar: '+((r&&r.error)||'sin respuesta'));
-        }catch(err){ toast('Sin conexión con el servidor'); }
-        renderTab();
-      };
-    });
-  }
+    '<h3 style="margin:26px 0 4px;font-size:15px">Señales de suplantación</h3>'+
+    '<p class="hint" style="margin-bottom:10px">Todo lo que el sistema detectó, esté el correo funcionando o no. Se revisa un día a la vez.</p>'+
+    '<div class="toolbar"><div>'+lbl('Día')+'<select class="sel" id="aleDia">'+
+      dias.map(d=>'<option value="'+d+'"'+(d===ALE_FECHA?' selected':'')+'>'+
+                  fechaCorta(d)+' ('+ALERTAS.filter(x=>x.fecha===d).length+')</option>').join('')+
+    '</select></div></div>'+
+    '<div id="aleTabla"></div>';
 }
 
-/* El modelo con el que se conoce a un celular, buscándolo entre quienes lo usaron */
-function nombreEquipo(porPersona, disp){
-  for(const empId in porPersona){
-    const u = porPersona[empId][disp];
-    if(u && u.equipo) return u.equipo;
-  }
-  return 'Celular sin modelo registrado';
+function wireSenales(b){
+  const sel = b.querySelector('#aleDia');
+  if(!sel) return;
+  const pintar = ()=>{
+    const delDia = ALERTAS.filter(a=>a.fecha===ALE_FECHA);
+    const cont = b.querySelector('#aleTabla');
+    if(!cont) return;
+    cont.innerHTML = delDia.length
+      ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+          '<th>Hora</th><th>Colaborador</th><th>Qué pasó</th><th>Detalle</th><th>Equipo</th>'+
+        '</tr></thead><tbody>'+
+        delDia.map(a=>'<tr>'+
+          '<td class="num">'+esc(a.hora)+'</td>'+
+          '<td class="name">'+esc(a.nombre)+'</td>'+
+          '<td><span class="tag tag-bad">'+esc(a.tipo)+'</span></td>'+
+          '<td style="white-space:normal;min-width:220px">'+esc(a.detalle)+'</td>'+
+          '<td>'+esc(a.equipo||'—')+'</td>'+
+        '</tr>').join('')+'</tbody></table></div></div>'
+      : '<div class="tblwrap"><div class="empty">Ninguna señal ese día.</div></div>';
+  };
+  pintar();
+  sel.onchange = ()=>{ ALE_FECHA = sel.value; pintar(); };
 }
 
 function tabEmp(b){
@@ -5540,30 +6110,73 @@ function tabEmp(b){
       '<button class="btn btn-sm btn-line" id="eBulk">📋 Cargar DNI desde Excel</button>'+
       '<button class="btn btn-sm btn-line" id="eAdd">+ Agregar colaborador</button></div>'+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th><th>DNI</th><th>Cargo</th><th>Área</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Celular</th><th>Correo</th><th>Turno</th><th>Vínculo</th><th>Estado</th><th></th>'+
+      '<th>Colaborador</th>'+(soloVista()?'':'<th>DNI</th>')+'<th>Cargo</th><th>Área</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+
+      (soloVista()?'':'<th>Celular</th><th>Correo</th>')+'<th>Turno</th><th>Vínculo</th><th>Estado</th>'+
+      '<th>Equipo con el que marca</th>'+(soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
     EMP.map(e=>'<tr>'+
       '<td class="name">'+esc(e.nombre)+(DEV&&DEV.empId===e.id?' <span class="tag tag-ok">ESTE EQUIPO</span>':'')+'</td>'+
-      '<td class="num" style="font-weight:700">'+(normTel(e.dni)?esc(e.dni):'<span class="tag tag-warn">FALTA</span>')+'</td>'+
+      (soloVista()?'':'<td class="num" style="font-weight:700">'+(normTel(e.dni)?esc(e.dni):'<span class="tag tag-warn">FALTA</span>')+'</td>')+
       '<td>'+esc(e.cargo)+'</td><td>'+esc(e.area)+'</td>'+
       (CFG.usaProyectos?'<td>'+(e.proyecto?esc(nomProyecto(e.proyecto)):'<span class="tag tag-warn">SIN ASIGNAR</span>')+'</td>':'')+
-      '<td class="num">'+(e.tel?esc(e.tel):'—')+'</td>'+
-      '<td style="font-size:13px">'+(e.email?esc(e.email):'—')+'</td>'+
+      (soloVista()?'':'<td class="num">'+(e.tel?esc(e.tel):'—')+'</td>'+
+      '<td style="font-size:13px">'+(e.email?esc(e.email):'—')+'</td>')+
       '<td>'+esc(getTurno(e.turno).nombre)+'</td>'+
       '<td>'+(enPlanilla(e)
                ? '<span class="tag tag-ok">PLANILLA</span>'
                : '<span class="tag tag-warn">FUERA</span>')+'</td>'+
       '<td><span class="tag '+(e.activo?'tag-ok':'tag-bad')+'">'+(e.activo?'ACTIVO':'INACTIVO')+'</span>'+ badgeMod(e) +'</td>'+
-      '<td><button class="btn btn-sm btn-line eEd" data-id="'+e.id+'">Editar</button></td>'+
+      '<td>'+celularDe(e)+'</td>'+
+      (soloVista()?'':'<td><div style="display:flex;gap:6px">'+
+        '<button class="btn btn-sm btn-line eEd" data-id="'+e.id+'">Editar</button>'+
+        (DISP[e.id]?'<button class="btn btn-sm btn-line" data-lib="'+esc(e.id)+'">Liberar</button>':'')+
+      '</div></td>')+
     '</tr>').join('')+'</tbody></table></div></div>'+
     '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
-    'El colaborador ingresa con su <b>DNI</b>. Si todavía no está cargado, puede entrar con su celular o su correo. '+
-    'La vinculación de equipo se guarda en el navegador de cada celular, por eso "ESTE EQUIPO" solo aparece para quien está usando este dispositivo.</p>';
+    'El colaborador ingresa con su <b>DNI</b>. El <b>equipo</b> es el celular al que quedó amarrado: '+
+    'si cambia de teléfono o se le borran los datos, hay que liberarlo para que pueda volver a marcar.</p>'+
+    seccionSenales();
 
-  $('#eAdd').onclick  = ()=>editarEmp(null);
-  $('#eBulk').onclick = cargarDniMasivo;
+  const bAdd = $('#eAdd');  if(bAdd)  bAdd.onclick  = ()=>editarEmp(null);
+  const bBul = $('#eBulk'); if(bBul)  bBul.onclick  = cargarDniMasivo;
   const bProy = $('#eProy'); if(bProy) bProy.onclick = asignarProyectos;
   $$('.eEd').forEach(x=>x.onclick=()=>editarEmp(x.dataset.id));
+  wireLiberar(b);
+  wireSenales(b);
+}
+
+/* El celular al que está amarrada esa persona, con el modelo que se sacó de sus
+   marcajes. Sale del cruce de dos cosas: el vínculo lo guarda el servidor y el
+   modelo viene de lo que declaró el teléfono al marcar. */
+function celularDe(e){
+  const vinc = DISP[e.id];
+  const mios = MAR.filter(m=>m.empId===e.id && m.equipo).sort((a,b)=>b.ts-a.ts);
+  const modelo = mios.length ? mios[0].equipo : '';
+  if(!vinc){
+    return '<span class="tag tag-warn" style="font-size:9px">SIN VINCULAR</span>'+
+           (modelo ? '<div style="font-size:11px;color:var(--muted)">'+esc(modelo)+'</div>' : '');
+  }
+  const otro = Object.keys(DISP).filter(k=>k!==e.id && DISP[k]===vinc);
+  return (modelo ? esc(modelo) : '<span style="color:var(--muted)">sin modelo</span>')+
+    '<div style="font-size:11px;color:var(--muted)">'+esc(vinc.slice(0,12))+'…</div>'+
+    (otro.length ? '<span class="tag tag-bad" style="font-size:9px">COMPARTIDO</span>' : '');
+}
+
+function wireLiberar(b){
+  if(soloVista()) return;
+  Array.from(b.querySelectorAll('[data-lib]')).forEach(btn=>{
+    btn.onclick = async ()=>{
+      const e = EMP.find(x=>x.id===btn.dataset.lib);
+      if(!confirm('Se liberará el celular de '+e.nombre+'.\n\nEl próximo desde el que marque quedará como el suyo. ¿Continuar?')) return;
+      btn.disabled = true; btn.textContent = 'Liberando…';
+      try{
+        const r = await api('liberar', {id:e.id}, {timeout:30000});
+        if(r && r.ok){ delete DISP[e.id]; toast('Celular liberado'); }
+        else toast('No se pudo liberar: '+((r&&r.error)||'sin respuesta'));
+      }catch(err){ toast('Sin conexión con el servidor'); }
+      renderTab();
+    };
+  });
 }
 
 /* ---------- Asignación masiva de equipo o proyecto ----------
@@ -5861,7 +6474,7 @@ function tabCfg(b){
 
   '<div class="cfg" style="grid-column:1/-1"><h3>Turnos</h3>'+
   '<p class="hint">Horarios asignables a cada colaborador desde la pestaña Personal.</p>'+
-  '<div class="tblscroll"><table><thead><tr><th>Turno</th><th>Entrada L-V</th><th>Salida L-V</th><th>Sábado</th><th>Entrada sáb.</th><th>Salida sáb.</th></tr></thead><tbody>'+
+  '<div class="tblscroll"><table><thead><tr><th>Turno</th><th>Entrada L-V</th><th>Salida L-V</th><th>Sábado</th><th>Entrada sáb.</th><th>Salida sáb.</th><th>Domingo</th><th>Entrada dom.</th><th>Salida dom.</th></tr></thead><tbody>'+
   CFG.turnos.map((t,i)=>'<tr>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="nombre" value="'+esc(t.nombre)+'" style="width:150px"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="entrada" type="time" value="'+t.entrada+'"></td>'+
@@ -5869,48 +6482,21 @@ function tabCfg(b){
     '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaSab">'+opt('1','Sí',t.trabajaSab?'1':'0')+opt('0','No',t.trabajaSab?'1':'0')+'</select></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="sabEntrada" type="time" value="'+t.sabEntrada+'"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="sabSalida" type="time" value="'+t.sabSalida+'"></td>'+
+    '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaDom">'+opt('1','Sí',t.trabajaDom?'1':'0')+opt('0','No',t.trabajaDom?'1':'0')+'</select></td>'+
+    '<td><input class="sel tI" data-i="'+i+'" data-f="domEntrada" type="time" value="'+(t.domEntrada||'10:00')+'"></td>'+
+    '<td><input class="sel tI" data-i="'+i+'" data-f="domSalida" type="time" value="'+(t.domSalida||'14:00')+'"></td>'+
   '</tr>').join('')+'</tbody></table></div>'+
   '<button class="btn btn-sm btn-line" id="tAdd" style="margin-top:12px">+ Agregar turno</button></div>'+
 
-  /* ---- Calendario de sábados ---- */
-  (function(){
-    const hoy = hoyISO();
-    const anio = +hoy.slice(0,4);
-    const marcados = CFG.sabadosTrabajados||[];
-    // Los sábados que quedan del año, más los ya marcados aunque sean pasados
-    const lista = Array.from(new Set(
-      sabadosDelAnio(anio).filter(f=>f>=hoy).concat(marcados)
-    )).sort();
-    const prox = lista.filter(f=>f>=hoy).slice(0,3);
-    const trabajados = prox.filter(f=>marcados.indexOf(f)>=0);
-    return '<div class="cfg" style="grid-column:1/-1"><h3>Sábados que se trabaja</h3>'+
-    '<p class="hint">Marca los sábados en que sí se labora. <b>El que no marques no genera falta a nadie.</b> '+
-    'Es a propósito: olvidar marcar uno no pasa nada, pero dar por laborables todos y olvidar desmarcar '+
-    'te llenaría el reporte de faltas que no ocurrieron.<br>'+
-    'El horario de cada sábado sale del turno de cada persona, abajo en <b>Turnos</b>.</p>'+
-    '<div style="display:flex;flex-wrap:wrap;gap:8px;max-height:230px;overflow-y:auto;padding:2px">'+
-      lista.map(f=>{
-        const on = marcados.indexOf(f)>=0;
-        const d = new Date(f+'T12:00:00');
-        const fer = esFeriado(f);
-        return '<label class="sabChip" data-f="'+f+'" style="display:flex;align-items:center;gap:7px;padding:8px 12px;'+
-          'border:1.5px solid '+(on?'var(--primary)':'var(--line)')+';border-radius:9px;cursor:pointer;font-size:13.5px;'+
-          'background:'+(on?'var(--primary)':'var(--surface)')+';color:'+(on?'#fff':'var(--text)')+';font-weight:'+(on?'650':'500')+'">'+
-          '<input type="checkbox" '+(on?'checked':'')+' style="margin:0;cursor:pointer">'+
-          '<span>'+d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+'</span>'+
-          (fer?'<span style="font-size:10px;opacity:.8">feriado</span>':'')+
-        '</label>';
-      }).join('')+
-    '</div>'+
-    '<p style="font-size:12.5px;color:var(--muted);margin:12px 0 0;line-height:1.55">'+
-      '<b>'+marcados.length+'</b> sábado'+(marcados.length===1?'':'s')+' marcado'+(marcados.length===1?'':'s')+' en el año. '+
-      (prox.length
-        ? 'Los próximos tres: '+prox.map(f=>{const d=new Date(f+'T12:00:00');return fechaCorta(f)+' '+(trabajados.indexOf(f)>=0?'<b style="color:var(--ok)">se trabaja</b>':'<span style="color:var(--muted)">no</span>');}).join(' · ')
-        : 'No quedan sábados este año.')+
-    '</p></div>'+
+  /* ---- Calendarios de sábado y domingo ---- */
+  calendarioDia(6, 'sabadosTrabajados', 'sabChip', 'Sábados que se trabaja',
+    'El horario de cada sábado sale del turno de cada persona, abajo en <b>Turnos</b>.')+
+  calendarioDia(0, 'domingosTrabajados', 'domChip', 'Domingos que se abre',
+    'Los domingos la tienda atiende citas. Solo cuentan para los turnos que tengan '+
+    '<b>Domingo: Sí</b> abajo en <b>Turnos</b> — al resto no les genera falta.')+
 
   /* ---- Feriados ---- */
-  '<div class="cfg" style="grid-column:1/-1"><h3>Feriados</h3>'; })()+
+  '<div class="cfg" style="grid-column:1/-1"><h3>Feriados</h3>'+
   '<p class="hint">Los días marcados aquí no son laborables para nadie: no generan falta ni tardanza. '+
   'Vienen precargados los feriados nacionales de Perú 2026 — <b>confírmalos con administración</b> y agrega los propios de la empresa.</p>'+
   '<div class="tblscroll" style="max-height:260px;overflow-y:auto"><table><thead><tr>'+
@@ -5994,7 +6580,7 @@ function tabCfg(b){
   };
 
   $('#tAdd').onclick = ()=>{
-    CFG.turnos.push({id:'T'+(CFG.turnos.length+1)+Date.now().toString().slice(-4), nombre:'Nuevo turno', entrada:'09:00', salida:'18:00', trabajaSab:false, sabEntrada:'09:00', sabSalida:'13:00'});
+    CFG.turnos.push({id:'T'+(CFG.turnos.length+1)+Date.now().toString().slice(-4), nombre:'Nuevo turno', entrada:'09:00', salida:'18:00', trabajaSab:false, sabEntrada:'09:00', sabSalida:'13:00', trabajaDom:false, domEntrada:'10:00', domSalida:'14:00'});
     saveCfg(); renderTab();
   };
 
@@ -6161,24 +6747,9 @@ function tabCfg(b){
     }
   };
 
-  /* Calendario de sábados — se guarda al instante, sin depender de "Guardar configuración" */
-  $$('.sabChip').forEach(chip=>{
-    chip.onclick = e=>{
-      e.preventDefault();
-      const f = chip.dataset.f;
-      const lista = (CFG.sabadosTrabajados||[]).slice();
-      const i = lista.indexOf(f);
-      if(i>=0) lista.splice(i,1); else lista.push(f);
-      CFG.sabadosTrabajados = lista.sort();
-      saveCfg(); renderTab();
-      empujarConfig().then(r=>{
-        const d = new Date(f+'T12:00:00');
-        const txt = d.getDate()+' de '+MESES[d.getMonth()];
-        if(r==='error') toast('⚠ Guardado aquí, pero NO llegó al servidor');
-        else toast(i>=0 ? 'Sábado '+txt+': ya no se trabaja' : 'Sábado '+txt+': se trabaja');
-      });
-    };
-  });
+  /* Calendarios de sábado y domingo — se guardan al instante */
+  wireCalendario('sabChip', 'sabadosTrabajados', 'Sábado');
+  wireCalendario('domChip', 'domingosTrabajados', 'Domingo');
 
   /* Feriados */
   $('#fAdd').onclick = ()=>{
