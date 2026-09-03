@@ -3045,7 +3045,16 @@ async function enviarCola(){
   try{
     for(const item of COLA.slice()){
       try{
-        const r = await api('marcar', item, {timeout:45000});
+        // La hora la pone el servidor, y para un marcaje que sale de la cola eso
+        // está mal: la persona marcó a las 9 y el envío puede lograrse a mediodía.
+        // Se recupera del registro local, que sí guardó la hora del momento, y se
+        // manda marcada como diferida para que el servidor la respete.
+        const envio = Object.assign({}, item);
+        const local = MAR.find(m=>m.cid === item.cid);
+        if(local && local.fecha && local.hora){
+          envio.fecha = local.fecha; envio.hora = local.hora; envio.diferido = true;
+        }
+        const r = await api('marcar', envio, {timeout:45000});
         if(r && (r.ok || r.duplicado)){
           COLA = COLA.filter(x=>x.cid !== item.cid);
           saveCola();
@@ -4223,7 +4232,8 @@ async function marcar(){
       // Sin conexión: se guarda localmente y se reintenta después
       pendiente = true;
       reg.pendiente = true;
-      COLA.push(Object.assign({}, datosMarcaje, {confirmar:true}));
+      COLA.push(Object.assign({}, datosMarcaje,
+                {confirmar:true, fecha, hora, diferido:true}));
       saveCola();
       MAR.push(reg); saveMar();
     }
