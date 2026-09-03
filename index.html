@@ -4217,6 +4217,20 @@ async function marcar(){
           return renderMark();
         }
       }else if(r && !r.ok){
+        // Hay que separar dos cosas que se veían igual: que el sistema RECHACE el
+        // marcaje por una regla —no es su celular, está lejos, ya marcó— de que el
+        // servidor simplemente no pudo atender en ese momento.
+        //
+        // Lo segundo no es culpa de la persona y su marcaje no se puede perder: se
+        // manda a la cola, igual que si no hubiera red, conservando la hora. Antes
+        // se descartaba con un aviso y había que volver a marcar más tarde, con lo
+        // que la hora registrada ya no era la de verdad.
+        const RECHAZOS = ['no_encontrado','inactivo','no_autorizado','otro_dispositivo',
+                          'sin_dispositivo','sin_ubicacion','fuera_zona','sin_entrada',
+                          'celular_compartido'];
+        if(RECHAZOS.indexOf(r.motivo) < 0){
+          throw new Error('servidor ocupado');   // lo recoge el catch y lo encola
+        }
         btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
         // El rechazo por dispositivo merece una explicación en pantalla, no un aviso que se va
         if(r.motivo==='otro_dispositivo' || r.motivo==='sin_dispositivo'){
