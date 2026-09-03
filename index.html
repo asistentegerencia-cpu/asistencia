@@ -3045,7 +3045,7 @@ async function enviarCola(){
   try{
     for(const item of COLA.slice()){
       try{
-        const r = await api('marcar', item, {timeout:12000});
+        const r = await api('marcar', item, {timeout:45000});
         if(r && (r.ok || r.duplicado)){
           COLA = COLA.filter(x=>x.cid !== item.cid);
           saveCola();
@@ -3691,7 +3691,7 @@ async function intentarId(){
     const btn = $('#btnId');
     btn.disabled = true; btn.textContent = 'Verificando…';
     try{
-      const r = await api('identificar', {ident: val}, {timeout:15000});
+      const r = await api('identificar', {ident: val}, {timeout:35000});
       if(r && r.ok && r.emp){
         emp = r.emp;
         // Se guarda solo a esta persona, para poder marcar aunque después se caiga la red
@@ -3929,7 +3929,7 @@ function pedirSalidaPendiente(emp){
 
     // Sin esto la salida declarada vive solo en este celular y desaparece al sincronizar
     if(hayServidor()){
-      api('marcar', datos, {timeout:15000})
+      api('marcar', datos, {timeout:45000})
         .then(r=>{ if(r && r.ok && r.marcaje) integrarMarcaje(r.marcaje); })
         .catch(()=>{ COLA.push(datos); saveCola(); });
     }
@@ -4173,7 +4173,7 @@ async function marcar(){
       gps: GEO.estado, deviceId: idDispositivo(), equipo: infoEquipo()
     };
     try{
-      let r = await api('marcar', datosMarcaje, {timeout:15000});
+      let r = await api('marcar', datosMarcaje, {timeout:45000});
 
       // Este celular ya marcó hoy por otra persona: se pregunta antes de seguir.
       // No se bloquea —a veces es un celular prestado de verdad— pero queda
@@ -4194,7 +4194,7 @@ async function marcar(){
           btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
           return renderMark();
         }
-        r = await api('marcar', Object.assign({}, datosMarcaje, {confirmar:true}), {timeout:15000});
+        r = await api('marcar', Object.assign({}, datosMarcaje, {confirmar:true}), {timeout:45000});
       }
 
       if(r && r.ok && r.marcaje){
