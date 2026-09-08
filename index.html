@@ -2855,6 +2855,8 @@ let DISP_FILAS = null;                // filas de la hoja Dispositivos, para det
 let ALE_FECHA = '';                   // día que se está mirando en las señales de suplantación
 let PERMISOS = [];                    // solicitudes de permiso, las manda el servidor
 let PROGRAMACION = [];                // horarios asignados a mano, día por día
+let NOTAS_PROG = [];                  // las notas al pie del horario, por semana y área
+let PROG_NOTAS_EDIT = false;          // si el bloque de notas está abierto para escribir
 
 const saveCfg = ()=>save(K.cfg,CFG);
 const saveEmp = ()=>save(K.emp,EMP);
@@ -3133,6 +3135,7 @@ async function sincronizarArranque(){
   if(Array.isArray(r.alertas)) ALERTAS = r.alertas;
   if(Array.isArray(r.permisos)) PERMISOS = r.permisos;
   if(Array.isArray(r.programacion)) PROGRAMACION = r.programacion;
+  if(Array.isArray(r.notasProg)) NOTAS_PROG = r.notasProg;
   DISP_FILAS = (typeof r.dispositivosFilas === 'number') ? r.dispositivosFilas : null;
   if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
@@ -3568,11 +3571,35 @@ function salidaDe(emp, fechaISO, ahora){
 
 /* ---------- 3c. ACUMULADOS POR COLABORADOR ----------
    La "data final por colaborador" que pide Gerencia. */
+/* Lo que estuvo dentro ese día, en minutos.
+
+   Se cuenta contra el reloj, no contra el horario: si entró 09:20 y salió 18:00
+   trabajó 8h40, aunque su turno diga nueve horas. La tardanza se mide aparte y ya
+   tiene su propia columna; descontarla otra vez aquí la cobraría dos veces.
+
+   Mientras no haya salida el día está abierto. Si es hoy se devuelve lo que va
+   corrido hasta ahora, marcado como en curso, porque a media tarde "—" no informa
+   nada; en un día ya cerrado no se inventa una salida que nadie marcó. */
+function jornadaTrabajada(d, fechaISO, ahora){
+  const j = d && d.j;
+  if(!j || !j.entrada) return {min:0, enCurso:false, hay:false};
+  const ent = toMin(j.entrada.hora);
+  if(j.salida){
+    const m = toMin(j.salida.hora) - ent;
+    return {min: m > 0 ? m : 0, enCurso:false, hay: m > 0};
+  }
+  ahora = ahora || new Date();
+  if(fechaISO !== hoyISO(ahora)) return {min:0, enCurso:false, hay:false};
+  const m = (ahora.getHours()*60 + ahora.getMinutes()) - ent;
+  return {min: m > 0 ? m : 0, enCurso:true, hay: m > 0};
+}
+
 function acumuladosDe(emp, desde, hasta, ahora){
   ahora = ahora || new Date();
   const hoy = hoyISO(ahora);
   const a = {programados:0, asistidos:0, conEntrada:0, faltas:0, justificadas:0, comisiones:0,
-             puntuales:0, tardanzas:0, minutos:0, sinSalida:0, noLaborables:0, sinSistema:0};
+             puntuales:0, tardanzas:0, minutos:0, sinSalida:0, noLaborables:0, sinSistema:0,
+             trabajados:0, diasConJornada:0};
 
   rangoFechas(desde, hasta).forEach(f=>{
     if(f > hoy) return;                            // el futuro no se cuenta
@@ -3588,6 +3615,10 @@ function acumuladosDe(emp, desde, hasta, ahora){
       a.asistidos++; a.conEntrada++;
       if(d.tard>0){ a.tardanzas++; a.minutos += d.tard; } else a.puntuales++;
       if(!d.j.salida) a.sinSalida++;
+      // Solo suma la jornada cerrada: un día sin salida marcada no tiene duración,
+      // y estimarla haría que las horas del mes dependieran de quién se olvidó de marcar.
+      const t = jornadaTrabajada(d, f, ahora);
+      if(t.hay && !t.enCurso){ a.trabajados += t.min; a.diasConJornada++; }
       return;
     }
     if(d.clase==='FALTA' || d.clase==='SIN_MARCAR') a.faltas++;
@@ -3600,6 +3631,8 @@ function acumuladosDe(emp, desde, hasta, ahora){
   a.pctPuntualidad = a.conEntrada  ? Math.round(a.puntuales/a.conEntrada*100)  : null;
   a.absentismo     = a.programados ? Math.round(a.faltas/a.programados*1000)/10 : 0;
   a.tardanzaProm   = a.tardanzas ? Math.round(a.minutos/a.tardanzas) : 0;
+  a.trabajadoHHMM  = min2hhmm(a.trabajados);
+  a.horasDia       = a.diasConJornada ? Math.round(a.trabajados/a.diasConJornada) : 0;
   return a;
 }
 
@@ -5011,16 +5044,23 @@ function tabHoy(b){
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes)+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Entrada</th><th>Estado</th><th>Tard.</th><th>Salida</th><th>Permanencia</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
+      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th>'+
+      '<th>Entrada</th><th>Salida</th><th>Horas trabajadas</th>'+
+      '<th>Estado</th><th>Tard.</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
-    (filas.length ? bloquesPlanilla(filas) : '<tr><td '+((CFG.usaProyectos?11:10)+(soloVista()?0:1))+'><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
+    (filas.length ? bloquesPlanilla(filas) : '<tr><td colspan="'+((CFG.usaProyectos?10:9)+(soloVista()?0:1))+'"><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
     '</tbody></table></div></div>'+
     notaExentos();
 
   // --- fin del innerHTML de tabHoy ---
   function filaHoy(r){
       const j=r.j;
-      const perm = (j.entrada&&j.salida) ? min2hhmm(toMin(j.salida.hora)-toMin(j.entrada.hora)) : '—';
+      const t = jornadaTrabajada(r, f, ahora);
+      const perm = !t.hay ? '—'
+        : t.enCurso
+          ? '<span style="color:var(--muted)">'+min2hhmm(t.min)+'</span>'+
+            '<div style="font-size:10.5px;color:var(--muted);font-weight:400">va trabajando</div>'
+          : '<b>'+min2hhmm(t.min)+'</b>';
       const zona = r.e.modalidad==='REMOTO' ? '<span class="tag tag-ok">REMOTO</span>'
                  : j.entrada ? (j.entrada.fueraZona ? '<span class="tag tag-bad">FUERA</span>'
                    : j.entrada.gps==='dentro' ? '<span class="tag tag-ok">OK</span>' : '<span class="tag tag-warn">S/GPS</span>') : '—';
@@ -5033,6 +5073,8 @@ function tabHoy(b){
         '<td class="num" style="font-weight:700">'+(j.entrada?j.entrada.hora:'—')+
           (j.entrada&&j.entrada.origen&&j.entrada.origen!=='APP'?' <span class="tag tag-warn" style="font-size:9px">'+j.entrada.origen+'</span>':'')+
           esperada(r.hor && r.hor.in)+'</td>'+
+        '<td class="num">'+salTxt+ esperada(r.hor && r.hor.out) +'</td>'+
+        '<td class="num">'+perm+'</td>'+
         '<td><span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span>'+
           (r.porValidar ? ' <span class="tag tag-warn" style="font-size:9px">POR VALIDAR</span>' : '')+
           (r.prog && r.prog.estado==='VALIDADO' ? ' <span class="tag tag-ok" style="font-size:9px">VALIDADO</span>' : '')+
@@ -5040,8 +5082,6 @@ function tabHoy(b){
             esc(tipoPermiso(r.permiso.tipo).nombre+' · '+r.permiso.motivo+
                 (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">PERMISO</span>' : '')+'</td>'+
         '<td class="num">'+(r.tard? r.tard+"'":'—')+'</td>'+
-        '<td class="num">'+salTxt+ esperada(r.hor && r.hor.out) +'</td>'+
-        '<td class="num">'+perm+'</td>'+
         '<td>'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
         '<td>'+zona+'</td>'+
         (soloVista()?'':'<td>'+((j.entrada||j.salida)
@@ -5177,6 +5217,136 @@ function rangoPorDefecto(){
   return {desde: h.slice(0,8)+'01', hasta: h};
 }
 
+let ANA_EMP = '';        // a quién se le está mirando el detalle; vacío = todo el equipo
+let ANA_DET = 'dia';     // el detalle se agrupa por día, por semana o por mes
+
+/* ---- Reporte de una sola persona ----
+
+   El análisis general responde "cómo va el equipo". Esta pregunta es otra: cómo le
+   fue a una persona entre dos fechas. Se pide para conversar con ella, para una
+   evaluación o para sustentar un descuento, y en esos casos el promedio del área no
+   sirve: hace falta el día por día y que los totales cuadren con lo que se ve.
+
+   Por eso el detalle se agrupa pero nunca se recalcula: la semana es la suma de sus
+   días y el mes la de sus semanas. Si el total y el detalle salieran de cuentas
+   distintas, tarde o temprano dejarían de coincidir y no habría forma de saber cuál
+   de los dos miente. */
+function reporteColaborador(emp, desde, hasta, ahora){
+  const hoy = hoyISO(ahora);
+  const dias = rangoFechas(desde, hasta).filter(x=>x <= hoy).map(fecha=>{
+    const d = estadoDia(emp, fecha, ahora);
+    const t = jornadaTrabajada(d, fecha, ahora);
+    return {fecha, d, min: (t.hay && !t.enCurso) ? t.min : 0, enCurso: t.enCurso, minCurso: t.min};
+  });
+
+  const a = acumuladosDe(emp, desde, hasta, ahora);
+  const abiertos = dias.filter(x=>x.enCurso).length;
+
+  const grupo = x => ANA_DET==='mes' ? x.fecha.slice(0,7)
+               : ANA_DET==='sem' ? lunesDe(x.fecha)
+               : x.fecha;
+  const nombreGrupo = clave => {
+    if(ANA_DET==='mes'){
+      const p = clave.split('-');
+      return MESES[(+p[1])-1].charAt(0).toUpperCase()+MESES[(+p[1])-1].slice(1)+' de '+p[0];
+    }
+    if(ANA_DET==='sem'){
+      const l = new Date(clave+'T12:00:00'), dom = new Date(l); dom.setDate(l.getDate()+6);
+      return l.getMonth()===dom.getMonth()
+        ? 'Semana del '+l.getDate()+' al '+dom.getDate()+' de '+MESES[dom.getMonth()]
+        : 'Semana del '+l.getDate()+' de '+MESES[l.getMonth()]+
+          ' al '+dom.getDate()+' de '+MESES[dom.getMonth()];
+    }
+    const d = new Date(clave+'T12:00:00');
+    return DIAS[d.getDay()].charAt(0).toUpperCase()+DIAS[d.getDay()].slice(1)+' '+d.getDate()+
+           ' de '+MESES[d.getMonth()];
+  };
+
+  const orden = [], porGrupo = {};
+  dias.forEach(x=>{
+    const k = grupo(x);
+    if(!porGrupo[k]){ porGrupo[k] = []; orden.push(k); }
+    porGrupo[k].push(x);
+  });
+
+  const filaDia = x=>{
+    const d = x.d, j = d.j || {};
+    const horas = x.enCurso ? '<span style="color:var(--muted)">'+min2hhmm(x.minCurso)+' (va)</span>'
+                : x.min ? min2hhmm(x.min) : '—';
+    return '<tr>'+
+      '<td class="num" style="white-space:nowrap">'+esc(nombreGrupo(x.fecha))+'</td>'+
+      '<td class="num">'+(d.hor ? esc(d.hor.in+'–'+d.hor.out) : '—')+'</td>'+
+      '<td class="num">'+(j.entrada ? j.entrada.hora : '—')+'</td>'+
+      '<td class="num">'+(j.salida ? j.salida.hora : '—')+'</td>'+
+      '<td class="num">'+horas+'</td>'+
+      '<td class="num">'+(d.tard ? d.tard+"'" : '—')+'</td>'+
+      '<td><span class="tag '+d.cls+'">'+esc(d.etiqueta)+'</span></td>'+
+    '</tr>';
+  };
+
+  const filaResumen = k=>{
+    const g = porGrupo[k];
+    const min = g.reduce((t,x)=>t+x.min, 0);
+    const tard = g.filter(x=>x.d.tard>0).length;
+    const minTard = g.reduce((t,x)=>t+(x.d.tard||0), 0);
+    const faltas = g.filter(x=>x.d.clase==='FALTA' || x.d.clase==='SIN_MARCAR').length;
+    const conJornada = g.filter(x=>x.min>0).length;
+    return '<tr>'+
+      '<td class="name">'+esc(nombreGrupo(k))+'</td>'+
+      '<td class="num"><b>'+min2hhmm(min)+'</b></td>'+
+      '<td class="num">'+conJornada+'</td>'+
+      '<td class="num">'+(tard ? tard+' <span style="color:var(--muted)">('+minTard+"')</span>" : '—')+'</td>'+
+      '<td class="num">'+(faltas || '—')+'</td>'+
+    '</tr>';
+  };
+
+  const cabecera =
+    '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:4px 0 14px">'+
+      '<h3 style="margin:0;font-size:17px">'+esc(emp.nombre)+'</h3>'+
+      '<span style="font-size:13px;color:var(--muted)">'+esc(emp.cargo||'')+
+        (emp.area ? ' · '+esc(emp.area) : '')+
+        ' · '+(emp.modalidad==='REMOTO'?'Teletrabajo':emp.modalidad==='EXENTO'?'Exento':'Presencial')+
+        ' · '+(enPlanilla(emp)?'En planilla':'Fuera de planilla')+'</span>'+
+    '</div>';
+
+  return cabecera +
+    '<div class="kpis">'+
+      kpi('Horas trabajadas', a.trabajadoHHMM, 'k-ok')+
+      kpi('Días con jornada', a.diasConJornada+' / '+a.programados, '')+
+      kpi('Tardanzas', a.tardanzas, a.tardanzas?'k-warn':'k-ok')+
+      kpi('Inasistencias', a.faltas, a.faltas?'k-bad':'k-ok')+
+      kpi('Minutos de tardanza', a.minutos, a.minutos?'k-warn':'k-ok')+
+      kpi('Puntualidad', a.pctPuntualidad==null?'—':a.pctPuntualidad+'%',
+          a.pctPuntualidad==null?'':(a.pctPuntualidad>=90?'k-ok':a.pctPuntualidad>=75?'k-warn':'k-bad'))+
+    '</div>'+
+    '<p class="hint" style="margin:-4px 0 14px">'+
+      'Las horas son de jornadas cerradas: entrada y salida marcadas. '+
+      (a.sinSalida ? '<b>'+a.sinSalida+' día'+(a.sinSalida===1?'':'s')+' sin salida marcada</b> no suman horas; '+
+                     'se corrigen desde la pestaña Hoy o el historial. ' : '')+
+      (abiertos ? 'La jornada de hoy sigue abierta y todavía no cuenta. ' : '')+
+      (a.justificadas ? a.justificadas+' día'+(a.justificadas===1?'':'s')+' con ausencia autorizada quedan fuera del conteo. ' : '')+
+      (a.noLaborables ? a.noLaborables+' día'+(a.noLaborables===1?'':'s')+' no laborables tampoco se cuentan.' : '')+
+    '</p>'+
+    '<div class="toolbar" style="margin-bottom:10px">'+
+      '<div>'+lbl('Agrupar el detalle')+'<select class="sel" id="anD">'+
+        '<option value="dia"'+(ANA_DET==='dia'?' selected':'')+'>Por día</option>'+
+        '<option value="sem"'+(ANA_DET==='sem'?' selected':'')+'>Por semana</option>'+
+        '<option value="mes"'+(ANA_DET==='mes'?' selected':'')+'>Por mes</option>'+
+      '</select></div>'+
+    '</div>'+
+    (orden.length
+      ? (ANA_DET==='dia'
+        ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+            '<th>Día</th><th>Horario</th><th>Entrada</th><th>Salida</th>'+
+            '<th>Horas</th><th>Tard.</th><th>Estado</th>'+
+          '</tr></thead><tbody>'+ dias.map(filaDia).join('') +'</tbody></table></div></div>'
+        : '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+            '<th>'+(ANA_DET==='sem'?'Semana':'Mes')+'</th><th>Horas trabajadas</th>'+
+            '<th>Días con jornada</th><th>Tardanzas</th><th>Inasistencias</th>'+
+          '</tr></thead><tbody>'+ orden.map(filaResumen).join('') +'</tbody></table></div></div>')
+      : '<div class="tblwrap"><div class="empty">No hay días en el rango elegido.</div></div>');
+}
+
 function tabAnalisis(b){
   if(!ANA) ANA = load('ca_ana', null) || rangoPorDefecto();
   const ahora = new Date();
@@ -5186,6 +5356,11 @@ function tabAnalisis(b){
       '<div>'+lbl('Desde')+'<input type="date" class="sel" id="aI" value="'+ANA.desde+'"></div>'+
       '<div>'+lbl('Hasta')+'<input type="date" class="sel" id="aF" value="'+ANA.hasta+'"></div>'+
       htmlFiltros('a')+
+      '<div>'+lbl('Colaborador')+'<select class="sel" id="aE" style="max-width:230px">'+
+        '<option value="">Todo el equipo</option>'+
+        EMP.filter(e=>e.activo).sort((x,y)=>x.nombre.localeCompare(y.nombre))
+           .map(e=>'<option value="'+esc(e.id)+'"'+(ANA_EMP===e.id?' selected':'')+'>'+esc(e.nombre)+'</option>').join('')+
+      '</select></div>'+
       '<div class="grow"></div>'+
       '<button class="btn btn-sm btn-line" id="aX" style="align-self:flex-end">Descargar Excel</button>'+
     '</div>'+
@@ -5201,10 +5376,19 @@ function tabAnalisis(b){
     ANA.desde = $('#aI').value; ANA.hasta = $('#aF').value;
     if(ANA.desde > ANA.hasta){ $('#aOut').innerHTML='<div class="tblwrap"><div class="empty">La fecha inicial es posterior a la final.</div></div>'; return; }
     save('ca_ana', ANA);
-    $('#aOut').innerHTML = avisoInicioOperacion(ANA.desde) + analisisHTML(ANA.desde, ANA.hasta, ahora);
+    const uno = ANA_EMP ? EMP.find(e=>e.id===ANA_EMP) : null;
+    // Si la persona elegida ya no está en el padrón, se vuelve al equipo entero en
+    // vez de quedar mirando una pantalla vacía sin explicación.
+    if(ANA_EMP && !uno) ANA_EMP = '';
+    $('#aOut').innerHTML = avisoInicioOperacion(ANA.desde) +
+      (uno ? reporteColaborador(uno, ANA.desde, ANA.hasta, ahora)
+           : analisisHTML(ANA.desde, ANA.hasta, ahora));
+    const det = $('#anD');
+    if(det) det.onchange = ()=>{ ANA_DET = det.value; pintar(); };
   };
 
   wireFiltros('a', pintar);
+  $('#aE').onchange = ()=>{ ANA_EMP = $('#aE').value; pintar(); };
   $('#aI').onchange = pintar;
   $('#aF').onchange = pintar;
   $('#aX').onclick  = ()=>exportar(ANA.desde, ANA.hasta, 'Asistencia_'+ANA.desde+'_a_'+ANA.hasta);
@@ -5586,11 +5770,15 @@ function tabProgramacion(b){
         '<button class="btn btn-sm btn-line" id="prSig">Siguiente ›</button>'+
       '</div>'+
       '<div class="grow"></div>'+
+      '<div style="align-self:flex-end">'+
+        '<button class="btn btn-sm" id="prArch">Descargar horario para enviar</button></div>'+
     '</div>';
 
-  b.innerHTML = PROG_VISTA==='mes'   ? vistaMes(gente, idsArea, barra)
-              : PROG_VISTA==='horas' ? vistaHoras(gente, idsArea, barra)
-              :                        vistaSemana(gente, idsArea, barra);
+  b.innerHTML = (PROG_VISTA==='mes'   ? vistaMes(gente, idsArea, barra)
+               : PROG_VISTA==='horas' ? vistaHoras(gente, idsArea, barra)
+               :                        vistaSemana(gente, idsArea, barra))
+              // El calendario del mes abarca varias semanas; las notas son de una sola.
+              + (PROG_VISTA==='mes' ? '' : bloqueNotas());
 
   $('#prA').onchange = ()=>{ PROG_AREA = $('#prA').value; renderTab(); };
   $('#prV').onchange = ()=>{ PROG_VISTA = $('#prV').value; renderTab(); };
@@ -5598,6 +5786,11 @@ function tabProgramacion(b){
   $('#prAnt').onclick = ()=>moverPeriodo(-1);
   $('#prSig').onclick = ()=>moverPeriodo(1);
   $('#prHoy').onclick = ()=>{ PROG_SEM = lunesDe(hoyISO()); PROG_MES = hoyISO().slice(0,7); renderTab(); };
+  const bArch = $('#prArch'); if(bArch) bArch.onclick = ()=>descargarHorario(gente, idsArea);
+
+  const bEd = $('#pnE'); if(bEd) bEd.onclick = ()=>{ PROG_NOTAS_EDIT = true; renderTab(); };
+  const bNx = $('#pnX'); if(bNx) bNx.onclick = ()=>{ PROG_NOTAS_EDIT = false; renderTab(); };
+  const bNg = $('#pnG'); if(bNg) bNg.onclick = guardarNotas;
 
   if(soloVista()) return;
   Array.from(b.querySelectorAll('[data-prog]')).forEach(td=>{
@@ -5817,11 +6010,17 @@ function vistaHoras(gente, idsArea, barra){
           ? gente2.map(a=>{
               const casa = a.modalidad==='REMOTO';
               const est = estadoProg(a.estado);
+              // Un tramo con nota lleva un acuerdo escrito detrás. Se marca aparte
+              // para que quien mira el cuadro sepa que ahí hay algo que leer.
+              const esp = !!a.nota;
+              const fondo = esp ? '#FFF4E5' : (casa ? '#F3F7FC' : est.fondo);
+              const borde = esp ? '#C77700' : (casa ? 'var(--muted)' : est.color);
               return '<div style="display:inline-block;margin:1px 2px 1px 0;padding:1px 5px;border-radius:4px;'+
-                'font-size:10.5px;line-height:1.5;background:'+(casa?'#FFF4E5':est.fondo)+';'+
-                'border-left:3px solid '+(casa?'var(--warn)':est.color)+'" title="'+
-                esc(a.nombre+' · '+a.entrada+'–'+a.salida+' · '+(casa?'desde casa':'en oficina')+' · '+est.nombre)+'">'+
-                '<b>'+(casa?'HO':'OF')+'</b> '+esc(corto(a.nombre))+'</div>';
+                'font-size:10.5px;line-height:1.5;background:'+fondo+';'+
+                'border-left:3px solid '+borde+'" title="'+
+                esc(a.nombre+' · '+a.entrada+'–'+a.salida+' · '+(casa?'desde casa':'en oficina')+
+                    ' · '+est.nombre+(a.nota?' · '+a.nota:''))+'">'+
+                '<b>'+(esp?'ESP':(casa?'HO':'OF'))+'</b> '+esc(corto(a.nombre))+'</div>';
             }).join('')
           : (hueco ? '<span style="font-size:10.5px;color:var(--danger);font-weight:650">sin nadie</span>' : '');
         return '<td style="vertical-align:top;padding:4px;min-width:104px;'+
@@ -5913,6 +6112,8 @@ function asignarBloque(fecha, hora, gente){
       '<option value="PRESENCIAL">En la oficina</option>'+
       '<option value="REMOTO">Desde casa</option>'+
     '</select></div></div>'+
+    '<div class="frow"><div><label>Nota (opcional)</label>'+
+      '<input id="abN" maxlength="60" placeholder="Turno mañana, apoyo, cita…"></div></div>'+
     '<div style="display:flex;gap:10px;margin-top:16px">'+
       '<button class="btn btn-line" id="abX">Cancelar</button>'+
       '<button class="btn" id="abG">Asignar</button></div></div>';
@@ -5927,12 +6128,234 @@ function asignarBloque(fecha, hora, gente){
     const choque = segmentosDe(id, fecha).find(a=>
       toMin(en) < toMin(a.salida) && toMin(sa) > toMin(a.entrada));
     if(choque){ toast(e.nombre+' ya tiene '+choque.entrada+'–'+choque.salida+' ese día'); return; }
-    // Se lee ANTES de quitar el modal: después el elemento ya no existe.
+    // Se leen ANTES de quitar el modal: después los elementos ya no existen.
     const modalidad = m.querySelector('#abM').value;
+    const nota = m.querySelector('#abN').value.trim();
     m.remove();
     guardarTramo({empId:id, nombre:e.nombre, fecha, entrada:en, salida:sa,
-                  modalidad, nota:'', estado:'BORRADOR'}, ()=>renderTab());
+                  modalidad, nota, estado:'BORRADOR'}, ()=>renderTab());
   };
+}
+
+/* ---- Notas al pie del horario ----
+
+   La cuadrícula dice quién cubre cada hora, pero no por qué. "Fátima falta el
+   jueves porque trabaja todo el domingo" no es el tramo de nadie: es el acuerdo
+   que explica el resto del cuadro, y sin eso el horario se lee como un error.
+
+   Van sueltas a propósito, una por línea. Cualquier estructura que les pusiera
+   —tipo, responsable, fecha— sobraría: quien las escribe está apurada armando el
+   horario de la semana, no llenando un formulario. */
+/* ---- El horario de la semana en un archivo ----
+
+   Fátima arma el horario en el panel, pero quien lo tiene que ver —gerencia, el
+   propio equipo— no entra al panel. Hasta ahora lo rehacía a mano en un documento
+   aparte, y desde ese momento existían dos horarios: el que manda y el que se
+   mandó. Al primer cambio dejaban de coincidir.
+
+   Esto arma una página suelta con lo que ya está cargado. Se abre en cualquier
+   celular sin instalar nada, se manda por WhatsApp como archivo, y desde ahí mismo
+   se imprime o se guarda como PDF. Es una foto de la semana, no una copia
+   editable: si algo cambia, se corrige en el panel y se vuelve a generar.
+
+   Solo entra lo publicado. Un borrador es un horario que todavía se está pensando,
+   y mandarlo es peor que no mandar nada. */
+function descargarHorario(gente, idsArea){
+  const dias = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(PROG_SEM+'T12:00:00'); d.setDate(d.getDate()+i);
+    dias.push(hoyISO(d));
+  }
+  const enSemana = PROGRAMACION.filter(a=>idsArea.indexOf(a.empId)>=0 &&
+                                          dias.indexOf(a.fecha)>=0 && a.entrada && a.salida);
+  const borradores = enSemana.filter(a=>a.estado==='BORRADOR').length;
+  const dela = enSemana.filter(a=>a.estado!=='BORRADOR');
+
+  if(!dela.length){
+    toast(borradores ? 'Esta semana solo tiene borradores. Publícala primero.'
+                     : 'No hay horario cargado esta semana');
+    return;
+  }
+
+  let hIni = 24, hFin = 0;
+  dela.forEach(a=>{
+    hIni = Math.min(hIni, Math.floor(toMin(a.entrada)/60));
+    hFin = Math.max(hFin, Math.ceil(toMin(a.salida)/60));
+  });
+
+  const corto = n => { const p = n.split(' '); return p[0].charAt(0)+p[0].slice(1).toLowerCase(); };
+  const enBloque = (fecha, h) => dela.filter(a=>
+    a.fecha===fecha && toMin(a.entrada) < (h+1)*60 && toMin(a.salida) > h*60);
+  // Un tramo con nota es el "turno especial" del cuadro: se distingue porque el
+  // acuerdo que lo explica está escrito ahí y conviene que salte a la vista.
+  const clase = a => a.nota ? 'ot' : (a.modalidad==='REMOTO' ? 'ho' : 'of');
+  const sigla = a => a.nota ? 'ESP' : (a.modalidad==='REMOTO' ? 'HO' : 'OF');
+
+  const lunes = new Date(PROG_SEM+'T12:00:00');
+  const domingo = new Date(lunes); domingo.setDate(lunes.getDate()+6);
+  const rango = lunes.getMonth()===domingo.getMonth()
+    ? 'Semana del '+lunes.getDate()+' al '+domingo.getDate()+' de '+MESES[domingo.getMonth()]+' de '+domingo.getFullYear()
+    : 'Semana del '+lunes.getDate()+' de '+MESES[lunes.getMonth()]+' al '+domingo.getDate()+' de '+MESES[domingo.getMonth()]+' de '+domingo.getFullYear();
+
+  const cabDias = dias.map(f2=>{
+    const d = new Date(f2+'T12:00:00');
+    const nom = DIAS[d.getDay()];
+    return '<th>'+esc(nom.charAt(0).toUpperCase()+nom.slice(1))+
+      '<span class="dnum">'+d.getDate()+'</span></th>';
+  }).join('');
+
+  let filas = '';
+  for(let h=hIni; h<hFin; h++){
+    filas += '<tr><th class="hora">'+pad(h)+':00 – '+pad(h+1)+':00</th>'+
+      dias.map(f2=>{
+        const g = enBloque(f2, h);
+        if(!g.length) return '<td></td>';
+        return '<td class="'+clase(g[0])+'">'+ g.map(a=>
+          '<span class="p"><b class="t '+clase(a)+'">'+sigla(a)+'</b> '+esc(corto(a.nombre))+'</span>'
+        ).join('')+'</td>';
+      }).join('')+'</tr>';
+  }
+
+  const horasDe = id => dela.filter(a=>a.empId===id)
+    .reduce((t,a)=>t+(toMin(a.salida)-toMin(a.entrada))/60, 0);
+  const resumen = gente.map(e=>({e, h:horasDe(e.id)})).filter(x=>x.h>0).sort((a,c)=>c.h-a.h);
+
+  const notas = NOTAS_PROG.filter(n=>n.semana===PROG_SEM && n.area===PROG_AREA);
+  const ahora = new Date();
+
+  const doc =
+'<!DOCTYPE html>\n<html lang="es"><head><meta charset="UTF-8">\n'+
+'<meta name="viewport" content="width=device-width,initial-scale=1">\n'+
+'<title>Horario '+esc(PROG_AREA)+' — '+esc(rango)+'</title>\n<style>\n'+
+':root{--marca:#224370;--marca-osc:#16304F;--marca-cla:#5578A8;--linea:#D8DCE2;--tinta:#1B2734;\n'+
+'  --ho-bg:#EAF0F7;--ho-bd:#5578A8;--of-bg:#DCE4EF;--of-bd:#224370;--ot-bg:#FFF4E5;--ot-bd:#C77700;}\n'+
+'*{box-sizing:border-box}\n'+
+'body{margin:0;background:#F5F6F8;color:var(--tinta);padding:26px 18px 48px;\n'+
+'  font-family:"Helvetica Neue",Arial,sans-serif;-webkit-text-size-adjust:100%}\n'+
+'.hoja{max-width:1080px;margin:0 auto}\n'+
+'header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;\n'+
+'  border-bottom:3px solid var(--marca);padding-bottom:14px;margin-bottom:14px}\n'+
+'.marca{display:flex;align-items:center;gap:13px}\n'+
+'.marca img{height:38px;display:block}\n'+
+'h1{margin:0;font-size:19px;color:var(--marca-osc);letter-spacing:.2px}\n'+
+'.sub{margin:2px 0 0;font-size:12.5px;color:var(--marca-cla)}\n'+
+'.rango{font-size:13.5px;font-weight:700;color:var(--marca-osc);text-align:right}\n'+
+'.leyenda{display:flex;gap:15px;flex-wrap:wrap;font-size:12px;margin:0 0 12px;align-items:center}\n'+
+'.leyenda i{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:-1px}\n'+
+'.wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}\n'+
+'table{width:100%;border-collapse:collapse;background:#fff;min-width:860px}\n'+
+'th,td{border:1px solid var(--linea);padding:5px 6px;vertical-align:top}\n'+
+'thead th{background:var(--marca);color:#fff;font-size:12.5px;font-weight:600;text-align:center;padding:9px 6px}\n'+
+'thead th:first-child{background:var(--marca-osc);text-align:left;min-width:104px}\n'+
+'.dnum{display:block;font-size:11px;font-weight:400;opacity:.8}\n'+
+'th.hora{background:#E3E9F1;color:var(--marca-osc);font-size:11.5px;font-weight:600;\n'+
+'  text-align:left;white-space:nowrap}\n'+
+'td{height:38px}\n'+
+'td.ho{background:var(--ho-bg);border-left:3px solid var(--ho-bd)}\n'+
+'td.of{background:var(--of-bg);border-left:3px solid var(--of-bd)}\n'+
+'td.ot{background:var(--ot-bg);border-left:3px solid var(--ot-bd)}\n'+
+'.p{display:inline-block;font-size:11.5px;line-height:1.6;margin-right:7px;white-space:nowrap}\n'+
+'b.t{font-size:9px;letter-spacing:.3px;padding:1px 4px;border-radius:3px;color:#fff;margin-right:3px}\n'+
+'b.t.ho{background:var(--ho-bd)} b.t.of{background:var(--of-bd)} b.t.ot{background:var(--ot-bd)}\n'+
+'h2{font-size:14.5px;color:var(--marca-osc);margin:24px 0 8px}\n'+
+'ul{margin:0;padding-left:19px;font-size:13px;line-height:1.8}\n'+
+'table.res{min-width:0;max-width:460px}\n'+
+'table.res th{background:#E3E9F1;color:var(--marca-osc);font-size:11.5px;text-align:left}\n'+
+'table.res td{height:auto;font-size:12.5px}\n'+
+'.pie{margin-top:26px;border-top:1px solid var(--linea);padding-top:12px;\n'+
+'  font-size:11.5px;color:#6B7684;line-height:1.6}\n'+
+'.btn{font:inherit;font-size:12.5px;padding:8px 15px;border-radius:4px;border:1px solid var(--marca);\n'+
+'  background:var(--marca);color:#fff;cursor:pointer;margin-top:20px}\n'+
+'@media print{.btn{display:none}body{padding:0;background:#fff}table{min-width:0}\n'+
+'  .wrap{overflow:visible}}\n'+
+'</style></head><body><div class="hoja">\n'+
+'<header><div class="marca"><img src="'+LOGO+'" alt="">'+
+  '<div><h1>Horario de '+esc((PROG_AREA||'').toLowerCase())+'</h1>'+
+  '<p class="sub">'+esc(CFG.empresa||'Grupo Robles')+'</p></div></div>'+
+  '<div class="rango">'+esc(rango)+'</div></header>\n'+
+'<div class="leyenda">'+
+  '<span><i style="background:var(--of-bd)"></i>En la oficina</span>'+
+  '<span><i style="background:var(--ho-bd)"></i>Desde casa</span>'+
+  '<span><i style="background:var(--ot-bd)"></i>Turno especial (ver notas)</span>'+
+'</div>\n'+
+'<div class="wrap"><table><thead><tr><th>Hora</th>'+cabDias+'</tr></thead><tbody>'+
+  filas +'</tbody></table></div>\n'+
+(notas.length
+  ? '<h2>Notas</h2><ul>'+notas.map(n=>'<li>'+esc(n.texto)+'</li>').join('')+'</ul>\n'
+  : '')+
+(resumen.length
+  ? '<h2>Horas por persona</h2><div class="wrap"><table class="res"><thead><tr>'+
+    '<th>Colaborador</th><th>Horas</th><th>Desde casa</th></tr></thead><tbody>'+
+    resumen.map(x=>{
+      const casa = dela.filter(a=>a.empId===x.e.id && a.modalidad==='REMOTO')
+        .reduce((t,a)=>t+(toMin(a.salida)-toMin(a.entrada))/60, 0);
+      return '<tr><td>'+esc(x.e.nombre)+'</td><td>'+(Math.round(x.h*10)/10)+' h</td>'+
+        '<td>'+(casa ? Math.round(casa*10)/10+' h' : '—')+'</td></tr>';
+    }).join('')+'</tbody></table></div>\n'
+  : '')+
+'<button class="btn" onclick="window.print()">Imprimir o guardar como PDF</button>\n'+
+'<p class="pie">Generado el '+ahora.getDate()+' de '+MESES[ahora.getMonth()]+' de '+ahora.getFullYear()+
+  ' a las '+pad(ahora.getHours())+':'+pad(ahora.getMinutes())+
+  ' desde el control de asistencia de '+esc(CFG.empresa||'Grupo Robles')+'.<br>'+
+  'Refleja el horario publicado a esa hora. Si algo cambia después, hay que generarlo de nuevo.</p>\n'+
+'</div></body></html>';
+
+  const nom = 'horario_'+(PROG_AREA||'equipo').toLowerCase().replace(/[^a-z0-9]+/g,'-')+
+              '_semana_'+PROG_SEM+'.html';
+  dl(new Blob([doc], {type:'text/html;charset=utf-8'}), nom);
+  toast(borradores
+    ? 'Archivo listo · '+borradores+' tramo'+(borradores===1?'':'s')+' en borrador quedaron fuera'
+    : 'Archivo listo para enviar');
+}
+
+function bloqueNotas(){
+  const mias = NOTAS_PROG.filter(n=>n.semana===PROG_SEM && n.area===PROG_AREA);
+  const puede = !soloVista();
+
+  const cuerpo = PROG_NOTAS_EDIT
+    ? '<textarea id="pnT" rows="'+Math.max(4, mias.length+2)+'" '+
+        'style="width:100%;font-family:inherit;font-size:13px;line-height:1.7;padding:10px;'+
+        'border:1px solid var(--line);border-radius:8px;resize:vertical" '+
+        'placeholder="Una nota por línea. Por ejemplo:&#10;'+
+        'Fátima cubre de 6:00 a 9:00 desde casa.&#10;'+
+        'Jhon apoya el domingo de 2:00 a 5:00.">'+
+        esc(mias.map(n=>n.texto).join('\n'))+'</textarea>'+
+      '<div style="display:flex;gap:8px;margin-top:10px">'+
+        '<button class="btn btn-sm" id="pnG">Guardar notas</button>'+
+        '<button class="btn btn-sm btn-line" id="pnX">Cancelar</button>'+
+      '</div>'
+    : (mias.length
+        ? '<ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.8;color:var(--text)">'+
+            mias.map(n=>'<li>'+esc(n.texto)+'</li>').join('')+
+          '</ul>'
+        : '<p class="hint" style="margin:0">Sin notas esta semana.'+
+          (puede ? ' Sirven para lo que el cuadro no explica: un cambio acordado, un apoyo puntual, una ausencia prevista.' : '')+
+          '</p>');
+
+  return '<div style="margin-top:26px;border-top:1px solid var(--line);padding-top:16px">'+
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">'+
+      '<h3 style="margin:0;font-size:15px">Notas de la semana</h3>'+
+      (puede && !PROG_NOTAS_EDIT
+        ? '<button class="btn btn-sm btn-line" id="pnE">'+(mias.length?'Editar':'Agregar')+'</button>' : '')+
+    '</div>'+ cuerpo +'</div>';
+}
+
+async function guardarNotas(){
+  const ta = $('#pnT'); if(!ta) return;
+  const lista = ta.value.split('\n').map(x=>x.trim()).filter(x=>x);
+  const semana = PROG_SEM, area = PROG_AREA;
+  // Se pintan de una vez para que el cambio se vea, y después se manda: la
+  // conexión desde la oficina no siempre responde rápido y quedarse mirando un
+  // botón bloqueado hace pensar que no se guardó.
+  NOTAS_PROG = NOTAS_PROG.filter(n=>!(n.semana===semana && n.area===area))
+    .concat(lista.map(t=>({semana, area, texto:t, autor:'Administración'})));
+  PROG_NOTAS_EDIT = false;
+  renderTab();
+  try{
+    const r = await api('notasprog', {semana, area, datos:lista, autor:'Administración'}, {timeout:30000});
+    if(!r || !r.ok) toast('⚠ Guardado aquí, pero NO llegó al servidor');
+    else toast('Notas guardadas');
+  }catch(err){ toast('⚠ Guardado aquí, pero NO llegó al servidor'); }
 }
 
 function leyendaProg(){
@@ -5945,7 +6368,8 @@ function leyendaProg(){
     '<br><b>Borrador:</b> se está armando, no le cambia la jornada a nadie. '+
     '<b>Publicado:</b> vale, y cuenta para la asistencia. '+
     '<b>Validado:</b> la jefatura confirmó que ese turno se cubrió.'+
-    '<br>Quien esté programado <b>desde casa</b> marca ese día sin validación de ubicación.</p>';
+    '<br>Quien esté programado <b>desde casa</b> marca ese día sin validación de ubicación.'+
+    '<br><b>ESP</b> es un tramo con nota: hay un acuerdo escrito detrás, pasa el dedo por encima para leerlo.</p>';
 }
 
 /* Publicar deja de ser borrador: recién ahí el horario cuenta para la asistencia. */
@@ -7021,7 +7445,11 @@ function tabCfg(b){
     CFG.bloqueoMin=+$('#cBlq').value||15;
     CFG.empresa=$('#cEmp').value.trim()||'Empresa';
     CFG.sigla=$('#cSig').value.trim()||'P';
-    CFG.adminPass=$('#cPas').value||'robles2026';
+    // Si el campo llega vacío se conserva la clave que ya estaba. Antes caía en una
+    // clave escrita aquí mismo, con dos problemas: dejaba la clave real dentro del
+    // archivo que se publica —donde la puede leer cualquiera— y bastaba un guardado
+    // descuidado para devolverla a esa clave sin que nadie se enterara.
+    CFG.adminPass = $('#cPas').value || CFG.adminPass;
     const nv = ($('#cPasV').value||'').trim();
     if(nv && nv===CFG.adminPass){
       toast('La clave de solo lectura no puede ser igual a la de administrador');
