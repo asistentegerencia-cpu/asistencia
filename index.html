@@ -6096,14 +6096,28 @@ function vistaHoras(gente, idsArea, barra){
     '</tr>';
   };
 
-  // --- resumen de la semana ---
-  const horasDe = empId => dela.filter(a=>a.empId===empId)
-    .reduce((t,a)=>t + (toMin(a.salida)-toMin(a.entrada))/60, 0);
-  const conHoras = gente.map(e=>({e, h:horasDe(e.id)})).filter(x=>x.h>0)
-                        .sort((a,c)=>c.h-a.h);
-  const totalHoras = conHoras.reduce((t,x)=>t+x.h, 0);
-  const enCasa = dela.filter(a=>a.modalidad==='REMOTO')
-    .reduce((t,a)=>t + (toMin(a.salida)-toMin(a.entrada))/60, 0);
+  /* --- resumen de la semana ---
+
+     La cuadrícula de arriba muestra todo, borradores incluidos: mientras se arma el
+     horario hay que ver lo que se está probando. Pero las horas son otra cosa. Es el
+     número que se lee en voz alta —"Fátima hace 78 horas"— y no puede incluir un
+     turno que todavía no vale. Si un borrador quedó duplicado de uno publicado, ese
+     número sale al doble y nadie se da cuenta hasta que alguien lo cuestiona.
+
+     Así que las horas cuentan solo lo publicado, y lo que falta publicar se dice
+     aparte y con su nombre. */
+  const firmes = dela.filter(a=>a.estado!=='BORRADOR');
+  const enBorrador = dela.filter(a=>a.estado==='BORRADOR');
+  const sumaHoras = lista => lista.reduce((t,a)=>t + (toMin(a.salida)-toMin(a.entrada))/60, 0);
+
+  const horasDe = empId => sumaHoras(firmes.filter(a=>a.empId===empId));
+  const borrDe  = empId => sumaHoras(enBorrador.filter(a=>a.empId===empId));
+  const conHoras = gente.map(e=>({e, h:horasDe(e.id), b:borrDe(e.id)}))
+                        .filter(x=>x.h>0 || x.b>0)
+                        .sort((a,c)=>(c.h+c.b)-(a.h+a.b));
+  const totalHoras = sumaHoras(firmes);
+  const totalBorr  = sumaHoras(enBorrador);
+  const enCasa = sumaHoras(firmes.filter(a=>a.modalidad==='REMOTO'));
 
   const nomDia = f2=>{
     const d = new Date(f2+'T12:00:00');
@@ -6126,7 +6140,8 @@ function vistaHoras(gente, idsArea, barra){
           ? '<button class="btn btn-sm btn-line" id="prVal">Validar turnos cumplidos ('+dela.filter(a=>a.estado==='PUBLICADO' && a.fecha<hoy).length+')</button>' : '')+
       '</div>')+
     '<div class="kpis">'+
-      kpi('Horas cubiertas', Math.round(totalHoras)+' h', 'k-ok')+
+      kpi('Horas publicadas', Math.round(totalHoras)+' h', 'k-ok')+
+      (totalBorr ? kpi('Sin publicar', Math.round(totalBorr)+' h', 'k-warn') : '')+
       kpi('Desde casa', Math.round(enCasa)+' h', '')+
       kpi('Personas con turno', conHoras.length+' / '+gente.length, '')+
       kpi('Franjas sin nadie', huecos.length, huecos.length?'k-bad':'k-ok')+
@@ -6142,13 +6157,16 @@ function vistaHoras(gente, idsArea, barra){
 
     (conHoras.length
       ? '<h3 style="margin:26px 0 8px;font-size:15px">Horas por persona</h3>'+
+        '<p class="hint" style="margin:-2px 0 10px">Son las horas <b>publicadas</b>. '+
+        'Lo que sigue en borrador se muestra aparte, en naranja: todavía no cuenta.</p>'+
         '<div class="tblwrap"><table><thead><tr><th>Colaborador</th><th>Horas</th><th>Desde casa</th><th>Días</th></tr></thead><tbody>'+
         conHoras.map(x=>{
-          const suyos = dela.filter(a=>a.empId===x.e.id);
-          const casa = suyos.filter(a=>a.modalidad==='REMOTO')
-            .reduce((t,a)=>t+(toMin(a.salida)-toMin(a.entrada))/60, 0);
+          const suyos = firmes.filter(a=>a.empId===x.e.id);
+          const casa = sumaHoras(suyos.filter(a=>a.modalidad==='REMOTO'));
           return '<tr><td class="name">'+esc(x.e.nombre)+'</td>'+
-            '<td class="num"><b>'+(Math.round(x.h*10)/10)+' h</b></td>'+
+            '<td class="num"><b>'+(Math.round(x.h*10)/10)+' h</b>'+
+              (x.b ? '<div style="font-size:11px;color:var(--warn);font-weight:400">'+
+                     '+'+(Math.round(x.b*10)/10)+' h sin publicar</div>' : '')+'</td>'+
             '<td class="num">'+(casa?Math.round(casa*10)/10+' h':'—')+'</td>'+
             '<td class="num">'+new Set(suyos.map(a=>a.fecha)).size+'</td></tr>';
         }).join('')+'</tbody></table></div>'
