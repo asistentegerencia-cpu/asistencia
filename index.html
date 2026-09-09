@@ -2771,6 +2771,21 @@ const TIPOS_PERMISO = [
 ];
 const tipoPermiso = id => TIPOS_PERMISO.find(t=>t.id===id) || TIPOS_PERMISO[0];
 
+/* En el tablero del día no cabe "Trabajar desde casa" dentro de una etiqueta, y
+   "PERMISO" a secas no dice nada: quien mira quiere saber qué se autorizó. */
+const ETIQUETA_PERMISO = {
+  TARDANZA:'TARDANZA OK', SALIDA_ANTES:'SALE ANTES', DIA:'PERMISO DEL DÍA',
+  CASA:'DESDE CASA', JORNADA:'JORNADA'
+};
+const etiquetaPermiso = tipo => ETIQUETA_PERMISO[tipo] || 'PERMISO';
+
+/* El permiso aprobado que manda ese día, sea del tipo que sea. Se usa para que la
+   fila lo muestre aunque la persona todavía no haya marcado: un permiso aprobado
+   que no se ve en el tablero es, para quien mira el tablero, un permiso que no existe. */
+function permisoDelDia(empId, fechaISO){
+  return PERMISOS.find(p=>p.empId===empId && p.fecha===fechaISO && p.estado==='APROBADO') || null;
+}
+
 /* El horario que administración le puso a esa persona ese día concreto, si lo hay.
    Manda sobre el turno: el equipo de ventas se reparte la jornada y cada quien
    cubre una franja distinta, cosa que un turno fijo no puede expresar. */
@@ -3541,11 +3556,16 @@ function estadoDia(emp, fechaISO, ahora){
   if(fechaISO > hoy)  return Object.assign(base, {clase:'FUTURO',   etiqueta:'—',           cls:'tag-ok'});
   if(fechaISO === hoy){
     const enCurso = toMin(hhmm(ahora)) <= toMin(hor.in) + (CFG.tolerancia||0);
+    // El permiso se adjunta aunque no haya marcaje. Un "trabajar desde casa"
+    // aprobado no exime de marcar, así que el día sigue contando igual; lo que
+    // cambia es que en el tablero se ve por qué esa persona no está en la oficina.
     return Object.assign(base, enCurso
       ? {clase:'PENDIENTE',  etiqueta:'PENDIENTE',  cls:'tag-warn'}
-      : {clase:'SIN_MARCAR', etiqueta:'SIN MARCAR', cls:'tag-bad'});
+      : {clase:'SIN_MARCAR', etiqueta:'SIN MARCAR', cls:'tag-bad'},
+      {permiso: permisoDelDia(emp.id, fechaISO)});
   }
-  return Object.assign(base, {clase:'FALTA', etiqueta:'FALTA', cls:'tag-bad'});
+  return Object.assign(base, {clase:'FALTA', etiqueta:'FALTA', cls:'tag-bad',
+                             permiso: permisoDelDia(emp.id, fechaISO)});
 }
 
 /* Qué mostrar en la columna de salida. La gente marca la entrada pero rara vez
@@ -5012,6 +5032,48 @@ function avisoProyectos(){
 }
 
 /* ---------- TAB: HOY (tablero del día) ---------- */
+/* Los permisos sin responder, arriba del tablero del día.
+
+   Vivían solo en su pestaña, y ahí es donde se quedaban. El tablero del día es lo
+   que se mira todas las mañanas —y lo que mira Gerencia—, así que un permiso pedido
+   para hoy tenía que estar acá: quien revisa la asistencia de la mañana es la misma
+   persona que decide sobre el permiso de esa mañana. Mandarla a otra pestaña es la
+   forma más segura de que el permiso se quede sin responder.
+
+   Salen todos los pendientes, no solo los de hoy, porque uno pedido para mañana
+   también hay que contestarlo antes de que llegue mañana. */
+function avisoPermisosPendientes(){
+  const hoy = hoyISO();
+  const pend = PERMISOS.filter(p=>p.estado==='PENDIENTE' && p.fecha >= hoy)
+                       .sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  if(!pend.length) return '';
+
+  const fila = p=>{
+    const t = tipoPermiso(p.tipo);
+    const cuando = p.fecha===hoy ? '<b>hoy</b>' : 'el '+fechaCorta(p.fecha);
+    return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'+
+      'padding:9px 0;border-top:1px solid rgba(0,0,0,.07)">'+
+      '<div style="flex:1 1 260px;min-width:220px">'+
+        '<b>'+esc(p.nombre)+'</b> pide <b>'+esc(t.nombre.toLowerCase())+'</b> '+cuando+
+        (p.hora ? ' · '+esc(p.hora)+(p.horaFin?'–'+esc(p.horaFin):'') : '')+
+        (p.motivo ? '<div style="font-size:12.5px;color:var(--muted);line-height:1.5">'+
+                    esc(p.motivo)+'</div>' : '')+
+      '</div>'+
+      (soloVista() ? '<span style="font-size:12px;color:var(--muted)">Sin responder</span>'
+        : '<div style="display:flex;gap:7px">'+
+            '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
+            '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'">Rechazar</button>'+
+          '</div>')+
+    '</div>';
+  };
+
+  return '<div class="alert alert-warn" style="margin-bottom:16px">'+
+    '<b>'+pend.length+' permiso'+(pend.length===1?'':'s')+' sin responder</b>'+
+    (soloVista() ? '' : ' — se resuelve desde aquí, no hace falta ir a otra pestaña.')+
+    pend.map(fila).join('')+
+  '</div>';
+}
+
 function tabHoy(b){
   const f = hoyISO(), ahora = new Date();
   const filas = plantilla().map(e=>Object.assign({e}, estadoDia(e, f, ahora), {sal:salidaDe(e, f, ahora)}));
@@ -5029,7 +5091,7 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoAlertas() + avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  b.innerHTML = avisoPermisosPendientes() + avisoAlertas() + avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
@@ -5078,9 +5140,10 @@ function tabHoy(b){
         '<td><span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span>'+
           (r.porValidar ? ' <span class="tag tag-warn" style="font-size:9px">POR VALIDAR</span>' : '')+
           (r.prog && r.prog.estado==='VALIDADO' ? ' <span class="tag tag-ok" style="font-size:9px">VALIDADO</span>' : '')+
-          (r.permiso ? ' <span class="tag tag-warn" style="font-size:9px" title="'+
+          (r.permiso ? ' <span class="tag tag-ok" style="font-size:9px" title="'+
             esc(tipoPermiso(r.permiso.tipo).nombre+' · '+r.permiso.motivo+
-                (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">PERMISO</span>' : '')+'</td>'+
+                (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">'+
+            esc(etiquetaPermiso(r.permiso.tipo))+'</span>' : '')+'</td>'+
         '<td class="num">'+(r.tard? r.tard+"'":'—')+'</td>'+
         '<td>'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
         '<td>'+zona+'</td>'+
@@ -5105,6 +5168,9 @@ function tabHoy(b){
     return cabecera('EN PLANILLA', dentro.length)+ dentro.map(filaHoy).join('')+
            cabecera('FUERA DE PLANILLA', fuera.length)+ fuera.map(filaHoy).join('');
   }
+
+  b.querySelectorAll('[data-ok]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
+  b.querySelectorAll('[data-no]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
 
   wireFiltros('h', ()=>renderTab());
   Array.from(document.querySelectorAll('[data-corr]')).forEach(btn=>{
@@ -6579,7 +6645,16 @@ function tabPermisos(b){
 
   if(soloVista()) return;
 
-  const resolver = async (id, decision)=>{
+  Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
+  Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
+}
+
+/* Aprobar o rechazar. Vive fuera de la pestaña de Permisos porque también se
+   resuelve desde el tablero del día: quien revisa la asistencia de la mañana es la
+   misma persona que tiene que decidir sobre el permiso de esa mañana, y mandarla a
+   otra pestaña para eso es la forma más segura de que el permiso se quede sin
+   responder. */
+async function resolverPermiso(id, decision){
     const p = PERMISOS.find(x=>x.id===id);
     if(!p) return;
     const t = tipoPermiso(p.tipo);
@@ -6604,10 +6679,6 @@ function tabPermisos(b){
         renderTab();
       }else toast((r && r.error) || 'No se pudo guardar');
     }catch(e){ toast('Sin conexión con el servidor'); }
-  };
-
-  Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolver(x.dataset.ok,'APROBADO'));
-  Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolver(x.dataset.no,'RECHAZADO'));
 }
 
 /* ---------- TAB: AUSENCIAS Y COMISIONES DE SERVICIO ---------- */
