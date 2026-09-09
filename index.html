@@ -6607,12 +6607,17 @@ function tabPermisos(b){
         (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+'</td>'+
       '<td style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
       (soloVista() ? '<td></td>'
-        : '<td>'+(conBotones
-            ? '<div style="display:flex;gap:6px">'+
-              '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
-              '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'+
-              '</div>'
-            : '')+'</td>')+
+        : '<td><div style="display:flex;gap:6px;align-items:center">'+
+            (conBotones
+              ? '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
+                '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'
+              : '')+
+            // Borrar es para la solicitud que nació mal —una prueba, un duplicado,
+            // un día equivocado—, no para deshacer una decisión. Por eso está
+            // separado y en gris: rechazar y borrar no son lo mismo.
+            '<button class="btn btn-sm btn-line" data-delp="'+esc(p.id)+'" '+
+              'style="color:var(--muted)" title="Borrar la solicitud">Borrar</button>'+
+          '</div></td>')+
     '</tr>';
   };
 
@@ -6647,6 +6652,35 @@ function tabPermisos(b){
 
   Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
   Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
+  Array.from(b.querySelectorAll('[data-delp]')).forEach(x=>x.onclick=()=>borrarSolicitud(x.dataset.delp));
+}
+
+/* Borra la solicitud, no lo que pasó ese día.
+
+   Si al aprobarla se registró una jornada, esos marcajes se quedan: son la
+   asistencia de una persona, y borrarlos de rebote al limpiar una lista sería el
+   error más caro de los dos. El aviso lo dice antes de borrar, para que nadie
+   descubra después que esperaba otra cosa. */
+async function borrarSolicitud(id){
+  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  const p = PERMISOS.find(x=>x.id===id);
+  if(!p) return;
+  const t = tipoPermiso(p.tipo);
+  const aviso = 'Borrar la solicitud de «'+t.nombre+'» de '+p.nombre+
+    ' para el '+fechaCorta(p.fecha)+'.\n\n'+
+    'Desaparece de la lista y del historial.'+
+    (p.estado==='APROBADO' ? '\n\nOJO: si al aprobarla se registró su jornada, esos marcajes NO se borran. '+
+                             'Eso se hace desde Hoy o el historial, con el botón Corregir.' : '')+
+    '\n\n¿Continuar?';
+  if(!confirm(aviso)) return;
+  try{
+    const r = await api('borrarperm', {id}, {timeout:30000});
+    if(r && r.ok && r.borrados){
+      PERMISOS = PERMISOS.filter(x=>x.id!==id);
+      toast('Solicitud borrada');
+      renderTab();
+    }else toast((r && r.error) || 'No se pudo borrar');
+  }catch(e){ toast('Sin conexión con el servidor'); }
 }
 
 /* Aprobar o rechazar. Vive fuera de la pestaña de Permisos porque también se
