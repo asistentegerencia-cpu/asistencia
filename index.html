@@ -299,13 +299,11 @@ tr:hover td{background:#FAFCFB}
   </div>
   <div class="tabs" id="adTabs">
     <div class="tab on" data-tab="hoy">Hoy</div>
-    <div class="tab" data-tab="ana">Análisis</div>
-    <div class="tab" data-tab="hist">Historial y ausencias</div>
+    <div class="tab" data-tab="rep">Reportes</div>
     <div class="tab" data-tab="emp">Personal</div>
     <div class="tab" data-tab="prog">Programación</div>
     <div class="tab" data-tab="perm">Permisos</div>
     <div class="tab" data-tab="cfg">Configuración</div>
-    <div class="tab" data-tab="qr">Código QR</div>
   </div>
   <div class="apanel" id="adBody"></div>
 </div>
@@ -4693,7 +4691,7 @@ function abrirAdmin(){
           // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
-  const ocultas = soloVista() ? ['cfg','qr'] : [];
+  const ocultas = soloVista() ? ['cfg'] : [];
   $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
   if(ocultas.indexOf(TAB)>=0){
     TAB='hoy';
@@ -4730,16 +4728,17 @@ function renderTab(){
   const b=$('#adBody');
   // Cerrojo: aunque alguien fuerce la pestaña, en solo lectura no se abre
   if(TAB==='disp') TAB='emp';   // Celulares se fusionó con Personal
-  if(TAB==='aus')  TAB='hist';  // Ausencias se fusionó con Historial
-  if(soloVista() && ['cfg','qr'].indexOf(TAB)>=0) TAB='hoy';
+  if(TAB==='aus')  TAB='rep';   // Ausencias, Historial y Análisis son una sola
+  if(TAB==='hist') TAB='rep';
+  if(TAB==='ana')  TAB='rep';
+  if(TAB==='qr')   TAB='cfg';   // El código QR vive dentro de Configuración
+  if(soloVista() && TAB==='cfg') TAB='hoy';
   if(TAB==='hoy')  return tabHoy(b);
-  if(TAB==='ana')  return tabAnalisis(b);
-  if(TAB==='hist') return tabHist(b);
+  if(TAB==='rep')  return tabReportes(b);
   if(TAB==='emp')  return tabEmp(b);
   if(TAB==='prog') return tabProgramacion(b);
   if(TAB==='perm') return tabPermisos(b);
-  if(TAB==='cfg')  return tabCfg(b);
-  if(TAB==='qr')   return tabQr(b);
+  if(TAB==='cfg')  return tabConfiguracion(b);
 }
 
 /* Los avisos de suplantación se envían sin interrumpir el marcaje: si el correo
@@ -4855,6 +4854,21 @@ function aplicaProyecto(e){
   if(FLT.proyecto==='__sin') return !e.proyecto;
   return e.proyecto === FLT.proyecto;
 }
+/* ¿Esta persona pasa los filtros de arriba?
+
+   Se evalúa sobre el padrón completo, a diferencia de plantilla(), que solo mira a
+   los activos. En un reporte hace falta: quien ya no trabaja aquí sigue teniendo
+   historial, y hacerlo desaparecer al filtrar por área borraría meses de registro
+   de la vista sin decir nada. */
+function pasaFiltros(empId){
+  const e = EMP.find(x=>x.id===empId);
+  if(!e) return true;                      // marcaje de alguien que ya no está en el padrón
+  return aplicaProyecto(e) &&
+         (!FLT.turno || e.turno===FLT.turno) &&
+         (!FLT.area  || e.area===FLT.area) &&
+         aplicaPlanilla(e);
+}
+
 function plantilla(){
   return EMP.filter(e=>e.activo && e.modalidad!=='EXENTO')
             .filter(e=>aplicaProyecto(e))
@@ -5413,9 +5427,25 @@ function reporteColaborador(emp, desde, hasta, ahora){
       : '<div class="tblwrap"><div class="empty">No hay días en el rango elegido.</div></div>');
 }
 
-function tabAnalisis(b){
+let REGS_VISTA = [];     // los marcajes que se están mostrando, para poder borrarlos
+
+/* ---- Reportes: análisis, marcajes y ausencias bajo el mismo filtro ----
+
+   Eran tres pestañas —Análisis, Historial, Ausencias— y cada una con su propio
+   filtro de fechas. Responder "¿cómo le fue a ventas en agosto?" obligaba a poner
+   el mismo rango tres veces y a cruzar a ojo lo que decía cada una. Peor todavía:
+   los filtros no eran los mismos, así que el historial mostraba a todo el mundo
+   mientras el análisis mostraba solo un área, y las dos cifras no cuadraban.
+
+   Ahora hay un solo filtro arriba y todo lo de abajo responde a él: el resumen, los
+   marcajes uno por uno y lo que pasó fuera de ellos. Elegir un área o una persona
+   cambia las tres cosas a la vez, que es como se lee un reporte. */
+function tabReportes(b){
   if(!ANA) ANA = load('ca_ana', null) || rangoPorDefecto();
   const ahora = new Date();
+
+  // Los inactivos siguen en la lista: su historial no desaparece porque se hayan ido.
+  const gente = EMP.slice().sort((x,y)=>x.nombre.localeCompare(y.nombre));
 
   b.innerHTML = avisoDemo() + avisoProyectos() +
     '<div class="toolbar">'+
@@ -5424,8 +5454,8 @@ function tabAnalisis(b){
       htmlFiltros('a')+
       '<div>'+lbl('Colaborador')+'<select class="sel" id="aE" style="max-width:230px">'+
         '<option value="">Todo el equipo</option>'+
-        EMP.filter(e=>e.activo).sort((x,y)=>x.nombre.localeCompare(y.nombre))
-           .map(e=>'<option value="'+esc(e.id)+'"'+(ANA_EMP===e.id?' selected':'')+'>'+esc(e.nombre)+'</option>').join('')+
+        gente.map(e=>'<option value="'+esc(e.id)+'"'+(ANA_EMP===e.id?' selected':'')+'>'+
+          esc(e.nombre)+(e.activo?'':' — ya no trabaja aquí')+'</option>').join('')+
       '</select></div>'+
       '<div class="grow"></div>'+
       '<button class="btn btn-sm btn-line" id="aX" style="align-self:flex-end">Descargar Excel</button>'+
@@ -5440,17 +5470,38 @@ function tabAnalisis(b){
 
   const pintar = ()=>{
     ANA.desde = $('#aI').value; ANA.hasta = $('#aF').value;
-    if(ANA.desde > ANA.hasta){ $('#aOut').innerHTML='<div class="tblwrap"><div class="empty">La fecha inicial es posterior a la final.</div></div>'; return; }
+    if(ANA.desde > ANA.hasta){
+      $('#aOut').innerHTML = '<div class="tblwrap"><div class="empty">La fecha inicial es posterior a la final.</div></div>';
+      return;
+    }
     save('ca_ana', ANA);
     const uno = ANA_EMP ? EMP.find(e=>e.id===ANA_EMP) : null;
     // Si la persona elegida ya no está en el padrón, se vuelve al equipo entero en
     // vez de quedar mirando una pantalla vacía sin explicación.
     if(ANA_EMP && !uno) ANA_EMP = '';
+
     $('#aOut').innerHTML = avisoInicioOperacion(ANA.desde) +
       (uno ? reporteColaborador(uno, ANA.desde, ANA.hasta, ahora)
-           : analisisHTML(ANA.desde, ANA.hasta, ahora));
+           : analisisHTML(ANA.desde, ANA.hasta, ahora)) +
+      bloqueMarcajes(ANA.desde, ANA.hasta, ANA_EMP) +
+      bloqueAusencias(ANA.desde, ANA.hasta, ANA_EMP);
+
     const det = $('#anD');
     if(det) det.onchange = ()=>{ ANA_DET = det.value; pintar(); };
+
+    const bNueva = $('#auN'); if(bNueva) bNueva.onclick = ()=>editarAus(null);
+    $$('#aOut [data-ed]').forEach(x=>x.onclick=()=>editarAus(x.dataset.ed));
+    Array.from(b.querySelectorAll('[data-delm]')).forEach(btn=>{
+      btn.onclick = async ()=>{
+        const m = REGS_VISTA[Number(btn.dataset.delm)];
+        if(!m) return;
+        if(!confirm('Se borrará la '+m.tipo.toLowerCase()+' de las '+m.hora+' de '+m.nombre+
+                    ' del '+fechaCorta(m.fecha)+'.\n\nNo se puede deshacer. ¿Continuar?')) return;
+        btn.disabled = true; btn.textContent = 'Borrando…';
+        if(await borrarMarcaje(m)) toast('Marcaje borrado');
+        pintar();
+      };
+    });
   };
 
   wireFiltros('a', pintar);
@@ -5462,23 +5513,68 @@ function tabAnalisis(b){
   b.querySelectorAll('[data-rango]').forEach(btn=>{
     btn.onclick = ()=>{
       const h = new Date(); const iso = hoyISO(h);
-      let d, f;
-      if(btn.dataset.rango==='hoy'){ d=f=iso; }
+      let d, fin;
+      if(btn.dataset.rango==='hoy'){ d = fin = iso; }
       else if(btn.dataset.rango==='sem'){
         const dow = (h.getDay()+6)%7;                       // lunes = 0
-        d = hoyISO(new Date(h.getTime()-dow*86400000)); f = iso;
+        d = hoyISO(new Date(h.getTime()-dow*86400000)); fin = iso;
       }
-      else if(btn.dataset.rango==='mes'){ d = iso.slice(0,8)+'01'; f = iso; }
+      else if(btn.dataset.rango==='mes'){ d = iso.slice(0,8)+'01'; fin = iso; }
       else {
         const p = new Date(h.getFullYear(), h.getMonth()-1, 1);
         const u = new Date(h.getFullYear(), h.getMonth(), 0);
-        d = hoyISO(p); f = hoyISO(u);
+        d = hoyISO(p); fin = hoyISO(u);
       }
-      $('#aI').value = d; $('#aF').value = f; pintar();
+      $('#aI').value = d; $('#aF').value = fin; pintar();
     };
   });
+
   pintar();
 }
+
+/* Los marcajes del periodo, uno por uno.
+
+   El resumen de arriba dice cuántas tardanzas hubo; esto dice cuáles. Es lo que se
+   mira cuando alguien discute una cifra, así que muestra la hora real, la que le
+   tocaba y qué pasaba ese día —turno programado, permiso, feriado— para que el
+   registro se explique solo. */
+function bloqueMarcajes(desde, hasta, empId){
+  REGS_VISTA = MAR
+    .filter(m=>m.fecha>=desde && m.fecha<=hasta)
+    .filter(m=>!empId || m.empId===empId)
+    .filter(m=>pasaFiltros(m.empId))
+    .sort((a,b)=>b.ts-a.ts);
+
+  const cab = '<h3 style="margin:26px 0 4px;font-size:15px">Marcajes del periodo</h3>'+
+    '<p class="hint" style="margin-bottom:10px">Cada entrada y cada salida registrada, '+
+    'con la hora que le tocaba al lado. <b>'+REGS_VISTA.length+'</b> en el rango elegido.</p>';
+
+  if(!REGS_VISTA.length){
+    return cab+'<div class="tblwrap"><div class="empty">No hay marcajes en el rango seleccionado.</div></div>';
+  }
+
+  return cab+
+    '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th>'+
+      '<th>Le tocaba</th><th>Estado</th><th>Min.</th><th>Situación</th><th>Distancia</th>'+
+      (soloVista()?'':'<th></th>')+
+    '</tr></thead><tbody>'+
+    REGS_VISTA.map((m,idx)=>'<tr>'+
+      '<td class="num">'+fechaCorta(m.fecha)+'</td>'+
+      '<td class="name">'+esc(m.nombre)+'</td>'+
+      '<td>'+esc(m.area)+'</td>'+
+      '<td><span class="tag '+(m.tipo==='ENTRADA'?'tag-ok':'tag-warn')+'">'+m.tipo+'</span></td>'+
+      '<td class="num" style="font-weight:700">'+m.hora+'</td>'+
+      '<td class="num" style="color:var(--muted)">'+horarioDeMarcaje(m)+'</td>'+
+      '<td>'+esc(m.estado)+'</td>'+
+      '<td class="num">'+((m.tardanza||m.anticipada)? (m.tardanza||m.anticipada)+"'" : '—')+'</td>'+
+      '<td style="white-space:normal;min-width:170px;font-size:12.5px">'+situacionDe(m)+'</td>'+
+      '<td class="num">'+(m.dist==null?'—':(m.dist>=1000?(m.dist/1000).toFixed(1)+' km':m.dist+' m'))+'</td>'+
+      (soloVista()?'':'<td><button class="btn btn-sm btn-line" data-delm="'+idx+'" '+
+        'style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>')+
+    '</tr>').join('')+'</tbody></table></div></div>';
+}
+
 
 function analisisHTML(desde, hasta, ahora){
   const gente  = plantilla();
@@ -5620,69 +5716,6 @@ function analisisHTML(desde, hasta, ahora){
       '<b>Inasistencias</b> son los días programados sin marcaje y sin justificación.</p>';
 }
 
-/* ---------- TAB: HISTORIAL ---------- */
-function tabHist(b){
-  const hoy = hoyISO();
-  const ini = load('ca_fIni', hoy.slice(0,8)+'01');
-  b.innerHTML =
-    '<div class="toolbar">'+
-      '<div><label style="font-size:12px;font-weight:650;color:var(--muted);display:block;margin-bottom:4px">Desde</label><input type="date" class="sel" id="fI" value="'+ini+'"></div>'+
-      '<div><label style="font-size:12px;font-weight:650;color:var(--muted);display:block;margin-bottom:4px">Hasta</label><input type="date" class="sel" id="fF" value="'+hoy+'"></div>'+
-      '<div><label style="font-size:12px;font-weight:650;color:var(--muted);display:block;margin-bottom:4px">Colaborador</label><select class="sel" id="fE"><option value="">Todos</option>'+
-        EMP.map(e=>'<option value="'+e.id+'">'+esc(e.nombre)+'</option>').join('')+'</select></div>'+
-      '<div class="grow"></div>'+
-      '<button class="btn btn-sm btn-line" id="hGo" style="align-self:flex-end">Consultar</button>'+
-      '<button class="btn btn-sm btn-line" id="hX" style="align-self:flex-end">Descargar Excel</button>'+
-    '</div><div id="hOut"></div>';
-
-  const go = ()=>{
-    const i=$('#fI').value, f=$('#fF').value, e=$('#fE').value;
-    save('ca_fIni', i);
-    const regs = MAR.filter(m=>m.fecha>=i && m.fecha<=f && (!e || m.empId===e)).sort((a,b)=>b.ts-a.ts);
-    const res  = resumen(i,f,e);
-    $('#hOut').innerHTML =
-      '<div class="kpis">'+
-        kpi('Días con registro', res.dias, '')+
-        kpi('Marcajes', regs.length, '')+
-        kpi('Tardanzas', res.tardanzas, res.tardanzas?'k-warn':'k-ok')+
-        kpi('Minutos perdidos', res.minutos, res.minutos?'k-warn':'k-ok')+
-      '</div>'+
-      (regs.length ?
-      '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Fecha</th><th>Colaborador</th><th>Área</th><th>Tipo</th><th>Hora</th><th>Le tocaba</th><th>Estado</th><th>Min.</th><th>Situación</th><th>Distancia</th>'+(soloVista()?'':'<th></th>')+'</tr></thead><tbody>'+
-      regs.map((m,idx)=>'<tr>'+
-        '<td class="num">'+fechaCorta(m.fecha)+'</td>'+
-        '<td class="name">'+esc(m.nombre)+'</td>'+
-        '<td>'+esc(m.area)+'</td>'+
-        '<td><span class="tag '+(m.tipo==='ENTRADA'?'tag-ok':'tag-warn')+'">'+m.tipo+'</span></td>'+
-        '<td class="num" style="font-weight:700">'+m.hora+'</td>'+
-        '<td class="num" style="color:var(--muted)">'+horarioDeMarcaje(m)+'</td>'+
-        '<td>'+esc(m.estado)+'</td>'+
-        '<td class="num">'+((m.tardanza||m.anticipada)? (m.tardanza||m.anticipada)+"'" : '—')+'</td>'+
-        '<td style="white-space:normal;min-width:170px;font-size:12.5px">'+situacionDe(m)+'</td>'+
-        '<td class="num">'+(m.dist==null?'—':(m.dist>=1000?(m.dist/1000).toFixed(1)+' km':m.dist+' m'))+'</td>'+
-        (soloVista()?'':'<td><button class="btn btn-sm btn-line" data-delm="'+idx+'" style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>')+
-      '</tr>').join('')+'</tbody></table></div></div>'
-      : '<div class="tblwrap"><div class="empty">No hay marcajes en el rango seleccionado.</div></div>')+
-      bloqueAusencias(i, f, e);
-
-    const bNueva = $('#auN'); if(bNueva) bNueva.onclick = ()=>editarAus(null);
-    $$('#hOut [data-ed]').forEach(x=>x.onclick=()=>editarAus(x.dataset.ed));
-    Array.from($('#hOut').querySelectorAll('[data-delm]')).forEach(btn=>{
-      btn.onclick = async ()=>{
-        const m = regs[Number(btn.dataset.delm)];
-        if(!confirm('Se borrará la '+m.tipo.toLowerCase()+' de las '+m.hora+' de '+m.nombre+
-                    ' del '+fechaCorta(m.fecha)+'.\n\nNo se puede deshacer. ¿Continuar?')) return;
-        btn.disabled = true; btn.textContent = 'Borrando…';
-        if(await borrarMarcaje(m)) toast('Marcaje borrado');
-        go();
-      };
-    });
-  };
-  $('#hGo').onclick = go;
-  $('#hX').onclick  = ()=>exportar($('#fI').value, $('#fF').value, 'Asistencia_'+$('#fI').value+'_a_'+$('#fF').value);
-  go();
-}
 
 /* La hora que le correspondía a ESE marcaje: entrada o salida según el tipo,
    y según el turno que tenga esa persona en esa fecha. */
@@ -5734,10 +5767,14 @@ function horarioDeMarcaje(m){
    copia se desincroniza en cuanto alguien cambia algo en un solo sitio. */
 function bloqueAusencias(desde, hasta, empId){
   const cruza = (d1,h1) => d1 <= hasta && h1 >= desde;
-  const aus = AUS.filter(a=>cruza(a.desde, a.hasta) && (!empId || a.empId===empId))
+  // Los mismos filtros que el resto de la pestaña. Sin esto, al filtrar por un área
+  // el resumen y los marcajes mostraban ventas y aquí abajo seguía saliendo todo el
+  // mundo, que es justo lo que hacía que las cifras no cuadraran entre pestañas.
+  const aus = AUS.filter(a=>cruza(a.desde, a.hasta) && (!empId || a.empId===empId) &&
+                            pasaFiltros(a.empId))
                  .sort((a,b)=>b.desde.localeCompare(a.desde));
   const per = PERMISOS.filter(p=>p.estado==='APROBADO' && cruza(p.fecha, p.fecha) &&
-                                 (!empId || p.empId===empId))
+                                 (!empId || p.empId===empId) && pasaFiltros(p.empId))
                       .sort((a,b)=>b.fecha.localeCompare(a.fecha));
 
   const nom = id => { const e = EMP.find(x=>x.id===id); return e ? e.nombre : '(dado de baja)'; };
@@ -5785,12 +5822,6 @@ function bloqueAusencias(desde, hasta, empId){
       : '<div class="tblwrap"><div class="empty">Sin ausencias ni permisos en el rango.</div></div>');
 }
 
-function resumen(i,f,empId){
-  const regs = MAR.filter(m=>m.fecha>=i && m.fecha<=f && (!empId||m.empId===empId));
-  const dias = new Set(regs.map(m=>m.fecha)).size;
-  const ent  = regs.filter(m=>m.tipo==='ENTRADA');
-  return {dias, tardanzas: ent.filter(m=>m.tardanza>0).length, minutos: ent.reduce((s,m)=>s+(m.tardanza||0),0)};
-}
 
 /* ---------- TAB: PROGRAMACIÓN ----------
    Una cuadrícula de la semana: filas las personas, columnas los días. Sirve para
@@ -6736,46 +6767,6 @@ async function resolverPermiso(id, decision){
 /* ---------- TAB: AUSENCIAS Y COMISIONES DE SERVICIO ---------- */
 function diasEntre(d,h){ return Math.round((new Date(h+'T12:00:00')-new Date(d+'T12:00:00'))/86400000)+1; }
 
-function tabAus(b){
-  const hoy = hoyISO();
-  const vigentes = AUS.filter(a=>a.hasta>=hoy).sort((a,b)=>a.desde.localeCompare(b.desde));
-  const pasadas  = AUS.filter(a=>a.hasta< hoy).sort((a,b)=>b.desde.localeCompare(a.desde));
-  const lista = vigentes.concat(pasadas);
-
-  b.innerHTML =
-    '<div class="alert alert-ok" style="margin-bottom:16px">'+
-      'Las <b>comisiones de servicio</b> cuentan como día trabajado — la persona está laborando fuera de la oficina. '+
-      'Vacaciones, descanso médico, permiso y licencia <b>salen del conteo</b>: no suman como asistencia ni como falta.'+
-    '</div>'+
-    (soloVista()?'':'<div class="toolbar"><div class="grow"></div>'+
-      '<button class="btn btn-sm" id="auN">Registrar ausencia</button></div>')+
-    (lista.length ?
-    '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
-      '<th>Colaborador</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th>Días</th>'+
-      '<th>Lugar</th><th>Actividad o motivo</th><th>Autorizado por</th><th>Estado</th><th></th>'+
-    '</tr></thead><tbody>'+
-    lista.map(a=>{
-      const e = EMP.find(x=>x.id===a.empId);
-      const t = tipoAus(a.tipo);
-      const viga = a.desde<=hoy && a.hasta>=hoy;
-      return '<tr>'+
-        '<td class="name">'+esc(e?e.nombre:'(colaborador eliminado)')+'</td>'+
-        '<td><span class="tag '+(t.cuenta==='ASISTIDO'?'tag-ok':'tag-warn')+'">'+esc(t.nombre)+'</span></td>'+
-        '<td class="num">'+fechaCorta(a.desde)+'</td>'+
-        '<td class="num">'+fechaCorta(a.hasta)+'</td>'+
-        '<td class="num">'+diasEntre(a.desde,a.hasta)+'</td>'+
-        '<td>'+esc(a.lugar||'—')+'</td>'+
-        '<td style="white-space:normal;min-width:180px">'+esc(a.actividad||a.motivo||'—')+'</td>'+
-        '<td>'+(a.autorizadoPor?esc(a.autorizadoPor):'<span class="tag tag-warn" style="font-size:9px">SIN REGISTRAR</span>')+'</td>'+
-        '<td>'+(viga?'<span class="tag tag-ok">VIGENTE</span>':a.desde>hoy?'<span class="tag tag-warn">PROGRAMADA</span>':'<span class="tag" style="background:var(--surface-2);color:var(--muted)">CERRADA</span>')+'</td>'+
-        (soloVista()?'<td></td>':'<td><button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button></td>')+
-      '</tr>';
-    }).join('')+'</tbody></table></div></div>'
-    : '<div class="tblwrap"><div class="empty">No hay ausencias registradas.<br>Usa <b>Registrar ausencia</b> para cargar vacaciones, descansos médicos o comisiones de servicio.</div></div>');
-
-  const bAus = $('#auN'); if(bAus) bAus.onclick = ()=>editarAus(null);
-  b.querySelectorAll('[data-ed]').forEach(x=>x.onclick=()=>editarAus(x.dataset.ed));
-}
 
 function editarAus(id){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
@@ -7326,6 +7317,18 @@ function editarEmp(id){
 }
 
 /* ---------- TAB: CONFIGURACIÓN ---------- */
+/* Configuración y Código QR eran dos pestañas, y el QR no es una sección aparte:
+   es una cosa que se genera a partir de la configuración —la dirección de la app y
+   la del servidor— y se imprime una vez. Tenerlo suelto obligaba a saltar entre dos
+   pantallas para comprobar que el enlace del cartel apuntaba a donde debía. */
+function tabConfiguracion(b){
+  b.innerHTML = '<div id="cfgBloque"></div>'+
+    '<div style="margin:30px 0 22px;border-top:1px solid var(--line)"></div>'+
+    '<div id="qrBloque"></div>';
+  tabCfg($('#cfgBloque'));
+  tabQr($('#qrBloque'));
+}
+
 function tabCfg(b){
   b.innerHTML = avisoUbicacion() +
   (CFG.modoRecepcion
