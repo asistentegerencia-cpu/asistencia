@@ -4683,6 +4683,7 @@ function pedirPass(){
 }
 
 function abrirAdmin(){
+  HOY_VER = '';                     // el tablero siempre abre en el día de hoy
   $('#appMarcaje').classList.add('hidden');
   $('#appAdmin').classList.remove('hidden');
   $('#adTitle').textContent = CFG.empresa + ' · Asistencia';
@@ -5089,7 +5090,9 @@ function avisoPermisosPendientes(){
 }
 
 function tabHoy(b){
-  const f = hoyISO(), ahora = new Date();
+  const hoy = hoyISO(), ahora = new Date();
+  const f = HOY_VER || hoy;
+  const esHoy = (f === hoy);
   const filas = plantilla().map(e=>Object.assign({e}, estadoDia(e, f, ahora), {sal:salidaDe(e, f, ahora)}));
 
   const programados = filas.filter(r=>r.clase!=='NO_LABORABLE' && r.clase!=='JUSTIFICADA').length;
@@ -5105,7 +5108,16 @@ function tabHoy(b){
   const justif    = filas.filter(r=>r.clase==='JUSTIFICADA');
   const fer       = esFeriado(f);
 
-  b.innerHTML = avisoPermisosPendientes() + avisoAlertas() + avisoDemo() + avisoAnomalias(hoyISO(),hoyISO()) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  // Mirando otro día se avisa fuerte y con salida a la vista: confundir el tablero
+  // de un martes con el de hoy es un error caro, y silencioso.
+  const avisoOtroDia = esHoy ? '' :
+    '<div class="alert alert-warn" style="margin-bottom:16px;display:flex;align-items:center;'+
+      'gap:12px;flex-wrap:wrap">'+
+      '<span>📅 Estás viendo el <b>'+esc(fechaLarga(new Date(f+'T12:00:00')))+'</b>, no hoy.</span>'+
+      '<button class="btn btn-sm" id="hVolver">Volver a hoy</button>'+
+    '</div>';
+
+  b.innerHTML = avisoOtroDia + avisoPermisosPendientes() + avisoAlertas() + avisoDemo() + avisoAnomalias(f,f) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     '<div class="kpis">'+
       kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
@@ -5114,11 +5126,18 @@ function tabHoy(b){
       kpi('Tardanzas del día', tardanzas, tardanzas?'k-warn':'k-ok')+
       kpi('Minutos perdidos', minTot, minTot?'k-warn':'k-ok')+
     '</div>'+
-    '<div class="toolbar">'+ htmlFiltros('h') +'<div class="grow"></div>'+
+    '<div class="toolbar">'+
+      '<div>'+lbl('Día')+'<input type="date" class="sel" id="hDia" value="'+f+'" max="'+hoy+'"></div>'+
+      '<div style="align-self:flex-end;display:flex;gap:8px">'+
+        '<button class="btn btn-sm btn-line" id="hAnt">‹ Anterior</button>'+
+        '<button class="btn btn-sm btn-line" id="hSig"'+(esHoy?' disabled':'')+'>Siguiente ›</button>'+
+        (esHoy?'':'<button class="btn btn-sm btn-line" id="hHoy">Hoy</button>')+
+      '</div>'+
+      htmlFiltros('h') +'<div class="grow"></div>'+
       (soloVista()?'':'<button class="btn btn-sm" id="mHoy" style="align-self:flex-end">Registrar marcaje</button>')+
       '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
-    bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes)+
+    bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy)+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
       '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th>'+
       '<th>Entrada</th><th>Salida</th><th>Horas trabajadas</th>'+
@@ -5188,7 +5207,7 @@ function tabHoy(b){
 
   wireFiltros('h', ()=>renderTab());
   Array.from(document.querySelectorAll('[data-corr]')).forEach(btn=>{
-    btn.onclick = ()=>corregirMarcajes(btn.dataset.corr, hoyISO());
+    btn.onclick = ()=>corregirMarcajes(btn.dataset.corr, f);
   });
   // "Actualizar" tiene que traer lo del servidor: es lo que uno espera al tocarlo
   $('#rHoy').onclick = async ()=>{
@@ -5205,10 +5224,26 @@ function tabHoy(b){
   };
   $('#xHoy').onclick = ()=>exportar(f,f,'Asistencia_'+f);
   const bMan = $('#mHoy'); if(bMan) bMan.onclick = ()=>registroManual(f);
+
+  // --- moverse de día ---
+  const irA = d=>{
+    const iso = hoyISO(d);
+    // Adelante no se pasa de hoy: la asistencia de un día que no ha ocurrido no
+    // existe, y el tablero solo mostraría guiones.
+    HOY_VER = (iso >= hoy) ? '' : iso;
+    renderTab();
+  };
+  $('#hDia').onchange = ()=>{ const v = $('#hDia').value; if(v) irA(new Date(v+'T12:00:00')); };
+  $('#hAnt').onclick = ()=>{ const d = new Date(f+'T12:00:00'); d.setDate(d.getDate()-1); irA(d); };
+  const bSig = $('#hSig');
+  if(bSig && !bSig.disabled) bSig.onclick = ()=>{ const d = new Date(f+'T12:00:00'); d.setDate(d.getDate()+1); irA(d); };
+  const bHoy = $('#hHoy');   if(bHoy)   bHoy.onclick   = ()=>{ HOY_VER=''; renderTab(); };
+  const bVol = $('#hVolver'); if(bVol)  bVol.onclick   = ()=>{ HOY_VER=''; renderTab(); };
 }
 
 /* Estado de la plantilla: quién está en teletrabajo y quién en comisión de servicio */
-function bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes){
+function bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy){
+  const cuando = esHoy === false ? 'ese día' : 'hoy';
   if(!remotos.length && !comisiones.length && !justif.length && !pendientes) return '';
   const card = (titulo, items, vacio)=>
     '<div class="cfg" style="padding:16px 18px">'+
@@ -5242,8 +5277,8 @@ function bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes){
 
   return '<div class="cfgrid" style="margin-bottom:18px">'+
     card('Teletrabajo · '+remotos.length, remHtml, 'Nadie en teletrabajo.')+
-    card('Comisión de servicio · '+comisiones.length, comHtml, 'Nadie en comisión hoy.')+
-    card('Ausencias justificadas · '+justif.length, jusHtml, 'Ninguna registrada para hoy.')+
+    card('Comisión de servicio · '+comisiones.length, comHtml, 'Nadie en comisión '+cuando+'.')+
+    card('Ausencias justificadas · '+justif.length, jusHtml, 'Ninguna registrada para '+cuando+'.')+
   '</div>';
 }
 
@@ -5428,6 +5463,13 @@ function reporteColaborador(emp, desde, hasta, ahora){
 }
 
 let REGS_VISTA = [];     // los marcajes que se están mostrando, para poder borrarlos
+
+/* El día que muestra el tablero. Vacío significa hoy, y así arranca siempre.
+
+   A propósito no se guarda: el tablero es la foto de la mañana, y si recordara el
+   último día consultado alguien entraría el lunes a ver el viernes sin darse cuenta.
+   Se puede mover a otro día para revisar, pero al volver a entrar es hoy otra vez. */
+let HOY_VER = '';
 
 /* ---- Reportes: análisis, marcajes y ausencias bajo el mismo filtro ----
 
