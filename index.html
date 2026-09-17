@@ -3255,16 +3255,37 @@ async function sincronizarMarcajes(desde, hasta){
 
    Lo que sigue en la cola no se toca: eso todavía no llegó al servidor y borrarlo
    sería perder un marcaje de verdad. */
-async function sincronizarMios(emp, desde, hasta){
+/* Cuándo se le preguntó por última vez al servidor por cada persona.
+
+   Esto existe porque la pantalla de marcaje se repinta muchas veces —al abrir, al
+   volver de pedir un permiso, al marcar, y otra vez seis segundos después— y cada
+   repintado preguntaba de nuevo. Un pedido al servidor cuesta unos cuatro segundos
+   medidos, de los cuales casi dos son solo llegar a Google y volver. Así que una
+   sola marcación gastaba tres o cuatro viajes: entre doce y dieciséis segundos de
+   celular trabajando, con la señal de la oficina y un Redmi de gama baja.
+
+   Se pregunta una vez y se reutiliza durante cuarenta y cinco segundos. Lo que se
+   busca es enterarse de si administración le borró un marcaje o le publicó un
+   horario, y eso no cambia de un repintado al siguiente. */
+let MIOS_ULT = {};
+const MIOS_ESPERA = 45000;
+
+async function sincronizarMios(emp, desde, hasta, forzar){
   if(!hayServidor() || !emp || !emp.dni) return false;
   desde = desde || hoyISO();
   hasta = hasta || hoyISO();
 
+  const ahora = Date.now();
+  if(!forzar && MIOS_ULT[emp.id] && (ahora - MIOS_ULT[emp.id]) < MIOS_ESPERA) return false;
+  // Se anota antes de pedir para que dos repintados seguidos no salgan los dos a
+  // la vez; si el pedido falla se borra la marca y el siguiente puede reintentar.
+  MIOS_ULT[emp.id] = ahora;
+
   let r;
   try{
     r = await api('mios', {ident:emp.dni, empId:emp.id, desde:desde, hasta:hasta}, {timeout:15000});
-  }catch(e){ return false; }
-  if(!r || !r.ok || !Array.isArray(r.marcajes)) return false;
+  }catch(e){ MIOS_ULT[emp.id] = 0; return false; }
+  if(!r || !r.ok || !Array.isArray(r.marcajes)){ MIOS_ULT[emp.id] = 0; return false; }
 
   // Su programación y sus permisos. Sin esto el celular no sabe que hoy trabaja
   // desde casa y le exige ubicación aunque el servidor sí fuera a aceptarlo.
