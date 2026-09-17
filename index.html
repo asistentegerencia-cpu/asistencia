@@ -5462,7 +5462,8 @@ function reporteColaborador(emp, desde, hasta, ahora){
       : '<div class="tblwrap"><div class="empty">No hay días en el rango elegido.</div></div>');
 }
 
-let REGS_VISTA = [];     // los marcajes que se están mostrando, para poder borrarlos
+let REGS_VISTA = [];     // los marcajes del periodo, completos, para poder borrarlos
+let REGS_TOPE = 100;     // cuántos se dibujan; el resto llega con el botón de abajo
 
 /* El día que muestra el tablero. Vacío significa hoy, y así arranca siempre.
 
@@ -5531,6 +5532,11 @@ function tabReportes(b){
     const det = $('#anD');
     if(det) det.onchange = ()=>{ ANA_DET = det.value; pintar(); };
 
+    const bMas = $('#regsMas');
+    if(bMas) bMas.onclick = ()=>{ REGS_TOPE += 300; pintar(); };
+    const bTodo = $('#regsTodo');
+    if(bTodo) bTodo.onclick = ()=>{ REGS_TOPE = 1e9; pintar(); };
+
     const bNueva = $('#auN'); if(bNueva) bNueva.onclick = ()=>editarAus(null);
     $$('#aOut [data-ed]').forEach(x=>x.onclick=()=>editarAus(x.dataset.ed));
     Array.from(b.querySelectorAll('[data-delm]')).forEach(btn=>{
@@ -5546,10 +5552,13 @@ function tabReportes(b){
     });
   };
 
-  wireFiltros('a', pintar);
-  $('#aE').onchange = ()=>{ ANA_EMP = $('#aE').value; pintar(); };
-  $('#aI').onchange = pintar;
-  $('#aF').onchange = pintar;
+  wireFiltros('a', ()=>{ REGS_TOPE = 100; pintar(); });
+  // Cualquier cambio de filtro reinicia el tope: un rango nuevo no debe heredar la
+  // tabla ampliada del anterior, o la página vuelve a arrancar pesada.
+  const reiniciar = ()=>{ REGS_TOPE = 100; pintar(); };
+  $('#aE').onchange = ()=>{ ANA_EMP = $('#aE').value; reiniciar(); };
+  $('#aI').onchange = reiniciar;
+  $('#aF').onchange = reiniciar;
   $('#aX').onclick  = ()=>exportar(ANA.desde, ANA.hasta, 'Asistencia_'+ANA.desde+'_a_'+ANA.hasta);
 
   b.querySelectorAll('[data-rango]').forEach(btn=>{
@@ -5567,7 +5576,7 @@ function tabReportes(b){
         const u = new Date(h.getFullYear(), h.getMonth(), 0);
         d = hoyISO(p); fin = hoyISO(u);
       }
-      $('#aI').value = d; $('#aF').value = fin; pintar();
+      $('#aI').value = d; $('#aF').value = fin; REGS_TOPE = 100; pintar();
     };
   });
 
@@ -5587,13 +5596,34 @@ function bloqueMarcajes(desde, hasta, empId){
     .filter(m=>pasaFiltros(m.empId))
     .sort((a,b)=>b.ts-a.ts);
 
+  /* Se dibujan los más recientes, no todos.
+
+     Dibujarlos todos costaba 440 filas y casi cinco mil celdas para diecisiete días
+     —y crece unas cincuenta filas por día—. En una computadora no se nota; en un
+     Redmi de gama baja la pestaña tarda en abrir y el desplazamiento se traba. Los
+     números de arriba sí se calculan sobre el periodo completo, así que ninguna
+     cifra depende de cuántas filas se estén viendo. Y el Excel siempre lleva todo. */
+  const total = REGS_VISTA.length;
+  const muestra = REGS_VISTA.slice(0, REGS_TOPE);
+  const faltan = total - muestra.length;
+
   const cab = '<h3 style="margin:26px 0 4px;font-size:15px">Marcajes del periodo</h3>'+
     '<p class="hint" style="margin-bottom:10px">Cada entrada y cada salida registrada, '+
-    'con la hora que le tocaba al lado. <b>'+REGS_VISTA.length+'</b> en el rango elegido.</p>';
+    'con la hora que le tocaba al lado. <b>'+total+'</b> en el rango elegido'+
+    (faltan ? '; se muestran los '+muestra.length+' más recientes' : '')+'.</p>';
 
-  if(!REGS_VISTA.length){
+  if(!total){
     return cab+'<div class="tblwrap"><div class="empty">No hay marcajes en el rango seleccionado.</div></div>';
   }
+
+  const pie = faltan
+    ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">'+
+        '<button class="btn btn-sm btn-line" id="regsMas">Mostrar 300 más</button>'+
+        '<button class="btn btn-sm btn-line" id="regsTodo">Mostrar todos ('+total+')</button>'+
+        '<span class="hint" style="margin:0">Quedan '+faltan+' por mostrar. '+
+        'El Excel los lleva todos sin necesidad de esto.</span>'+
+      '</div>'
+    : '';
 
   return cab+
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
@@ -5601,7 +5631,7 @@ function bloqueMarcajes(desde, hasta, empId){
       '<th>Le tocaba</th><th>Estado</th><th>Min.</th><th>Situación</th><th>Distancia</th>'+
       (soloVista()?'':'<th></th>')+
     '</tr></thead><tbody>'+
-    REGS_VISTA.map((m,idx)=>'<tr>'+
+    muestra.map((m,idx)=>'<tr>'+
       '<td class="num">'+fechaCorta(m.fecha)+'</td>'+
       '<td class="name">'+esc(m.nombre)+'</td>'+
       '<td>'+esc(m.area)+'</td>'+
@@ -5614,7 +5644,7 @@ function bloqueMarcajes(desde, hasta, empId){
       '<td class="num">'+(m.dist==null?'—':(m.dist>=1000?(m.dist/1000).toFixed(1)+' km':m.dist+' m'))+'</td>'+
       (soloVista()?'':'<td><button class="btn btn-sm btn-line" data-delm="'+idx+'" '+
         'style="color:var(--danger);border-color:var(--danger)">Borrar</button></td>')+
-    '</tr>').join('')+'</tbody></table></div></div>';
+    '</tr>').join('')+'</tbody></table></div></div>'+ pie;
 }
 
 
