@@ -3806,8 +3806,13 @@ function fueraRelevante(m){
   return debiaEstarEnOficina(EMP.find(e=>e.id===m.empId), m.fecha, m.hora);
 }
 
-/* ¿Puede marcar con el estado GPS actual? Los exentos nunca se bloquean. */
-function gpsPermite(){
+/* ¿Puede marcar con el estado GPS actual? Los exentos nunca se bloquean.
+   La SALIDA se permite siempre, aunque esté lejos o sin GPS: quien ya se fue y
+   olvidó marcar no tenía cómo hacerlo, y al día siguiente la declaraba de memoria.
+   Es mejor una salida real marcada desde la calle —con su distancia a la vista—
+   que una hora inventada. Queda señalada como "fuera de zona" para revisión. */
+function gpsPermite(tipo){
+  if(tipo === 'SALIDA') return GEO.estado !== 'pendiente';
   const e = DEV ? EMP.find(x=>x.id===DEV.empId) : null;
   // Teletrabajo y exentos marcan sin validación de ubicación, sea cual sea el modo
   if(e && e.modalidad !== 'PRESENCIAL') return true;
@@ -4267,7 +4272,7 @@ function pintarBoton(emp){
 
   if(GEO.estado==='pendiente'){ btn.disabled=true; hint.textContent='Esperando ubicación…'; return; }
 
-  if(!gpsPermite()){
+  if(!gpsPermite(btn.dataset.tipo)){
     btn.disabled = true;
     if(GEO.estado==='error'){
       // el problema es el permiso o la señal, no la distancia
@@ -4295,7 +4300,12 @@ function pintarBoton(emp){
   }
 
   btn.disabled = false;
-  if(GEO.estado==='fuera' && CFG.gpsModo==='advertir'){
+  if(esSalida && CFG.gpsModo!=='off' && (GEO.estado==='fuera' || GEO.estado==='error') &&
+     debiaEstarEnOficina(emp, hoyISO(), hhmm())){
+    hint.textContent = 'Se registrará como salida fuera de la oficina';
+    al.innerHTML = '<div class="alert alert-warn">'+esc(GEO.msg)+'. Puedes marcar tu salida igual: '+
+                   'queda registrada con tu ubicación para que Administración la vea.</div>';
+  } else if(GEO.estado==='fuera' && CFG.gpsModo==='advertir'){
     hint.textContent = 'Se registrará como marcaje fuera de zona';
     al.innerHTML = '<div class="alert alert-warn">'+esc(GEO.msg)+'. Tu marcaje quedará señalado para revisión.</div>';
   } else if(horario){
@@ -4304,7 +4314,7 @@ function pintarBoton(emp){
     if(esSalida && toMin(horario.out) > toMin(horario.in) && falta <= 15){
       al.innerHTML = '<div class="alert alert-warn"><b>'+
         (falta > 0 ? 'Tu jornada termina a las '+esc(horario.out)+'.' : 'Tu horario terminó a las '+esc(horario.out)+'.')+
-        '</b> Marca tu salida antes de irte: fuera de la oficina ya no podrás.</div>';
+        '</b> Marca tu salida antes de irte, así tu hora queda exacta.</div>';
     }
   } else {
     hint.textContent = 'Toca para registrar';
@@ -4544,7 +4554,7 @@ function confirmarEntradaTardia(emp, fecha, hora){
 async function marcar(){
   const emp = EMP.find(e=>e.id===DEV.empId);
   if(!emp) return;
-  if(!gpsPermite()){ toast('No se puede marcar fuera de la oficina'); return; }
+  if(!gpsPermite($('#btnMark').dataset.tipo || 'ENTRADA')){ toast('No se puede marcar fuera de la oficina'); return; }
 
   const now = new Date();
   let fecha = hoyISO(now), hora = hhmm(now);
@@ -4649,6 +4659,14 @@ async function marcar(){
           $('#mkAlert').innerHTML = '<div class="alert alert-bad" style="text-align:left">'+
             '<b>No puedes marcar desde este celular.</b><br>'+
             esc(r.error||'')+'</div>';
+          return;
+        }
+        if(tipo==='SALIDA' && (r.motivo==='fuera_zona' || r.motivo==='sin_ubicacion')){
+          // El servidor todavía no acepta salidas fuera de la oficina: se explica
+          // en lugar de un aviso que se va, porque la persona no puede hacer nada más.
+          $('#mkAlert').innerHTML = '<div class="alert alert-bad" style="text-align:left">'+
+            '<b>El servidor no aceptó tu salida fuera de la oficina.</b><br>'+
+            'Mañana, al abrir la app, podrás indicar tu hora de salida.</div>';
           return;
         }
         toast(r.error || 'El servidor rechazó el marcaje');
