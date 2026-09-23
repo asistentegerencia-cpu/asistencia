@@ -280,6 +280,7 @@ tr:hover td{background:#FAFCFB}
         <div class="msg" id="okMsg">Entrada registrada</div>
         <div class="sub" id="okSub">—</div>
       </div>
+      <div id="okExtra"></div>
       <div class="note"><a href="#" id="lnkBack">Volver</a></div>
     </div>
   </div>
@@ -2893,6 +2894,9 @@ const saveCola= ()=>save(K.cola,COLA);
   // los domingos es una decisión, no algo que deba pasar por una actualización.
   (CFG.turnos||[]).forEach(t=>{
     if(t.trabajaDom === undefined){ t.trabajaDom = false; ctocado = true; }
+    // Configuraciones guardadas con el error anterior: '0' / '1' como texto
+    if(typeof t.trabajaDom === 'string'){ t.trabajaDom = t.trabajaDom === '1'; ctocado = true; }
+    if(typeof t.trabajaSab === 'string'){ t.trabajaSab = t.trabajaSab === '1' || t.trabajaSab === 'true'; ctocado = true; }
     if(!t.domEntrada){ t.domEntrada = t.sabEntrada || '10:00'; ctocado = true; }
     if(!t.domSalida){  t.domSalida  = t.sabSalida  || '14:00'; ctocado = true; }
   });
@@ -3102,6 +3106,8 @@ function idDispositivo(){
 /* Reintenta los marcajes que quedaron en cola. Se llama al arrancar, al volver
    la conexión, cada dos minutos y al abrir el panel. */
 let colaEnCurso = false;
+const RECHAZOS_DEFINITIVOS = ['no_encontrado','inactivo','no_autorizado','otro_dispositivo',
+                              'sin_dispositivo','sin_ubicacion','fuera_zona','sin_entrada'];
 async function enviarCola(){
   if(colaEnCurso || !hayServidor() || !COLA.length) return;
   colaEnCurso = true;
@@ -3122,8 +3128,10 @@ async function enviarCola(){
           COLA = COLA.filter(x=>x.cid !== item.cid);
           saveCola();
           if(r.marcaje) integrarMarcaje(r.marcaje);
-        }else if(r && !r.ok && r.motivo==='no_encontrado'){
-          // El servidor no reconoce a esa persona: sacarlo de la cola y dejar rastro
+        }else if(r && !r.ok && RECHAZOS_DEFINITIVOS.indexOf(r.motivo) >= 0){
+          // El servidor lo rechazó por una regla, no por falta de red: reintentarlo
+          // no cambia nada y se quedaba atascado para siempre. Sale de la cola y
+          // queda rastro en el registro de actividad.
           COLA = COLA.filter(x=>x.cid !== item.cid); saveCola();
           LOG.unshift({ts:Date.now(), tipo:'COLA_RECHAZADA', valor:(item.ident||'')+' · '+(r.error||'')});
           LOG = LOG.slice(0,300); save(K.log,LOG);
@@ -3451,6 +3459,10 @@ function wireCalendario(cls, clave, nom){
   });
 }
 
+/* Sí/no de la configuración. La hoja puede traerlo como texto ('1', '0', 'true'),
+   y el texto '0' contaba como sí. */
+function siNo(v){ return v === true || v === '1' || v === 1 || v === 'true' || v === 'SI'; }
+
 /* Horario que aplica a un empleado en una fecha dada. null = no labora. */
 function horarioDe(emp, fechaISO){
   // Lo programado a mano manda sobre todo, incluidos feriados y domingos: si
@@ -3465,16 +3477,39 @@ function horarioDe(emp, fechaISO){
   // Domingo y sábado funcionan igual: primero el calendario decide si la empresa
   // abre ese día concreto, y después el turno decide a quién le toca y con qué
   // horario. Los domingos la tienda atiende citas, pero solo para comercial.
-  if(d===0) return (domingoTrabajado(fechaISO) && t.trabajaDom) ? {in:t.domEntrada, out:t.domSalida} : null;
-  if(d===6) return (sabadoTrabajado(fechaISO) && t.trabajaSab) ? {in:t.sabEntrada, out:t.sabSalida} : null;
+  if(d===0) return (domingoTrabajado(fechaISO) && siNo(t.trabajaDom)) ? {in:t.domEntrada, out:t.domSalida} : null;
+  if(d===6) return (sabadoTrabajado(fechaISO) && siNo(t.trabajaSab)) ? {in:t.sabEntrada, out:t.sabSalida} : null;
   return {in:t.entrada, out:t.salida};
 }
 
-/* Evalúa una entrada: puntual / tolerancia / tardanza / tardanza grave */
-function evaluarEntrada(emp, fechaISO, horaHHMM){
+/* Hora de inicio contra la que se mide una entrada.
+   Con un solo tramo es la entrada del día. Con varios (de 6 a 9 y de 19 a 23:59)
+   se mide contra el primer tramo que todavía no terminó: quien entra a las 18:57
+   al tramo de las 19:00 llega puntual, no 777 minutos tarde por el de las 6. */
+function inicioParaEntrada(h, horaHHMM){
+  if(!h.tramos || h.tramos.length < 2) return h.in;
+  const m = toMin(horaHHMM);
+  const orden = h.tramos.slice().sort((a,b)=>toMin(a.entrada)-toMin(b.entrada));
+  const vigente = orden.find(a=>toMin(a.salida) > m);
+  return (vigente || orden[orden.length-1]).entrada;
+}
+
+/* Minutos de diferencia entre la hora marcada y la de inicio.
+   Un turno que empieza pasada la medianoche (00:00, 01:00) se marca muchas veces
+   unos minutos antes, a las 23:58 del día anterior. Contado en línea recta eso daba
+   1.438 minutos de tardanza; en realidad llegó 2 minutos antes. */
+function difEntrada(horaHHMM, inicio, diaAnterior){
+  let diff = toMin(horaHHMM) - toMin(inicio);
+  if(diaAnterior || (toMin(inicio) <= 120 && toMin(horaHHMM) >= 21*60)) diff -= 1440;
+  return diff;
+}
+
+/* Evalúa una entrada: puntual / tolerancia / tardanza / tardanza grave.
+   diaAnterior: la entrada se marcó la noche previa para un turno de madrugada. */
+function evaluarEntrada(emp, fechaISO, horaHHMM, diaAnterior){
   const h = horarioDe(emp, fechaISO);
   if(!h) return {estado:'FUERA DE HORARIO', tardanza:0, clase:'tag-ok'};
-  const diff = toMin(horaHHMM) - toMin(h.in);
+  const diff = difEntrada(horaHHMM, inicioParaEntrada(h, horaHHMM), diaAnterior);
   if(diff <= 0)                return {estado:'PUNTUAL',         tardanza:0,    clase:'tag-ok'};
   if(diff <= CFG.tolerancia)   return {estado:'EN TOLERANCIA',   tardanza:0,    clase:'tag-ok'};
   if(diff <= CFG.umbralGrave)  return {estado:'TARDANZA',        tardanza:diff, clase:'tag-warn'};
@@ -3494,10 +3529,38 @@ function marcajesDe(empId, fechaISO){
 }
 function jornadaDe(empId, fechaISO){
   const ms = marcajesDe(empId, fechaISO);
+  // Una entrada de la noche que en realidad abre el turno de madrugada del día
+  // siguiente no es de este día: se la lleva el día al que pertenece.
+  const sig = entradaNocturna(empId, ms, diaISO(fechaISO, 1));
+  const propias = sig ? ms.filter(m=>m !== sig) : ms;
+  let entrada = propias.find(m=>m.tipo==='ENTRADA') || null;
+  if(!entrada) entrada = entradaNocturna(empId, marcajesDe(empId, diaISO(fechaISO, -1)), fechaISO);
   return {
-    entrada: ms.find(m=>m.tipo==='ENTRADA') || null,
-    salida:  ms.filter(m=>m.tipo==='SALIDA').pop() || null
+    entrada,
+    salida: propias.filter(m=>m.tipo==='SALIDA').pop() || null
   };
+}
+
+/* Minuto de la entrada medido desde la medianoche de fechaISO. Si se marcó la
+   noche anterior (turno de madrugada) queda en negativo: 23:58 del día previo = -2. */
+function minEntrada(j, fechaISO){
+  return toMin(j.entrada.hora) - (j.entrada.fecha && j.entrada.fecha < fechaISO ? 1440 : 0);
+}
+
+function diaISO(fechaISO, dias){
+  return hoyISO(new Date(new Date(fechaISO+'T12:00:00').getTime() + dias*86400000));
+}
+
+/* Turno de madrugada (empieza entre 00:00 y 02:00) marcado la noche anterior,
+   desde las 21:00. ms son los marcajes de la noche anterior; devuelve la entrada
+   que en realidad abre el turno de fechaTurno, o null. */
+function entradaNocturna(empId, ms, fechaTurno){
+  const ent = ms.filter(m=>m.tipo==='ENTRADA' && toMin(m.hora) >= 21*60).pop();
+  if(!ent) return null;
+  if(ms.some(m=>m.tipo==='SALIDA' && m.ts > ent.ts)) return null;   // la cerró esa misma noche
+  const emp = EMP.find(e=>e.id===empId);
+  const h = emp && horarioDe(emp, fechaTurno);
+  return (h && toMin(h.in) <= 120) ? ent : null;
 }
 
 /* ---------- 3b. ESTADO CONSOLIDADO DEL DÍA ----------
@@ -3555,7 +3618,7 @@ function estadoDia(emp, fechaISO, ahora){
   }
 
   if(j.entrada){
-    const ev = evaluarEntrada(emp, fechaISO, j.entrada.hora);
+    const ev = evaluarEntrada(emp, fechaISO, j.entrada.hora, j.entrada.fecha < fechaISO);
     // La hora real no se toca; lo que cambia es que esos minutos dejen de contar.
     // Se decidió así: el reporte no debe castigar una llegada tarde autorizada.
     const permTar = ev.tardanza > 0 ? permisoAprobado(emp.id, fechaISO, 'TARDANZA') : null;
@@ -3622,7 +3685,7 @@ function salidaDe(emp, fechaISO, ahora){
 function jornadaTrabajada(d, fechaISO, ahora){
   const j = d && d.j;
   if(!j || !j.entrada) return {min:0, enCurso:false, hay:false};
-  const ent = toMin(j.entrada.hora);
+  const ent = minEntrada(j, fechaISO);
   if(j.salida){
     const m = toMin(j.salida.hora) - ent;
     return {min: m > 0 ? m : 0, enCurso:false, hay: m > 0};
@@ -3637,7 +3700,7 @@ function acumuladosDe(emp, desde, hasta, ahora){
   ahora = ahora || new Date();
   const hoy = hoyISO(ahora);
   const a = {programados:0, asistidos:0, conEntrada:0, faltas:0, justificadas:0, comisiones:0,
-             puntuales:0, tardanzas:0, minutos:0, sinSalida:0, noLaborables:0, sinSistema:0,
+             puntuales:0, tardanzas:0, minutos:0, sinSalida:0, declaradas:0, noLaborables:0, sinSistema:0,
              trabajados:0, diasConJornada:0};
 
   rangoFechas(desde, hasta).forEach(f=>{
@@ -3647,6 +3710,10 @@ function acumuladosDe(emp, desde, hasta, ahora){
     if(d.clase==='SIN_SISTEMA'){ a.sinSistema++; return; }
     if(d.clase==='NO_LABORABLE'){ a.noLaborables++; return; }
     if(d.clase==='JUSTIFICADA'){  a.justificadas++; return; }   // fuera del denominador
+    // Hoy sin marcar todavía no es falta: puede llegar tarde, estar en otro tramo o
+    // tener un permiso por aprobar. Se cuenta recién cuando el día cierra; antes el
+    // % del mes en curso castigaba a quien aún no llegaba.
+    if(d.clase==='PENDIENTE' || d.clase==='SIN_MARCAR'){ a.hoySinMarcar = (a.hoySinMarcar||0)+1; return; }
 
     a.programados++;
     if(d.clase==='COMISION'){ a.asistidos++; a.comisiones++; return; }
@@ -3654,13 +3721,14 @@ function acumuladosDe(emp, desde, hasta, ahora){
       a.asistidos++; a.conEntrada++;
       if(d.tard>0){ a.tardanzas++; a.minutos += d.tard; } else a.puntuales++;
       if(!d.j.salida) a.sinSalida++;
+      else if(d.j.salida.origen==='DECLARADO') a.declaradas++;   // salida dicha al día siguiente, no marcada
       // Solo suma la jornada cerrada: un día sin salida marcada no tiene duración,
       // y estimarla haría que las horas del mes dependieran de quién se olvidó de marcar.
       const t = jornadaTrabajada(d, f, ahora);
       if(t.hay && !t.enCurso){ a.trabajados += t.min; a.diasConJornada++; }
       return;
     }
-    if(d.clase==='FALTA' || d.clase==='SIN_MARCAR') a.faltas++;
+    if(d.clase==='FALTA') a.faltas++;
   });
 
   a.horas          = Math.floor(a.minutos/60);
@@ -3718,6 +3786,24 @@ function pedirUbicacion(cb, forzar){
     },
     {enableHighAccuracy:true, timeout:forzar?20000:12000, maximumAge:forzar?0:30000}
   );
+}
+
+/* ¿Esa persona tenía que estar en la oficina a esa hora? Teletrabajo, exentos,
+   un tramo programado como REMOTO o un permiso "desde casa" aprobado dicen que no. */
+function debiaEstarEnOficina(emp, fechaISO, hora){
+  if(!emp || emp.modalidad !== 'PRESENCIAL') return false;
+  const tramo = segmentoEn(emp.id, fechaISO, hora, true);
+  if(tramo && tramo.modalidad === 'REMOTO') return false;
+  if(permisoAprobado(emp.id, fechaISO, 'CASA')) return false;
+  return true;
+}
+
+/* Un marcaje "fuera de zona" solo es alerta si la persona debía estar en la
+   oficina. El servidor lo marca por distancia a todos por igual, y en los datos
+   reales casi todos esos avisos eran de gente en teletrabajo: ruido. */
+function fueraRelevante(m){
+  if(!m || !m.fueraZona) return false;
+  return debiaEstarEnOficina(EMP.find(e=>e.id===m.empId), m.fecha, m.hora);
 }
 
 /* ¿Puede marcar con el estado GPS actual? Los exentos nunca se bloquean. */
@@ -3916,6 +4002,10 @@ function renderMark(){
   pintarDia(emp);
   pintarPermiso(emp);
   pedirSalidaPendiente(emp);
+  if(!CFG.modoRecepcion){
+    const jh = jornadaDe(emp.id, hoyISO());
+    insigniaSalida(!!(jh.entrada && !jh.salida));
+  }
   pedirUbicacion(()=>{ pintarGps(); pintarBoton(emp); });
 
   // Preguntar al servidor qué marcó esta persona de verdad. Si administración le
@@ -3958,7 +4048,7 @@ function pintarPermiso(emp){
   if(b) b.onclick = ()=>solicitarPermiso(emp);
 }
 
-function solicitarPermiso(emp){
+function solicitarPermiso(emp, tipoInicial){
   const hoy = hoyISO();
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Solicitar un permiso</h2>'+
@@ -3996,6 +4086,16 @@ function solicitarPermiso(emp){
     }
   };
   m.querySelector('#pkT').onchange = pintarEfecto;
+  if(tipoInicial && tipoPermiso(tipoInicial)){
+    m.querySelector('#pkT').value = tipoInicial;
+    if(tipoInicial === 'JORNADA'){
+      // Se propone lo más probable: entró a su hora y sale ahora. La persona lo corrige.
+      const h = horarioDe(emp, hoy);
+      if(h) m.querySelector('#pkH').value = h.in;
+      m.querySelector('#pkH2').value = hhmm();
+      m.querySelector('#pkM').value = 'Olvidé marcar mi entrada';
+    }
+  }
   pintarEfecto();
 
   m.querySelector('#pkX').onclick = ()=>m.remove();
@@ -4052,6 +4152,13 @@ function salidaPendiente(emp){
   return null;
 }
 
+/* Salidas que esta persona declaró al día siguiente en el mes en curso */
+function declaradasDelMes(empId){
+  const mes = hoyISO().slice(0,7);
+  return MAR.filter(m=>m.empId===empId && m.tipo==='SALIDA' && m.origen==='DECLARADO' &&
+                       String(m.fecha).slice(0,7)===mes).length;
+}
+
 function pedirSalidaPendiente(emp){
   const p = salidaPendiente(emp);
   // Contenedor propio: #mkAlert lo reescribe pintarBoton cada vez que llega el GPS
@@ -4061,20 +4168,23 @@ function pedirSalidaPendiente(emp){
   if(!p) return;
   const d = new Date(p.fecha+'T12:00:00');
   const cuando = DIAS[d.getDay()] + ' ' + d.getDate();
-  const sug = p.hor ? p.hor.out : '18:00';
+  // Ya no hay botón de un toque "A mi hora": con él un tercio de las salidas del
+  // mes terminaban declaradas como jornada completa sin que nadie las verificara.
+  // Ahora hay que escribir la hora, y la persona ve cuántas lleva en el mes.
+  const n = declaradasDelMes(emp.id);
 
   box.innerHTML =
     '<div class="alert alert-warn" style="text-align:left">'+
       '<b>No registraste tu salida del '+esc(cuando)+'.</b><br>¿A qué hora saliste?'+
-      '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'+
-        '<button class="btn btn-sm" id="spOk" style="flex:1;min-width:120px">A mi hora ('+sug+')</button>'+
-        '<button class="btn btn-sm btn-line" id="spOtra" style="flex:1;min-width:100px">Otra hora</button>'+
-      '</div>'+
+      '<button class="btn btn-sm" id="spOtra" style="width:100%;margin-top:10px">Indicar mi hora de salida</button>'+
       '<button class="btn btn-sm btn-line" id="spNo" style="width:100%;margin-top:8px">No marqué / no aplica</button>'+
+      '<div style="font-size:12px;margin-top:8px;line-height:1.45">'+
+        (n ? 'Este mes llevas <b>'+n+'</b> salida'+(n===1?'':'s')+' declarada'+(n===1?'':'s')+' al día siguiente. ' : '')+
+        'Administración las revisa. Para evitarlo, marca tu salida antes de irte.</div>'+
     '</div>';
 
   const registrar = hora=>{
-    if(toMin(hora) <= toMin(p.entrada.hora)){ toast('La salida debe ser posterior a tu entrada'); return; }
+    if(toMin(hora) <= minEntrada({entrada:p.entrada}, p.fecha)){ toast('La salida debe ser posterior a tu entrada'); return; }
     const ev = evaluarSalida(emp, p.fecha, hora);
     const cid = nuevoCid();
     const datos = {
@@ -4103,13 +4213,12 @@ function pedirSalidaPendiente(emp){
     }
   };
 
-  $('#spOk').onclick = ()=>registrar(sug);
   $('#spNo').onclick = ()=>{ box.innerHTML=''; };
   $('#spOtra').onclick = ()=>{
     const m=document.createElement('div'); m.className='modal';
     m.innerHTML='<div class="box"><h2>Salida del '+esc(cuando)+'</h2>'+
       '<p style="font-size:13px;color:var(--muted);margin:0 0 14px">Marcaste tu entrada a las '+p.entrada.hora+'.</p>'+
-      '<div class="frow"><div><label>Hora de salida</label><input type="time" id="spH" value="'+sug+'"></div></div>'+
+      '<div class="frow"><div><label>Hora real de salida</label><input type="time" id="spH"></div></div>'+
       '<div style="display:flex;gap:10px;margin-top:16px">'+
         '<button class="btn btn-line" id="spX">Cancelar</button>'+
         '<button class="btn" id="spG">Guardar</button></div></div>';
@@ -4191,6 +4300,12 @@ function pintarBoton(emp){
     al.innerHTML = '<div class="alert alert-warn">'+esc(GEO.msg)+'. Tu marcaje quedará señalado para revisión.</div>';
   } else if(horario){
     hint.textContent = esSalida ? 'Tu horario de salida es '+horario.out : 'Tu horario de entrada es '+horario.in;
+    const falta = toMin(horario.out) - toMin(hhmm());
+    if(esSalida && toMin(horario.out) > toMin(horario.in) && falta <= 15){
+      al.innerHTML = '<div class="alert alert-warn"><b>'+
+        (falta > 0 ? 'Tu jornada termina a las '+esc(horario.out)+'.' : 'Tu horario terminó a las '+esc(horario.out)+'.')+
+        '</b> Marca tu salida antes de irte: fuera de la oficina ya no podrás.</div>';
+    }
   } else {
     hint.textContent = 'Toca para registrar';
   }
@@ -4202,7 +4317,7 @@ function pintarDia(emp){
   let html='';
   html += row('Horario de hoy', hor ? hor.in+' – '+hor.out : 'No laborable', '');
   if(j.entrada){
-    const ev = evaluarEntrada(emp, j.entrada.fecha, j.entrada.hora);
+    const ev = evaluarEntrada(emp, hoyISO(), j.entrada.hora, j.entrada.fecha < hoyISO());
     html += row('Entrada', j.entrada.hora, '<span class="tag '+ev.clase+'">'+ev.estado+(ev.tardanza?' '+ev.tardanza+"'":'')+'</span>');
   }
   if(j.salida){
@@ -4210,10 +4325,14 @@ function pintarDia(emp){
     html += row('Salida', j.salida.hora, '<span class="tag '+ev.clase+'">'+ev.estado+'</span>');
   }
   if(j.entrada && j.salida){
-    const tot = toMin(j.salida.hora)-toMin(j.entrada.hora);
+    const tot = toMin(j.salida.hora)-minEntrada(j, hoyISO());
     html += row('Permanencia', min2hhmm(tot)+' h', '');
   }
   box.innerHTML = html;
+  if(!CFG.modoRecepcion && !recordatorioActivo(emp)){
+    box.insertAdjacentHTML('beforeend', botonesRecordatorio(emp));
+    conectarRecordatorio(emp, box);
+  }
   function row(l,v,extra){
     return '<div class="dayrow"><span class="dl">'+l+'</span>'+(extra||'')+'<span class="dv">'+esc(v)+'</span></div>';
   }
@@ -4298,6 +4417,130 @@ function ayudaUbicacion(){
    Con servidor: la hora y el estado los decide el servidor, no el celular. Si el
    envío falla, el marcaje queda en la cola local y se sincroniza solo — nadie se
    queda sin marcar por un problema de red. */
+/* ---------- RECORDATORIO DE SALIDA ----------
+   Un evento que se repite en el calendario del propio celular, a la hora de salida
+   de su turno. Es lo único que avisa con la app cerrada sin depender de un servidor
+   de notificaciones: el calendario del teléfono ya sabe sonar.
+   iPhone abre el archivo .ics directamente en Calendario; Android lo hace mejor con
+   el enlace de Google Calendar. */
+function recordatorioActivo(emp){
+  try{ return localStorage.getItem('ca_recSalida_'+emp.id) === '1'; }catch(e){ return false; }
+}
+
+function horasSalidaTurno(emp){
+  const t = getTurno(emp.turno);
+  const out = [];
+  if(t && t.salida) out.push({dias:['MO','TU','WE','TH','FR'], hora:t.salida, nombre:'Lunes a viernes'});
+  if(t && siNo(t.trabajaSab) && t.sabSalida) out.push({dias:['SA'], hora:t.sabSalida, nombre:'Sábados'});
+  return out;
+}
+
+function botonesRecordatorio(emp){
+  const hs = horasSalidaTurno(emp);
+  if(!hs.length) return '';
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const botones = ios
+    ? '<button class="btn btn-sm btn-line" data-rec="ics" style="width:100%">🔔 Recordarme marcar la salida</button>'
+    : hs.map((h,i)=>'<button class="btn btn-sm btn-line" data-rec="'+i+'" style="width:100%;margin-top:'+(i?8:0)+'px">'+
+                     '🔔 Recordatorio '+esc(h.nombre.toLowerCase())+' · '+esc(h.hora)+'</button>').join('');
+  return '<div class="rec-salida" style="margin-top:14px">'+botones+
+    '<div style="font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45;text-align:center">'+
+      'Se agrega a tu calendario y te avisa todos los días a tu hora de salida.</div></div>';
+}
+
+function conectarRecordatorio(emp, cont){
+  Array.from(cont.querySelectorAll('[data-rec]')).forEach(b=>{
+    b.onclick = ()=>{
+      const hs = horasSalidaTurno(emp);
+      if(b.dataset.rec === 'ics') descargarIcsSalida(hs);
+      else abrirGoogleCalendar(hs[Number(b.dataset.rec)]);
+      try{ localStorage.setItem('ca_recSalida_'+emp.id, '1'); }catch(e){}
+      b.textContent = '✓ Listo — confírmalo en tu calendario';
+      b.disabled = true;
+    };
+  });
+}
+
+function fechaCal(h){
+  // Primer día desde mañana que caiga en uno de sus días, a su hora de salida.
+  // Hora local del celular, sin zona horaria: suena a las 18:00 donde esté.
+  const COD = ['SU','MO','TU','WE','TH','FR','SA'];
+  let d = new Date(Date.now()+86400000);
+  for(let i=0; i<7 && h.dias.indexOf(COD[d.getDay()]) < 0; i++) d = new Date(d.getTime()+86400000);
+  return d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'T'+h.hora.replace(':','')+'00';
+}
+
+function abrirGoogleCalendar(h){
+  const ini = fechaCal(h);
+  const fin = ini.slice(0,9) + pad(Math.floor((toMin(h.hora)+5)/60)%24) + pad((toMin(h.hora)+5)%60) + '00';
+  const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE'+
+    '&text='+encodeURIComponent('Marcar salida — Asistencia')+
+    '&details='+encodeURIComponent('Antes de irte, marca tu salida en la app: '+location.href.split('?')[0])+
+    '&dates='+ini+'/'+fin+
+    '&recur='+encodeURIComponent('RRULE:FREQ=WEEKLY;BYDAY='+h.dias.join(','));
+  window.open(url, '_blank');
+}
+
+function descargarIcsSalida(hs){
+  const ahora = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
+  const ev = hs.map((h,i)=>[
+    'BEGIN:VEVENT',
+    'UID:salida-'+i+'-'+Date.now()+'@asistencia',
+    'DTSTAMP:'+ahora,
+    'DTSTART:'+fechaCal(h),
+    'DURATION:PT5M',
+    'RRULE:FREQ=WEEKLY;BYDAY='+h.dias.join(','),
+    'SUMMARY:Marcar salida — Asistencia',
+    'DESCRIPTION:Antes de irte\\, marca tu salida en la app.',
+    'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:Marca tu salida','TRIGGER:PT0M','END:VALARM',
+    'END:VEVENT'].join('\r\n')).join('\r\n');
+  const ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Asistencia//Recordatorio//ES\r\n'+ev+'\r\nEND:VCALENDAR\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([ics], {type:'text/calendar'}));
+  a.download = 'recordatorio-salida.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* Un "1" en el ícono de la app instalada mientras la salida esté pendiente.
+   Queda visible aunque la app esté cerrada. Donde no se soporta, no hace nada. */
+function insigniaSalida(pendiente){
+  try{
+    if(pendiente && navigator.setAppBadge) navigator.setAppBadge(1).catch(()=>{});
+    else if(!pendiente && navigator.clearAppBadge) navigator.clearAppBadge().catch(()=>{});
+  }catch(e){}
+}
+
+/* ¿Es razonable marcar ENTRADA a esta hora? Devuelve 'seguir' si lo es o si la
+   persona confirma que recién llega, 'jornada' si olvidó marcar en la mañana,
+   'cancelar' si se arrepiente. Se pregunta cuando van 3 horas o más de tardanza,
+   o cuando falta una hora o menos para el fin de su horario. */
+function confirmarEntradaTardia(emp, fecha, hora){
+  const h = horarioDe(emp, fecha);
+  if(!h) return Promise.resolve('seguir');
+  const inicio = inicioParaEntrada(h, hora);
+  const tarde = difEntrada(hora, inicio);
+  const cercaDelFin = toMin(h.out) > toMin(h.in) && toMin(hora) >= toMin(h.out) - 60;
+  if(tarde < 180 && !cercaDelFin) return Promise.resolve('seguir');
+
+  return new Promise(resolver=>{
+    const m = document.createElement('div'); m.className='modal';
+    m.innerHTML = '<div class="box"><h2>¿Estás llegando recién?</h2>'+
+      '<p style="font-size:14px;line-height:1.55;margin:0 0 16px">Son las <b>'+esc(hora)+'</b> y tu horario de hoy '+
+        'empezó a las <b>'+esc(inicio)+'</b>'+(h.out?' y termina a las <b>'+esc(h.out)+'</b>':'')+'.</p>'+
+      '<p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 16px">'+
+        'Si trabajaste desde la mañana y olvidaste marcar, no marques entrada ahora: '+
+        'quedaría como una tardanza de '+Math.floor(tarde/60)+' h '+(tarde%60)+' min.</p>'+
+      '<button class="btn" id="etJ" style="width:100%">Olvidé marcar — declarar mi jornada</button>'+
+      '<button class="btn btn-line" id="etS" style="width:100%;margin-top:8px">Sí, estoy llegando ahora</button>'+
+      '<button class="btn btn-line" id="etX" style="width:100%;margin-top:8px">Cancelar</button></div>';
+    document.body.appendChild(m);
+    const fin = r=>{ m.remove(); resolver(r); };
+    m.querySelector('#etJ').onclick = ()=>fin('jornada');
+    m.querySelector('#etS').onclick = ()=>fin('seguir');
+    m.querySelector('#etX').onclick = ()=>fin('cancelar');
+  });
+}
+
 async function marcar(){
   const emp = EMP.find(e=>e.id===DEV.empId);
   if(!emp) return;
@@ -4309,6 +4552,16 @@ async function marcar(){
 
   const j = jornadaDe(emp.id, fecha);
   if(tipo==='ENTRADA' && j.entrada){ toast('Ya registraste tu entrada'); return renderMark(); }
+
+  // Una "entrada" a media tarde casi siempre es alguien que olvidó marcar en la
+  // mañana y marca al irse. Registrada así, su día queda como 8 horas de tardanza
+  // y sin jornada. Se le pregunta antes, y si fue un olvido se le lleva al permiso
+  // "Trabajé y no marqué", que revisa administración.
+  if(tipo==='ENTRADA'){
+    const olvido = await confirmarEntradaTardia(emp, fecha, hora);
+    if(olvido === 'cancelar') return renderMark();
+    if(olvido === 'jornada'){ renderMark(); return solicitarPermiso(emp, 'JORNADA'); }
+  }
 
   let ev = tipo==='ENTRADA' ? evaluarEntrada(emp,fecha,hora) : evaluarSalida(emp,fecha,hora);
   const cid = nuevoCid();
@@ -4432,9 +4685,26 @@ async function marcar(){
   } else {
     sub = reg.anticipada>0 ? 'Salida anticipada de '+reg.anticipada+' minutos' : 'Jornada completa. ¡Hasta mañana!';
   }
-  if(reg.fueraZona) sub += ' · Marcado fuera de zona';
+  if(fueraRelevante(reg)) sub += ' · Marcado fuera de zona';
   if(pendiente) sub = 'Sin conexión — quedó guardado y se enviará solo. Tu marcaje NO se pierde.';
   $('#okSub').textContent = sub;
+
+  // Recordatorio de salida: casi nadie la marca y al día siguiente se declara de
+  // memoria. Al entrar se le recuerda a qué hora sale y se le ofrece un aviso diario.
+  const extra = $('#okExtra');
+  let conRecordatorio = false;
+  if(extra){
+    extra.innerHTML = '';
+    if(tipo==='ENTRADA' && !CFG.modoRecepcion){
+      const hs = horarioDe(emp, fecha);
+      extra.innerHTML = (hs ? '<div class="alert alert-ok" style="margin-top:14px">Hoy sales a las <b>'+esc(hs.out)+
+                               '</b>. Recuerda marcar tu salida antes de irte.</div>' : '') +
+                        botonesRecordatorio(emp);
+      conRecordatorio = !recordatorioActivo(emp);
+      conectarRecordatorio(emp, extra);
+    }
+  }
+  if(!CFG.modoRecepcion) insigniaSalida(tipo==='ENTRADA');
   if(pendiente){ $('#okTick').className='tick late'; $('#okIcon').style.color='var(--warn)'; }
 
   if(CFG.modoRecepcion){
@@ -4443,7 +4713,8 @@ async function marcar(){
     setTimeout(()=>{ if(!$('#viewDone').classList.contains('hidden')) soltarRecepcion(); }, 4000);
   }else{
     $('#lnkBack').textContent = 'Volver';
-    setTimeout(()=>{ if(!$('#viewDone').classList.contains('hidden')) renderMark(); }, 6000);
+    // Si se le ofreció activar el recordatorio, se le da tiempo para tocarlo
+    setTimeout(()=>{ if(!$('#viewDone').classList.contains('hidden')) renderMark(); }, conRecordatorio ? 20000 : 6000);
   }
 }
 
@@ -4998,7 +5269,7 @@ function anomalias(desde, hasta){
   });
 
   // 3) Marcajes hechos fuera de la zona de la oficina
-  const fuera = regs.filter(m=>m.fueraZona && m.dist!=null);
+  const fuera = regs.filter(m=>fueraRelevante(m) && m.dist!=null);
   if(fuera.length){
     const porPersona = {};
     fuera.forEach(m=>{ (porPersona[m.nombre]=porPersona[m.nombre]||[]).push(m); });
@@ -5178,6 +5449,7 @@ function tabHoy(b){
             '<div style="font-size:10.5px;color:var(--muted);font-weight:400">va trabajando</div>'
           : '<b>'+min2hhmm(t.min)+'</b>';
       const zona = r.e.modalidad==='REMOTO' ? '<span class="tag tag-ok">REMOTO</span>'
+                 : j.entrada && !debiaEstarEnOficina(r.e, j.entrada.fecha, j.entrada.hora) ? '<span class="tag tag-ok">CASA</span>'
                  : j.entrada ? (j.entrada.fueraZona ? '<span class="tag tag-bad">FUERA</span>'
                    : j.entrada.gps==='dentro' ? '<span class="tag tag-ok">OK</span>' : '<span class="tag tag-warn">S/GPS</span>') : '—';
       const salTxt = r.sal.hora!=='—' ? '<b>'+r.sal.hora+'</b>'
@@ -5679,7 +5951,7 @@ function analisisHTML(desde, hasta, ahora){
                      .sort((a,b)=> b.a.minutos - a.a.minutos || b.a.faltas - a.a.faltas);
 
   const tot = filas.reduce((s,r)=>{
-    ['programados','asistidos','faltas','justificadas','tardanzas','minutos','conEntrada','puntuales','sinSalida','comisiones']
+    ['programados','asistidos','faltas','justificadas','tardanzas','minutos','conEntrada','puntuales','sinSalida','declaradas','comisiones']
       .forEach(k=>s[k]=(s[k]||0)+r.a[k]);
     return s;
   }, {});
@@ -5696,9 +5968,10 @@ function analisisHTML(desde, hasta, ahora){
     if(!semanas[k]) semanas[k] = {prog:0, faltas:0};
     gente.forEach(e=>{
       const s = estadoDia(e, f, ahora);
-      if(s.clase==='NO_LABORABLE'||s.clase==='JUSTIFICADA'||s.clase==='EXENTO'||s.clase==='FUTURO') return;
+      if(s.clase==='NO_LABORABLE'||s.clase==='JUSTIFICADA'||s.clase==='EXENTO'||s.clase==='FUTURO'||
+         s.clase==='SIN_SISTEMA'||s.clase==='PENDIENTE'||s.clase==='SIN_MARCAR') return;
       semanas[k].prog++;
-      if(s.clase==='FALTA'||s.clase==='SIN_MARCAR') semanas[k].faltas++;
+      if(s.clase==='FALTA') semanas[k].faltas++;
     });
   });
   const datosAbs = Object.keys(semanas).sort().slice(-12).map(k=>{
@@ -5709,10 +5982,15 @@ function analisisHTML(desde, hasta, ahora){
   });
 
   // --- Tardanzas por día de la semana y por hora de ingreso ---
-  const ids = new Set(gente.map(e=>e.id));
-  const tardes = MAR.filter(m=>m.tipo==='ENTRADA' && m.tardanza>0 && ids.has(m.empId) &&
-                               m.fecha>=desde && m.fecha<=hasta);
-  const porDia = [1,2,3,4,5,6].map(dw=>{
+  // Sale del mismo cálculo que los indicadores de arriba (estadoDia), no del
+  // número guardado en cada marcaje: así se respetan permisos, tramos y turnos de
+  // madrugada, y el gráfico cuadra con los totales.
+  const tardes = [];
+  fechas.forEach(f=>gente.forEach(e=>{
+    const d = estadoDia(e, f, ahora);
+    if(d.clase==='ASISTIO' && d.tard>0) tardes.push({fecha:f, hora:d.j.entrada.hora, tardanza:d.tard});
+  }));
+  const porDia = [1,2,3,4,5,6,0].map(dw=>{
     const g = tardes.filter(m=>new Date(m.fecha+'T12:00:00').getDay()===dw);
     return {etiqueta: DIAS[dw].slice(0,3), valor: g.length,
             texto: g.length + (g.length ? ' · '+g.reduce((s,m)=>s+m.tardanza,0)+"'" : '')};
@@ -5770,7 +6048,7 @@ function analisisHTML(desde, hasta, ahora){
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
       '<th>Colaborador</th><th>DNI</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Turno</th>'+
       '<th>Días progr.</th><th>Días asistidos</th><th>Inasistencias</th><th>Justificadas</th>'+
-      '<th>Tardanzas</th><th>Min. tardanza</th><th>Horas tardanza</th><th>% asist.</th><th>% punt.</th><th>Sin salida</th>'+
+      '<th>Tardanzas</th><th>Min. tardanza</th><th>Horas tardanza</th><th>% asist.</th><th>% punt.</th><th>Sin salida</th><th>Salidas declaradas</th>'+
     '</tr></thead><tbody>'+
     filas.map(r=>{
       const a=r.a;
@@ -5790,6 +6068,7 @@ function analisisHTML(desde, hasta, ahora){
       '<td class="num">'+(a.pctAsistencia==null?'—':a.pctAsistencia+'%')+'</td>'+
       '<td class="num">'+(a.pctPuntualidad==null?'—':a.pctPuntualidad+'%')+'</td>'+
       '<td class="num">'+(a.sinSalida?'<span class="tag tag-warn">'+a.sinSalida+'</span>':'0')+'</td>'+
+      '<td class="num">'+(a.declaradas?'<span class="tag '+(a.declaradas>=4?'tag-bad':'tag-warn')+'">'+a.declaradas+'</span>':'0')+'</td>'+
       '</tr>';
     }).join('')+
     '<tr style="background:var(--surface-2);font-weight:750">'+
@@ -5801,12 +6080,14 @@ function analisisHTML(desde, hasta, ahora){
       '<td class="num">'+(pctAsis==null?'—':pctAsis+'%')+'</td>'+
       '<td class="num">'+(pctPunt==null?'—':pctPunt+'%')+'</td>'+
       '<td class="num">'+(tot.sinSalida||0)+'</td>'+
+      '<td class="num">'+(tot.declaradas||0)+'</td>'+
     '</tr>'+
     '</tbody></table></div></div>'+
     '<p style="font-size:12.5px;color:var(--muted);margin-top:12px;line-height:1.6">'+
       '<b>Días programados</b> excluye domingos, feriados y sábados sin jornada, y descuenta las ausencias justificadas. '+
       '<b>Días asistidos</b> incluye las comisiones de servicio. '+
-      '<b>Inasistencias</b> son los días programados sin marcaje y sin justificación.</p>';
+      '<b>Inasistencias</b> son los días programados sin marcaje y sin justificación. '+
+      '<b>Salidas declaradas</b> son las que la persona indicó al día siguiente, sin marcarlas al irse: la hora no está verificada.</p>';
 }
 
 
@@ -6017,8 +6298,8 @@ function horarioBase(e, fecha){
   const t = getTurno(e.turno);
   if(esFeriado(fecha)) return null;
   const d = new Date(fecha+'T12:00:00').getDay();
-  if(d===0) return (t.trabajaDom && domingoTrabajado(fecha)) ? {in:t.domEntrada,out:t.domSalida} : null;
-  if(d===6) return (t.trabajaSab && sabadoTrabajado(fecha)) ? {in:t.sabEntrada,out:t.sabSalida} : null;
+  if(d===0) return (siNo(t.trabajaDom) && domingoTrabajado(fecha)) ? {in:t.domEntrada,out:t.domSalida} : null;
+  if(d===6) return (siNo(t.trabajaSab) && sabadoTrabajado(fecha)) ? {in:t.sabEntrada,out:t.sabSalida} : null;
   return {in:t.entrada, out:t.salida};
 }
 
@@ -7002,6 +7283,11 @@ function corregirMarcajes(empId, fecha){
   document.body.appendChild(m);
 }
 
+/* Quien cargó el último manual en este navegador: casi siempre es la misma persona */
+function ultimoRegistrador(){
+  try{ return localStorage.getItem('ca_registrador') || ''; }catch(e){ return ''; }
+}
+
 function registroManual(fechaDef){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const hoy = hoyISO();
@@ -7020,7 +7306,7 @@ function registroManual(fechaDef){
     '<div class="frow"><div><label>Tipo</label><select id="rT">'+
       '<option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option></select></div></div>'+
     '<div class="frow"><div><label>Motivo (obligatorio)</label><input id="rM" placeholder="Se quedó sin batería"></div></div>'+
-    '<div class="frow"><div><label>Registrado por</label><input id="rP" placeholder="Nombre de quien registra"></div></div>'+
+    '<div class="frow"><div><label>Registrado por (obligatorio)</label><input id="rP" placeholder="Nombre y apellido de quien registra" value="'+esc(ultimoRegistrador())+'"></div></div>'+
     '<div style="display:flex;gap:10px;margin-top:16px">'+
       '<button class="btn btn-line" id="rX">Cancelar</button>'+
       '<button class="btn" id="rG">Registrar</button></div></div>';
@@ -7034,17 +7320,23 @@ function registroManual(fechaDef){
     if(!fecha || !hora){ toast('Ingresa fecha y hora'); return; }
     if(fecha > hoy){ toast('No se puede registrar una fecha futura'); return; }
     if(!motivo){ toast('El motivo es obligatorio'); return; }
+    // En los datos reales la mayoría de los manuales no decían quién los cargó.
+    // Un marcaje que no es del colaborador tiene que tener un responsable.
+    const registradoPor = m.querySelector('#rP').value.trim().replace(/\s+/g,' ');
+    if(registradoPor.length < 5 || registradoPor.indexOf(' ') < 0){
+      toast('Escribe nombre y apellido de quien registra'); return;
+    }
+    try{ localStorage.setItem('ca_registrador', registradoPor); }catch(e){}
 
     const j = jornadaDe(emp.id, fecha);
     if(tipo==='ENTRADA' && j.entrada){ toast('Ya tiene una entrada registrada ese día'); return; }
     if(tipo==='SALIDA'){
       if(!j.entrada){ toast('No tiene entrada registrada ese día'); return; }
-      if(toMin(hora) <= toMin(j.entrada.hora)){ toast('La salida debe ser posterior a la entrada'); return; }
+      if(toMin(hora) <= minEntrada(j, fecha)){ toast('La salida debe ser posterior a la entrada'); return; }
     }
 
     const ev = tipo==='ENTRADA' ? evaluarEntrada(emp,fecha,hora) : evaluarSalida(emp,fecha,hora);
     const cidM = nuevoCid();
-    const registradoPor = m.querySelector('#rP').value.trim();
     MAR.push({
       id:'M'+Date.now()+Math.floor(Math.random()*900+100), cid:cidM,
       empId:emp.id, nombre:emp.nombre, dni:emp.dni||'', area:emp.area, proyecto:emp.proyecto||'',
@@ -7056,13 +7348,16 @@ function registroManual(fechaDef){
     saveMar();
     // Sin esto el marcaje manual se pierde en la siguiente sincronizacion
     if(hayServidor()){
-      api('marcar', {ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid: cidM,
+      const datos = {ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid: cidM,
                      tipo, fecha, hora, origen:'MANUAL', motivo, registradoPor, gps:'off',
-                     deviceId: idDispositivo(), equipo: infoEquipo()},
-          {timeout:20000})
+                     deviceId: idDispositivo(), equipo: infoEquipo()};
+      api('marcar', datos, {timeout:20000})
         .then(r=>{ if(r && r.ok && r.marcaje){ integrarMarcaje(r.marcaje); renderTab(); toast('Marcaje enviado al servidor'); }
-                   else toast('⚠ Guardado aqui, pero el servidor lo rechazo'); })
-        .catch(()=>{ toast('⚠ Guardado aqui, pero NO llego al servidor'); });
+                   else toast('⚠ El servidor rechazó el marcaje: '+((r && r.error) || 'sin detalle')); })
+        // Antes quedaba solo en este navegador y se perdía al sincronizar. Ahora
+        // entra a la cola, igual que el marcaje del celular, y se reintenta solo.
+        .catch(()=>{ COLA.push(datos); saveCola(); renderTab();
+                     toast('Sin conexión: quedó en cola y se enviará solo'); });
     }
     LOG.unshift({ts:Date.now(), tipo:'MARCAJE_MANUAL', empId:emp.id,
                  valor:emp.nombre+' · '+tipo+' '+fechaCorta(fecha)+' '+hora+' · '+motivo});
@@ -7541,10 +7836,10 @@ function tabCfg(b){
     '<td><input class="sel tI" data-i="'+i+'" data-f="nombre" value="'+esc(t.nombre)+'" style="width:150px"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="entrada" type="time" value="'+t.entrada+'"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="salida" type="time" value="'+t.salida+'"></td>'+
-    '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaSab">'+opt('1','Sí',t.trabajaSab?'1':'0')+opt('0','No',t.trabajaSab?'1':'0')+'</select></td>'+
+    '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaSab">'+opt('1','Sí',siNo(t.trabajaSab)?'1':'0')+opt('0','No',siNo(t.trabajaSab)?'1':'0')+'</select></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="sabEntrada" type="time" value="'+t.sabEntrada+'"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="sabSalida" type="time" value="'+t.sabSalida+'"></td>'+
-    '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaDom">'+opt('1','Sí',t.trabajaDom?'1':'0')+opt('0','No',t.trabajaDom?'1':'0')+'</select></td>'+
+    '<td><select class="sel tI" data-i="'+i+'" data-f="trabajaDom">'+opt('1','Sí',siNo(t.trabajaDom)?'1':'0')+opt('0','No',siNo(t.trabajaDom)?'1':'0')+'</select></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="domEntrada" type="time" value="'+(t.domEntrada||'10:00')+'"></td>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="domSalida" type="time" value="'+(t.domSalida||'14:00')+'"></td>'+
   '</tr>').join('')+'</tbody></table></div>'+
@@ -7649,7 +7944,8 @@ function tabCfg(b){
   $('#cSave').onclick = ()=>{
     $$('.tI').forEach(inp=>{
       const t=CFG.turnos[+inp.dataset.i], f=inp.dataset.f;
-      t[f] = f==='trabajaSab' ? inp.value==='1' : inp.value;
+      // Los dos son sí/no. Guardar el texto '0' lo dejaba en "sí", porque '0' cuenta como verdadero
+      t[f] = (f==='trabajaSab' || f==='trabajaDom') ? inp.value==='1' : inp.value;
     });
     const nLat=parseFloat($('#cLat').value), nLng=parseFloat($('#cLng').value);
     if(!isNaN(nLat)&&!isNaN(nLng)){
@@ -8055,7 +8351,8 @@ function exportar(desde, hasta, nombre){
       '% de asistencia':a.pctAsistencia==null?'':a.pctAsistencia+'%',
       '% de puntualidad':a.pctPuntualidad==null?'':a.pctPuntualidad+'%',
       'Tasa de absentismo':a.absentismo+'%',
-      'Días sin registro de salida':a.sinSalida
+      'Días sin registro de salida':a.sinSalida,
+      'Salidas declaradas al día siguiente':a.declaradas
     };
   }).sort((a,b)=>b['Minutos de tardanza']-a['Minutos de tardanza']);
 
@@ -8078,12 +8375,12 @@ function exportar(desde, hasta, nombre){
       'Estado':d.etiqueta,
       'Min. tardanza':d.clase==='ASISTIO'?d.tard:'',
       'Min. salida anticipada':es?es.anticipada:'',
-      'Permanencia':(d.j.entrada&&d.j.salida)?min2hhmm(toMin(d.j.salida.hora)-toMin(d.j.entrada.hora)):'',
+      'Permanencia':(d.j.entrada&&d.j.salida)?min2hhmm(toMin(d.j.salida.hora)-minEntrada(d.j, f)):'',
       'Origen entrada':d.j.entrada?(d.j.entrada.origen||'APP'):'',
       'Origen salida':d.j.salida?(d.j.salida.origen||'APP'):'',
       'Justificación':d.aus?tipoAus(d.aus.tipo).nombre:'',
       'Autorizado por':d.aus?(d.aus.autorizadoPor||''):'',
-      'Fuera de zona':d.j.entrada?(d.j.entrada.fueraZona?'SÍ':'NO'):'',
+      'Fuera de zona':d.j.entrada?(fueraRelevante(d.j.entrada)?'SÍ':'NO'):'',
       'Distancia (m)':d.j.entrada&&d.j.entrada.dist!=null?d.j.entrada.dist:''
     });
   }));
@@ -8096,7 +8393,7 @@ function exportar(desde, hasta, nombre){
     'Motivo':m.motivo||'', 'Registrado por':m.registradoPor||'',
     'Estado':m.estado, 'Min. tardanza':m.tardanza||0, 'Min. anticipada':m.anticipada||0,
     'Latitud':m.lat==null?'':m.lat, 'Longitud':m.lng==null?'':m.lng,
-    'Distancia (m)':m.dist==null?'':m.dist, 'GPS':m.gps||'', 'Fuera de zona':m.fueraZona?'SÍ':'NO'
+    'Distancia (m)':m.dist==null?'':m.dist, 'GPS':m.gps||'', 'Fuera de zona':fueraRelevante(m)?'SÍ':(m.fueraZona?'NO (remoto)':'NO')
   }));
 
   // Hoja 4: ausencias y comisiones que tocan el periodo
