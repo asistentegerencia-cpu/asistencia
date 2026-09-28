@@ -291,6 +291,37 @@ input[type=checkbox]{accent-color:var(--navy)}
   .toolbar .sel{width:100%}
 }
 .tc-only{display:none}
+/* Programación */
+.pgrid{border-collapse:separate;border-spacing:4px}
+.pgrid td{border:0;border-radius:14px;font-size:14px}
+.pgrid td.pg-prog b{font-weight:800}
+.pgrid td.pg-base{background:#fff;box-shadow:inset 0 0 0 1.5px var(--gray-300);color:var(--gray-700)}
+.pgrid th{border-radius:12px}
+.pgrid td:first-child,.pgrid th:first-child{position:sticky;left:0;background:#fff;z-index:1}
+.pgrid tr:hover td.pg-base{background:var(--outside)}
+/* Modo de uso */
+.rcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.rcard{text-align:left;border:2px solid var(--gray-400);border-radius:22px;padding:16px 18px;background:#fff;display:flex;flex-direction:column;gap:4px}
+.rcard b{font-size:17px;font-weight:800}
+.rcard span{font-size:14px;color:var(--gray-700);line-height:1.45}
+.rcard.on{border-color:var(--navy);background:var(--navy-100)}
+/* Ficha lateral */
+@media(min-width:821px){
+  .modal.side{place-items:stretch end;padding:0}
+  .modal.side .box{max-width:520px;height:100vh;max-height:none;border-radius:32px 0 0 32px;padding:28px}
+}
+/* Interruptores de días */
+input.dOn{appearance:none;-webkit-appearance:none;width:40px!important;height:24px!important;border-radius:999px;background:var(--gray-400);position:relative;cursor:pointer;transition:background .15s;flex:none}
+input.dOn::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+input.dOn:checked{background:var(--navy)}
+input.dOn:checked::after{left:19px}
+/* PIN */
+.pdots{display:flex;justify-content:center;gap:12px;margin:6px 0 18px}
+.pdots span{width:18px;height:18px;border-radius:50%;border:2px solid var(--gray-500)}
+.pdots span.on{background:var(--navy);border-color:var(--navy)}
+.pkeys{display:grid;grid-template-columns:repeat(3,76px);gap:14px;justify-content:center}
+.pkey{width:76px;height:76px;border-radius:50%;border:2px solid var(--gray-300);background:#fff;font-size:28px;font-weight:700}
+.pkey:active{background:var(--navy-100)}
 .pchips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .pchip{min-height:44px;padding:8px 16px;border-radius:999px;border:2px solid var(--gray-400);background:#fff;font-weight:700;font-size:15px;color:var(--text)}
 .pchip.on{background:var(--navy);border-color:var(--navy);color:#fff}
@@ -2939,9 +2970,9 @@ function permisoDelDia(empId, fechaISO){
    cambie la jornada a medio hacer. La validación es la confirmación posterior de
    que esa franja de verdad se cubrió. */
 const ESTADOS_PROG = {
-  BORRADOR:  {nombre:'Borrador',  color:'var(--muted)',  fondo:'var(--surface-2)'},
-  PUBLICADO: {nombre:'Publicado', color:'var(--primary)',fondo:'#EAF2FB'},
-  VALIDADO:  {nombre:'Validado',  color:'var(--ok)',     fondo:'#E9F7EF'}
+  BORRADOR:  {nombre:'Borrador',  color:'var(--gray-700)',   fondo:'var(--outside)'},
+  PUBLICADO: {nombre:'Publicado', color:'var(--navy-dark)',  fondo:'var(--navy-100)'},
+  VALIDADO:  {nombre:'Validado',  color:'var(--ok-text)',    fondo:'var(--ok-bg)'}
 };
 const estadoProg = e => ESTADOS_PROG[e] || ESTADOS_PROG.PUBLICADO;
 
@@ -4335,13 +4366,30 @@ function panelJefe(emp){
   const cred = ()=>({ident: emp.dni || emp.id, pin: JEFE_PIN, deviceId: idDispositivo()});
 
   const pedirPin = (error)=>{
+    let pin = '';
     cuerpo.innerHTML = (error ? '<div class="alert alert-bad" style="margin-bottom:10px">'+esc(error)+'</div>' : '')+
-      '<div class="frow"><div><label>Tu PIN de jefe</label>'+
-      '<input id="jfPin" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div></div>'+
-      '<button class="btn" id="jfOk" style="width:100%">Entrar</button>';
-    const inp = cuerpo.querySelector('#jfPin'); inp.focus();
-    cuerpo.querySelector('#jfOk').onclick = ()=>{ JEFE_PIN = inp.value.trim(); cargar(); };
-    inp.onkeydown = e=>{ if(e.key==='Enter'){ JEFE_PIN = inp.value.trim(); cargar(); } };
+      '<div style="text-align:center"><div class="id-icon" style="margin:0 auto 12px">'+ico('lock')+'</div>'+
+      '<div style="font-size:22px;font-weight:800">Ingresa tu PIN de jefe</div>'+
+      '<p style="color:var(--gray-700);margin:6px 0 14px">Lo protege para que nadie más dé visto bueno desde tu celular.</p>'+
+      '<div class="pdots" id="jfDots"></div>'+
+      '<div class="pkeys">'+['1','2','3','4','5','6','7','8','9','','0','⌫'].map(k=>
+        k ? '<button type="button" class="pkey" data-k="'+k+'">'+k+'</button>' : '<span></span>').join('')+'</div>'+
+      '<button class="btn" id="jfOk" style="width:100%;margin-top:14px" disabled>Entrar</button></div>';
+    const dots = cuerpo.querySelector('#jfDots'), ok = cuerpo.querySelector('#jfOk');
+    const pintar = ()=>{
+      const n = Math.max(4, pin.length);
+      dots.innerHTML = Array.from({length:n}, (_,i)=>'<span class="'+(i<pin.length?'on':'')+'"></span>').join('');
+      ok.disabled = pin.length < 4;
+    };
+    const entrar = ()=>{ if(pin.length >= 4){ JEFE_PIN = pin; cargar(); } };
+    cuerpo.querySelectorAll('.pkey').forEach(b=>b.onclick = ()=>{
+      const k = b.dataset.k;
+      if(k==='⌫') pin = pin.slice(0,-1); else if(pin.length < 6) pin += k;
+      pintar();
+      if(pin.length === 6) entrar();
+    });
+    ok.onclick = entrar;
+    pintar();
   };
 
   const cargar = async ()=>{
@@ -6117,11 +6165,11 @@ function grafBarras(datos, opts){
       const h = Math.max(Math.round(d.valor/max*100), d.valor>0?4:1);
       const col = d.color || (opts.color || 'var(--primary)');
       return '<div style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:5px;height:100%">'+
-        '<div style="font-size:11.5px;font-weight:750;font-variant-numeric:tabular-nums">'+esc(d.texto!=null?d.texto:d.valor)+'</div>'+
+        '<div style="font-size:11px;font-weight:700;font-variant-numeric:tabular-nums">'+esc(d.texto!=null?d.texto:d.valor)+'</div>'+
         '<div style="flex:1;display:flex;align-items:flex-end;width:100%">'+
-          '<div title="'+esc(d.etiqueta+': '+(d.texto!=null?d.texto:d.valor))+'" style="width:100%;height:'+h+'%;background:'+col+';border-radius:5px 5px 0 0"></div>'+
+          '<div title="'+esc(d.etiqueta+': '+(d.texto!=null?d.texto:d.valor))+'" style="width:100%;height:'+h+'%;background:'+col+';border-radius:10px 10px 4px 4px"></div>'+
         '</div>'+
-        '<div style="font-size:10.5px;color:var(--muted);text-align:center;line-height:1.25;word-break:break-word">'+esc(d.etiqueta)+'</div>'+
+        '<div style="font-size:11px;font-weight:600;color:var(--gray-700);text-align:center;line-height:1.25;word-break:break-word">'+esc(d.etiqueta)+'</div>'+
       '</div>';
     }).join('')+'</div>';
 }
@@ -6507,8 +6555,9 @@ function analisisHTML(desde, hasta, ahora){
             texto: g.length + (g.length ? ' · '+g.reduce((s,m)=>s+m.tardanza,0)+"'" : '')};
   });
   const horas = {};
-  tardes.forEach(m=>{ const h = m.hora.slice(0,2); horas[h] = (horas[h]||0)+1; });
-  const porHora = Object.keys(horas).sort().map(h=>({etiqueta: h+':00', valor: horas[h]}));
+  tardes.forEach(m=>{ const h = ('0'+String(m.hora).split(':')[0]).slice(-2); horas[h] = (horas[h]||0)+1; });
+  // Por hora entera y con etiqueta corta ("9h"), para que se lea bajo cada barra
+  const porHora = Object.keys(horas).sort().map(h=>({etiqueta: (+h)+'h', valor: horas[h]}));
 
   // --- Reincidentes ---
   const top = filas.filter(r=>r.a.minutos>0).slice(0,5);
@@ -6525,18 +6574,19 @@ function analisisHTML(desde, hasta, ahora){
     '<div class="cfgrid" style="margin-bottom:18px">'+
       tarjetaGraf('Tasa de absentismo por semana',
         'Faltas no justificadas sobre días programados. Las semanas se rotulan por su lunes.',
-        grafBarras(datosAbs))+
+        grafBarras(datosAbs.map(d=>Object.assign({}, d, {color:'var(--danger)'}))))+
       tarjetaGraf('Tardanzas por día de la semana',
         'Cantidad de tardanzas y minutos acumulados. Sirve para saber qué día reforzar.',
         grafBarras(porDia, {color:'var(--warn)'}))+
       tarjetaGraf('Hora de ingreso de las tardanzas',
         'A qué hora llegan realmente quienes llegan tarde.',
-        grafBarras(porHora, {color:'var(--warn)'}))+
+        grafBarras(porHora, {color:'var(--navy)'}))+
       (top.length ? tarjetaGraf('Mayor tardanza acumulada', 'Los cinco casos que más minutos suman en el periodo.',
-        '<div>'+top.map(r=>
-          '<div style="display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px">'+
-            '<span><b>'+esc(r.e.nombre)+'</b><br><span style="font-size:12px;color:var(--muted)">'+esc(r.e.area)+' · '+r.a.tardanzas+' tardanza'+(r.a.tardanzas===1?'':'s')+'</span></span>'+
-            '<span style="font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap">'+min2hhmm(r.a.minutos)+'</span>'+
+        '<div>'+top.map((r,i)=>
+          '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line);font-size:15px">'+
+            '<span style="width:32px;height:32px;border-radius:50%;background:var(--navy-100);color:var(--navy-dark);font-weight:800;display:grid;place-items:center;flex:none">'+(i+1)+'</span>'+
+            '<span style="flex:1;min-width:0"><b>'+esc(nombrePropio(r.e.nombre))+'</b><br><span style="font-size:13px;color:var(--gray-700)">'+esc(r.e.area)+' · '+r.a.tardanzas+' tardanza'+(r.a.tardanzas===1?'':'s')+'</span></span>'+
+            '<span style="font-weight:800;color:#8a4f00;font-variant-numeric:tabular-nums;white-space:nowrap">'+min2hhmm(r.a.minutos)+'</span>'+
           '</div>').join('')+'</div>') : '')+
     '</div>'+
 
@@ -6827,24 +6877,25 @@ function vistaSemana(gente, idsArea, barra){
           const est = estadoProg(a.estado);
           return '<div style="margin-bottom:3px;line-height:1.3">'+
             '<b style="color:'+est.color+'">'+esc(a.entrada)+'–'+esc(a.salida)+'</b>'+
-            (a.modalidad==='REMOTO' ? '<div style="font-size:10px;color:var(--warn)">desde casa</div>' : '')+
+            (a.modalidad==='REMOTO' ? '<div style="font-size:11px;font-weight:700;color:#8a4f00">desde casa</div>' : '')+
             (a.estado!=='PUBLICADO' ? '<div style="font-size:10px;color:'+est.color+'">'+est.nombre+'</div>' : '')+
           '</div>';
         }).join('')
       : (base ? '<span style="color:var(--muted)">'+esc(base.in)+'–'+esc(base.out)+'</span>'
               : '<span style="color:var(--muted);font-size:11px">'+(esFeriado(fecha)?'feriado':'libre')+'</span>');
-    const fondo = tramos.length ? estadoProg(tramos[0].estado).fondo : '';
-    return '<td style="text-align:center;'+(fondo?'background:'+fondo+';':'')+(soloVista()?'':'cursor:pointer')+'"'+
+    const casa = tramos.some(a=>a.modalidad==='REMOTO');
+    const fondo = tramos.length ? (casa ? 'var(--warn-bg)' : estadoProg(tramos[0].estado).fondo) : '';
+    return '<td class="'+(tramos.length?'pg-prog':'pg-base')+'" style="text-align:center;'+(fondo?'background:'+fondo+';':'')+(soloVista()?'':'cursor:pointer')+'"'+
            (soloVista()?'':' data-prog="'+esc(e.id)+'|'+fecha+'"')+'>'+cel+'</td>';
   };
 
   const nomDia = fecha=>{
     const d = new Date(fecha+'T12:00:00');
-    return '<div'+(fecha===hoy?' style="color:var(--primary)"':'')+'>'+DIAS[d.getDay()].slice(0,3)+
+    return '<div'+(fecha===hoy?' style="color:var(--navy);font-weight:800"':'')+'>'+DIAS[d.getDay()].slice(0,3)+
       '<div style="font-size:11px;color:var(--muted);font-weight:400">'+d.getDate()+' '+MESES[d.getMonth()].slice(0,3)+'</div></div>';
   };
 
-  return '<div class="alert alert-ok" style="margin-bottom:16px">'+
+  return '<div class="alert alert-info" style="margin-bottom:16px">'+
       'Aquí se reparte la jornada cuando el turno fijo no alcanza — el domingo, con la tienda '+
       'abierta todo el día y el equipo cubriendo franjas distintas.<br>'+
       '<b>Arma la semana, publícala, y al terminar valida los turnos que sí se cubrieron.</b> '+
@@ -6856,7 +6907,7 @@ function vistaSemana(gente, idsArea, barra){
         (porValidar ? '<button class="btn btn-sm btn-line" id="prVal">Validar turnos cumplidos ('+porValidar+')</button>' : '')+
       '</div>')+
     (gente.length
-      ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
+      ? '<div class="tblwrap"><div class="tblscroll"><table class="pgrid"><thead><tr>'+
           '<th>Colaborador</th>'+ dias.map(f2=>'<th style="text-align:center">'+nomDia(f2)+'</th>').join('')+
         '</tr></thead><tbody>'+
         gente.map(e=>'<tr>'+
@@ -7549,26 +7600,26 @@ function tabPermisos(b){
     const vencido = g.desde < hoy;
     const ids = esc(g.ids.join(','));
     return '<tr>'+
-      (conBotones && !soloVista() ? '<td><input type="checkbox" class="pSel" value="'+ids+'"></td>' : '')+
+      (conBotones && !soloVista() ? '<td class="tc-wide"><input type="checkbox" class="pSel" value="'+ids+'"></td>' : '')+
       '<td class="name">'+esc(p.nombre)+'</td>'+
-      '<td><span class="tag '+(t.id==='DIA'||t.ausencia?'tag-warn':'tag-ok')+'">'+esc(t.nombre)+'</span></td>'+
-      '<td class="num">'+rango(g)+
+      '<td data-l="Tipo"><span class="tag tag-info">'+esc(t.nombre)+'</span></td>'+
+      '<td class="num" data-l="Días">'+rango(g)+
         (vencido && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--danger)">ya empezó</div>' : '')+'</td>'+
-      '<td class="num">'+esc(p.hora ? (p.horaFin ? p.hora+'–'+p.horaFin : p.hora) : '—')+'</td>'+
-      '<td style="white-space:normal;min-width:180px">'+esc(motivoSinMarca(p))+
+      '<td class="num" data-l="Hora">'+esc(p.hora ? (p.horaFin ? p.hora+'–'+p.horaFin : p.hora) : '—')+'</td>'+
+      '<td class="tc-wide" data-l="Motivo" style="white-space:normal;min-width:180px">'+esc(motivoSinMarca(p))+
         (p.adjunto ? '<div><a href="'+esc(p.adjunto)+'" target="_blank" rel="noopener" style="font-size:13px;font-weight:700;color:var(--navy)">'+ico('clip')+' Ver certificado</a></div>' : '')+
         (t.id==='VACACIONES' && saldoVac(EMP.find(e=>e.id===p.empId)||{}) ?
           '<div style="font-size:11.5px;color:var(--muted)">Saldo: '+saldoVac(EMP.find(e=>e.id===p.empId)).saldo+' días</div>' : '')+'</td>'+
-      '<td>'+(p.estado==='PENDIENTE' && p.vistoJefe ? '<span class="tag tag-ok" style="margin-bottom:4px">VISTO JEFE</span><br>' :
+      '<td class="tc-wide" data-l="Estado">'+(p.estado==='PENDIENTE' && p.vistoJefe ? '<span class="tag tag-ok" style="margin-bottom:4px">VISTO JEFE</span><br>' :
               p.estado==='PENDIENTE' && jefeDeEmp(p.empId) ? '<span class="tag tag-warn" style="margin-bottom:4px">ESPERA JEFE</span><br>' : '')+
         (p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>'
              : p.estado==='RECHAZADO' ? '<span class="tag tag-bad">RECHAZADO</span>'
              : '<span class="tag tag-warn">PENDIENTE</span>')+
         (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+
         (p.vistoJefePor && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--muted)">Visto: '+esc(p.vistoJefePor)+'</div>' : '')+'</td>'+
-      '<td style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
-      (soloVista() ? '<td></td>'
-        : '<td><div style="display:flex;gap:6px;align-items:center">'+
+      '<td class="'+(p.comentario?'tc-wide':'tc-hide')+'" data-l="Comentario" style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
+      (soloVista() ? '<td class="tc-hide"></td>'
+        : '<td class="tc-wide"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
             (conBotones
               ? '<button class="btn btn-sm" data-ok="'+ids+'">Aprobar</button>'+
                 '<button class="btn btn-sm btn-line" data-no="'+ids+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'
@@ -7576,7 +7627,7 @@ function tabPermisos(b){
             // Borrar es para la solicitud que nació mal —una prueba, un duplicado,
             // un día equivocado—, no para deshacer una decisión.
             '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
-              'style="color:var(--muted)" title="Borrar la solicitud">Borrar</button>'+
+              'style="color:var(--gray-700);padding:0;width:44px" title="Borrar la solicitud" aria-label="Borrar">'+ico('trash')+'</button>'+
           '</div></td>')+
     '</tr>';
   };
@@ -7601,7 +7652,7 @@ function tabPermisos(b){
             '<button class="btn btn-sm" id="pOkSel" disabled>Aprobar seleccionadas</button>'+
             '<button class="btn btn-sm btn-line" id="pNoSel" disabled style="color:var(--danger);border-color:var(--danger)">Rechazar seleccionadas</button></div>')+
         '</div>'+
-        '<div class="tblwrap"><div class="tblscroll"><table>'+cab(true)+'<tbody>'+
+        '<div class="tblwrap"><div class="tblscroll"><table class="tcards">'+cab(true)+'<tbody>'+
         pend.map(g=>fila(g,true)).join('')+'</tbody></table></div></div>'
       : '')+
 
@@ -7618,7 +7669,7 @@ function tabPermisos(b){
         meses.map(m=>opt(m, MESES[+m.slice(5,7)-1]+' '+m.slice(0,4), f.mes)).join('')+'</select></div>'+
     '</div>'+
     (resueltos.length
-      ? '<div class="tblwrap"><div class="tblscroll"><table>'+cab(false)+'<tbody>'+
+      ? '<div class="tblwrap"><div class="tblscroll"><table class="tcards">'+cab(false)+'<tbody>'+
         resueltos.slice(0,80).map(g=>fila(g,false)).join('')+'</tbody></table></div></div>'
       : '<p style="color:var(--muted);font-size:13px">No hay solicitudes con esos filtros.</p>')+
 
@@ -8379,7 +8430,8 @@ function cargarDniMasivo(){
 function editarEmp(id){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:'', planilla:true};
-  const m=document.createElement('div'); m.className='modal';
+  const m=document.createElement('div'); m.className='modal side';
+  m.onclick = ev=>{ if(ev.target === m) m.remove(); };       // clic fuera cierra la ficha
   m.innerHTML='<div class="box"><h2>'+(id?'Editar colaborador':'Nuevo colaborador')+'</h2>'+
     fld('Nombre completo','nm',e.nombre)+
     fld('DNI (con esto ingresa a marcar)','dn',e.dni||'')+
@@ -8554,15 +8606,15 @@ function tabCfg(b){
 
   '<div class="cfg" style="grid-column:1/-1"><h3>Modo de uso</h3>'+
   '<p class="hint">Define cómo marca el equipo. Cámbialo solo con criterio: afecta a todos los que usen este dispositivo.</p>'+
-  '<div class="frow"><div><label>Modo</label><select id="cRec">'+
-    opt('0','Personal — cada quien marca desde su propio celular', CFG.modoRecepcion?'1':'0')+
-    opt('1','Recepción — un equipo compartido en la puerta',        CFG.modoRecepcion?'1':'0')+
-  '</select></div></div>'+
-  '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 0;line-height:1.55">'+
-    '<b>Personal:</b> el equipo se vincula a una persona y después marca de un toque. Cada celular guarda lo suyo, '+
-    'así que el panel solo ve los marcajes hechos en <i>este</i> navegador.<br>'+
-    '<b>Recepción:</b> nadie queda vinculado, cada persona escribe su DNI y todos los marcajes quedan juntos en este equipo. '+
-    'Es la única forma de tener el consolidado completo mientras no exista la base de datos central.</p></div>'+
+  '<select id="cRec" class="hidden">'+
+    opt('0','Personal', CFG.modoRecepcion?'1':'0')+opt('1','Recepción', CFG.modoRecepcion?'1':'0')+
+  '</select>'+
+  '<div class="rcards">'+
+    '<button type="button" class="rcard'+(CFG.modoRecepcion?'':' on')+'" data-rec="0"><b>Personal</b>'+
+      '<span>Cada quien marca desde su propio celular. El equipo se vincula a una persona y después marca de un toque.</span></button>'+
+    '<button type="button" class="rcard'+(CFG.modoRecepcion?' on':'')+'" data-rec="1"><b>Recepción</b>'+
+      '<span>Un equipo compartido en la puerta. Nadie queda vinculado: cada persona escribe su DNI y la pantalla queda lista para la siguiente.</span></button>'+
+  '</div></div>'+
 
   '<div class="cfg"><h3>Ubicación de la oficina</h3>'+
   '<p class="hint">Párate en la puerta de la oficina con este dispositivo y toca el botón. Es más preciso que escribir una dirección.</p>'+
@@ -8771,6 +8823,11 @@ function tabCfg(b){
   '</div><div style="margin-top:18px"><button class="btn" id="cSave" style="max-width:260px">Guardar configuración</button></div>';
 
   function opt(v,l,cur){ return '<option value="'+v+'"'+(String(cur)===v?' selected':'')+'>'+l+'</option>'; }
+
+  $$('.rcard').forEach(c=>c.onclick = ()=>{
+    $('#cRec').value = c.dataset.rec;
+    $$('.rcard').forEach(x=>x.classList.toggle('on', x===c));
+  });
 
   $('#cGeo').onclick = ()=>{
     const out=$('#cGeoOut'); out.textContent='Obteniendo ubicación…';
