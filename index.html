@@ -2759,10 +2759,19 @@ const TIPOS_PERMISO = [
    efecto:'Su tardanza queda justificada y no suma minutos perdidos.'},
   {id:'SALIDA_ANTES', nombre:'Salir antes',         pideHora:true,
    efecto:'Su salida anticipada no penaliza.'},
-  {id:'DIA',          nombre:'Faltar todo el día',  pideHora:false,
+  {id:'DIA',          nombre:'Faltar todo el día',  pideHora:false, rango:true,
    efecto:'El día no cuenta como falta ni como asistencia.'},
-  {id:'CASA',         nombre:'Trabajar desde casa', pideHora:false,
+  {id:'CASA',         nombre:'Trabajar desde casa', pideHora:false, rango:true,
    efecto:'Ese día marca sin validación de ubicación y cuenta como asistido.'},
+  // Estos dos se piden como días de permiso ("DIA"), que el servidor ya conoce, con
+  // una marca al inicio del motivo. Al aprobarlos, además, se registran como
+  // ausencia de ese tipo, para que los reportes los separen de un permiso común.
+  {id:'VACACIONES',   nombre:'Vacaciones',          pideHora:false, rango:true, viajaComo:'DIA',
+   marca:'[Vacaciones]', ausencia:'VACACIONES',
+   efecto:'Esos días no cuentan como falta y quedan registrados como vacaciones.'},
+  {id:'MEDICO',       nombre:'Descanso médico',     pideHora:false, rango:true, viajaComo:'DIA', pasadoCorto:true,
+   marca:'[Descanso médico]', ausencia:'MEDICO',
+   efecto:'Esos días no cuentan como falta y quedan registrados como descanso médico. Entrega tu certificado a Administración.'},
   // Este mira hacia atrás, no hacia adelante: es para el día que ya se trabajó y
   // no se marcó. Al aprobarlo se escribe la asistencia de ese día.
   {id:'JORNADA',      nombre:'Trabajé y no marqué', pideHora:true, pideHoraFin:true, pasado:true,
@@ -2770,11 +2779,27 @@ const TIPOS_PERMISO = [
 ];
 const tipoPermiso = id => TIPOS_PERMISO.find(t=>t.id===id) || TIPOS_PERMISO[0];
 
+/* El tipo "de verdad" de una solicitud: vacaciones y descanso médico llegan del
+   servidor como DIA, y se reconocen por la marca al inicio del motivo. */
+function tipoReal(p){
+  if(p.tipo==='DIA'){
+    const v = TIPOS_PERMISO.find(t=>t.marca && String(p.motivo||'').indexOf(t.marca)===0);
+    if(v) return v;
+  }
+  return tipoPermiso(p.tipo);
+}
+function motivoSinMarca(p){
+  const t = tipoReal(p);
+  const m = t.marca ? String(p.motivo||'').slice(t.marca.length).trim() : String(p.motivo||'');
+  // El rango "(del … al …)" solo sirve para agrupar: las fechas ya se muestran aparte
+  return m.replace(/\s*\(del [0-9/]+ al [0-9/]+\)$/, '');
+}
+
 /* En el tablero del día no cabe "Trabajar desde casa" dentro de una etiqueta, y
    "PERMISO" a secas no dice nada: quien mira quiere saber qué se autorizó. */
 const ETIQUETA_PERMISO = {
   TARDANZA:'TARDANZA OK', SALIDA_ANTES:'SALE ANTES', DIA:'PERMISO DEL DÍA',
-  CASA:'DESDE CASA', JORNADA:'JORNADA'
+  CASA:'DESDE CASA', JORNADA:'JORNADA', VACACIONES:'VACACIONES', MEDICO:'DESCANSO MÉDICO'
 };
 const etiquetaPermiso = tipo => ETIQUETA_PERMISO[tipo] || 'PERMISO';
 
@@ -3162,7 +3187,8 @@ async function sincronizarArranque(){
   if(r.cfg){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados','domingosTrabajados',
-     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas'].forEach(k=>{
+     'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas',
+     'sedesExtra','nombreSedePrincipal'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -3604,7 +3630,8 @@ function estadoDia(emp, fechaISO, ahora){
   // el día sale del conteo, ni falta ni asistencia. Si igual marcó, manda el marcaje.
   const permDia = permisoAprobado(emp.id, fechaISO, 'DIA');
   if(permDia && !j.entrada){
-    return Object.assign(base, {clase:'JUSTIFICADA', etiqueta:'PERMISO', cls:'tag-warn', permiso:permDia});
+    const tr = tipoReal(permDia);
+    return Object.assign(base, {clase:'JUSTIFICADA', etiqueta: tr.ausencia ? etiquetaPermiso(tr.id) : 'PERMISO', cls:'tag-warn', permiso:permDia});
   }
 
   // Una ausencia autorizada manda, salvo que la persona igual haya marcado
@@ -3752,6 +3779,61 @@ function tick(){
 }
 setInterval(tick,1000); tick();
 
+/* ---------- 5a. SEDES ----------
+   La sede principal es la de siempre (CFG.lat/lng/radio): así el servidor, que
+   hoy valida contra ese punto, sigue funcionando igual. Las demás —el fundo de
+   Jayanca, un almacén— viven en CFG.sedesExtra, cada una con su propio radio.
+
+   Cada colaborador tiene una sede asignada (emp.sede):
+     ''  o 'PRINCIPAL'  → solo la oficina principal (lo de siempre)
+     'TODAS'            → cualquiera de las sedes (gerencia, supervisores que viajan)
+     id de una sede     → solo esa sede */
+function sedePrincipal(){
+  return {id:'PRINCIPAL', nombre: CFG.nombreSedePrincipal || 'Oficina', lat:+CFG.lat, lng:+CFG.lng, radio:+CFG.radio || 150};
+}
+/* La hoja de configuración guarda las listas como texto JSON: se aceptan ambas formas */
+function sedesExtra(){
+  let v = CFG.sedesExtra;
+  if(typeof v === 'string'){ try{ v = JSON.parse(v); }catch(e){ v = []; } CFG.sedesExtra = v; }
+  return Array.isArray(v) ? v : [];
+}
+function todasLasSedes(){
+  return [sedePrincipal()].concat(sedesExtra().filter(x=>x && x.id && !isNaN(+x.lat) && !isNaN(+x.lng))
+    .map(x=>({id:x.id, nombre:x.nombre||'Sede', lat:+x.lat, lng:+x.lng, radio:+x.radio || 300})));
+}
+function sedesDe(emp){
+  const todas = todasLasSedes();
+  const s = emp && emp.sede;
+  if(!s || s==='PRINCIPAL') return [todas[0]];
+  if(s==='TODAS') return todas;
+  const una = todas.filter(x=>x.id===s);
+  return una.length ? una : [todas[0]];
+}
+function nombreSede(id){
+  if(!id || id==='PRINCIPAL') return sedePrincipal().nombre;
+  if(id==='TODAS') return 'Todas las sedes';
+  const x = sedesExtra().find(z=>z.id===id);
+  return x ? x.nombre : id;
+}
+/* La sede más cercana de las que le corresponden, con su distancia */
+function sedeMasCercana(emp, lat, lng){
+  return sedesDe(emp).map(x=>Object.assign({}, x, {dist: haversine(lat, lng, x.lat, x.lng)}))
+                     .sort((a,b)=>a.dist-b.dist)[0];
+}
+
+/* Coordenadas desde lo que se pegue: un enlace de Google Maps (@-6.39,-79.82 o
+   !3d-6.39!4d-79.82 o ?q=-6.39,-79.82) o dos números separados por coma. */
+function coordsDeTexto(t){
+  t = String(t||'');
+  const pats = [/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/, /@(-?\d+\.\d+),\s*(-?\d+\.\d+)/,
+                /[?&](?:q|query|ll)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/, /(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/];
+  for(const re of pats){
+    const m = t.match(re);
+    if(m){ const la=+m[1], lo=+m[2]; if(Math.abs(la)<=90 && Math.abs(lo)<=180) return {lat:la, lng:lo}; }
+  }
+  return null;
+}
+
 /* ---------- 5. ESTADO DE UBICACIÓN ---------- */
 let GEO = {estado:'pendiente', lat:null, lng:null, dist:null, precision:null, msg:'Verificando ubicación…'};
 
@@ -3768,12 +3850,19 @@ function pedirUbicacion(cb, forzar){
   GEO.estado='pendiente'; GEO.msg='Obteniendo tu ubicación…'; cb&&cb();
   navigator.geolocation.getCurrentPosition(
     p=>{
-      const d = haversine(p.coords.latitude, p.coords.longitude, CFG.lat, CFG.lng);
+      // Se mide contra la sede más cercana de las que le tocan a esta persona
+      const emp = DEV ? EMP.find(x=>x.id===DEV.empId) : null;
+      const sd = sedeMasCercana(emp, p.coords.latitude, p.coords.longitude);
+      const d = sd.dist;
+      const varias = todasLasSedes().length > 1;
+      const lugar = varias ? sd.nombre : 'la oficina';
       GEO = {
         lat:p.coords.latitude, lng:p.coords.longitude, dist:d,
         precision:Math.round(p.coords.accuracy||0),
-        estado: d <= CFG.radio ? 'dentro' : 'fuera',
-        msg: d <= CFG.radio ? 'Estás en la oficina' : 'Estás a '+(d>=1000?(d/1000).toFixed(1)+' km':d+' m')+' de la oficina'
+        sede: sd.id, sedeNombre: sd.nombre,
+        estado: d <= sd.radio ? 'dentro' : 'fuera',
+        msg: d <= sd.radio ? (varias ? 'Estás en '+sd.nombre : 'Estás en la oficina')
+                           : 'Estás a '+(d>=1000?(d/1000).toFixed(1)+' km':d+' m')+' de '+lugar
       };
       cb&&cb();
     },
@@ -4040,7 +4129,7 @@ function pintarPermiso(emp){
                        .sort((a,b)=>a.fecha.localeCompare(b.fecha));
   c.innerHTML =
     mios.map(p=>{
-      const t = tipoPermiso(p.tipo);
+      const t = tipoReal(p);
       const cls = p.estado==='APROBADO' ? 'alert-ok' : p.estado==='RECHAZADO' ? 'alert-bad' : 'alert-warn';
       return '<div class="alert '+cls+'" style="text-align:left;margin-bottom:10px">'+
         '<b>'+esc(t.nombre)+'</b> · '+esc(fechaCorta(p.fecha))+' — <b>'+esc(p.estado)+'</b>'+
@@ -4064,7 +4153,8 @@ function solicitarPermiso(emp, tipoInicial){
     '</select></div></div>'+
     '<p id="pkEf" style="font-size:12px;color:var(--muted);margin:-6px 0 12px;line-height:1.5"></p>'+
     '<div class="frow">'+
-      '<div><label>¿Qué día?</label><input type="date" id="pkF" value="'+hoy+'" min="'+hoy+'" max="'+hoy+'"></div>'+
+      '<div><label id="pkFL">¿Qué día?</label><input type="date" id="pkF" value="'+hoy+'" min="'+hoy+'" max="'+hoy+'"></div>'+
+      '<div id="pkHasta" style="display:none"><label>¿Hasta qué día?</label><input type="date" id="pkF2" value="'+hoy+'"></div>'+
       '<div id="pkHora"><label>¿A qué hora?</label><input type="time" id="pkH"></div>'+
       '<div id="pkHoraFin" style="display:none"><label>¿Hasta qué hora?</label><input type="time" id="pkH2"></div>'+
     '</div>'+
@@ -4079,11 +4169,14 @@ function solicitarPermiso(emp, tipoInicial){
     m.querySelector('#pkEf').textContent = 'Si te lo aprueban: '+t.efecto;
     m.querySelector('#pkHora').style.display    = t.pideHora    ? '' : 'none';
     m.querySelector('#pkHoraFin').style.display = t.pideHoraFin ? '' : 'none';
+    m.querySelector('#pkHasta').style.display   = t.rango ? '' : 'none';
+    m.querySelector('#pkFL').textContent        = t.rango ? '¿Desde qué día?' : '¿Qué día?';
     const fe = m.querySelector('#pkF');
     // Los permisos normales son hacia adelante; el de jornada trabajada mira atrás.
-    if(t.pasado){
-      const tope = hoyISO(new Date(Date.now()-7*86400000));
-      fe.min = tope; fe.max = hoy;
+    if(t.pasado || t.pasadoCorto){
+      // El descanso médico se suele avisar cuando ya empezó: hasta 3 días atrás
+      const tope = hoyISO(new Date(Date.now()-(t.pasado?7:3)*86400000));
+      fe.min = tope; fe.max = t.pasado ? hoy : '';
       m.querySelector('#pkHora').querySelector('label').textContent = '¿Desde qué hora?';
     }else{
       fe.min = hoy; fe.max = '';
@@ -4110,7 +4203,7 @@ function solicitarPermiso(emp, tipoInicial){
     const motivo = m.querySelector('#pkM').value.trim();
     const t = tipoPermiso(tipo);
     if(!fecha){ toast('Elige el día'); return; }
-    if(!t.pasado && fecha < hoy){ toast('No se puede pedir para un día que ya pasó'); return; }
+    if(!t.pasado && !t.pasadoCorto && fecha < hoy){ toast('No se puede pedir para un día que ya pasó'); return; }
     if(t.pasado && fecha > hoy){ toast('Solo puedes registrar una jornada ya trabajada'); return; }
     if(t.pideHoraFin){
       const h1 = m.querySelector('#pkH').value, h2 = m.querySelector('#pkH2').value;
@@ -4120,6 +4213,34 @@ function solicitarPermiso(emp, tipoInicial){
     if(motivo.length < 4){ toast('Escribe el motivo'); return; }
 
     const b = m.querySelector('#pkG');
+
+    // Varios días: una solicitud por cada día que le toca trabajar, todas con el
+    // mismo motivo, para que Administración las vea y apruebe juntas.
+    if(t.rango){
+      const hasta = m.querySelector('#pkF2').value || fecha;
+      if(hasta < fecha){ toast('La fecha final no puede ser antes de la inicial'); return; }
+      const dias = rangoFechas(fecha, hasta).filter(f=>horarioDe(emp, f));
+      if(!dias.length){ toast('En esas fechas no tienes días de trabajo'); return; }
+      if(dias.length > 31){ toast('Máximo 31 días por solicitud'); return; }
+      const texto = (t.marca ? t.marca+' ' : '') + motivo +
+                    (dias.length > 1 ? ' (del '+fechaCorta(dias[0])+' al '+fechaCorta(dias[dias.length-1])+')' : '');
+      b.disabled = true;
+      let ok = 0, err = '';
+      for(const f of dias){
+        b.textContent = 'Enviando '+(ok+1)+' de '+dias.length+'…';
+        try{
+          const r = await api('permiso', {ident: emp.dni || emp.id, tipo: t.viajaComo || tipo, fecha:f,
+                                          hora:'', horaFin:'', motivo:texto}, {timeout:20000});
+          if(r && r.ok){ ok++; if(r.permiso) PERMISOS = PERMISOS.filter(p=>p.id!==r.permiso.id).concat([r.permiso]); }
+          else err = (r && r.error) || 'No se pudo enviar';
+        }catch(e){ err = 'Sin conexión'; break; }
+      }
+      if(ok === dias.length){ m.remove(); toast('Solicitud enviada: '+ok+' día'+(ok===1?'':'s')); renderMark(); }
+      else{ b.disabled = false; b.textContent = 'Enviar';
+            toast('Se enviaron '+ok+' de '+dias.length+' días. '+err+'. Vuelve a intentar.'); }
+      return;
+    }
+
     b.disabled = true; b.textContent = 'Enviando…';
     try{
       const r = await api('permiso', {ident: emp.dni || emp.id, tipo, fecha,
@@ -4587,7 +4708,8 @@ async function marcar(){
     anticipada: ev.anticipada||0,
     lat: GEO.lat, lng: GEO.lng, dist: GEO.dist,
     fueraZona: GEO.estado==='fuera',
-    gps: GEO.estado
+    gps: GEO.estado,
+    sede: GEO.sede || 'PRINCIPAL'
   };
   let pendiente = false;
 
@@ -4601,7 +4723,8 @@ async function marcar(){
       ident: emp.dni || emp.tel || emp.email || emp.id,
       id: emp.id, cid, tipo,
       lat: GEO.lat==null?'':GEO.lat, lng: GEO.lng==null?'':GEO.lng,
-      gps: GEO.estado, deviceId: idDispositivo(), equipo: infoEquipo()
+      gps: GEO.estado, deviceId: idDispositivo(), equipo: infoEquipo(),
+      sede: GEO.sede || 'PRINCIPAL', sedeNombre: GEO.sedeNombre || sedePrincipal().nombre
     };
     try{
       let r = await api('marcar', datosMarcaje, {timeout:45000});
@@ -5111,16 +5234,22 @@ function avisoUbicacion(){
 
 /* ---------- FILTROS COMPARTIDOS DEL PANEL ----------
    Proyecto, turno y área se aplican igual en Hoy y en Análisis. */
-let FLT = {proyecto:'', turno:'', area:'', planilla:''};
+let FLT = {proyecto:'', turno:'', area:'', planilla:'', sede:''};
 
 function filtrarEmp(lista){
   return lista.filter(e=>
     (!FLT.proyecto || (e.proyecto||'') === FLT.proyecto) &&
     (!FLT.turno    || e.turno === FLT.turno) &&
     (!FLT.area     || e.area  === FLT.area) &&
+    aplicaSede(e) &&
     aplicaPlanilla(e));
 }
-function hayFiltro(){ return !!(FLT.proyecto || FLT.turno || FLT.area || FLT.planilla); }
+function hayFiltro(){ return !!(FLT.proyecto || FLT.turno || FLT.area || FLT.planilla || FLT.sede); }
+function aplicaSede(e){
+  if(!FLT.sede) return true;
+  const s = e.sede || 'PRINCIPAL';
+  return s === FLT.sede || s === 'TODAS';
+}
 
 /* En planilla o fuera. Se guarda como booleano; quien no lo tenga definido cuenta
    como en planilla, para no cambiarle la situación a nadie sin que se decida. */
@@ -5147,6 +5276,9 @@ function htmlFiltros(pfx){
     '<div>'+lbl('Área')+'<select class="sel" id="'+pfx+'A">'+
       opt('','Todas',FLT.area)+ areas.map(a=>opt(a,a,FLT.area)).join('')+
     '</select></div>'+
+    (todasLasSedes().length > 1 ? '<div>'+lbl('Sede')+'<select class="sel" id="'+pfx+'S">'+
+      opt('','Todas',FLT.sede)+ todasLasSedes().map(x=>opt(x.id, x.nombre, FLT.sede)).join('')+
+    '</select></div>' : '')+
     '<div>'+lbl('Vínculo')+'<select class="sel" id="'+pfx+'L">'+
       opt('','Todos',FLT.planilla)+
       opt('SI','En planilla',FLT.planilla)+
@@ -5156,7 +5288,7 @@ function htmlFiltros(pfx){
 
 function wireFiltros(pfx, alCambiar){
   const set = (campo, id)=>{ const el=$('#'+id); if(el) el.onchange = ()=>{ FLT[campo]=el.value; alCambiar(); }; };
-  set('proyecto', pfx+'P'); set('turno', pfx+'T'); set('area', pfx+'A'); set('planilla', pfx+'L');
+  set('proyecto', pfx+'P'); set('turno', pfx+'T'); set('area', pfx+'A'); set('planilla', pfx+'L'); set('sede', pfx+'S');
 }
 
 /* "__sin" filtra a los que todavía no tienen proyecto asignado */
@@ -5177,6 +5309,7 @@ function pasaFiltros(empId){
   return aplicaProyecto(e) &&
          (!FLT.turno || e.turno===FLT.turno) &&
          (!FLT.area  || e.area===FLT.area) &&
+         aplicaSede(e) &&
          aplicaPlanilla(e);
 }
 
@@ -5185,6 +5318,7 @@ function plantilla(){
             .filter(e=>aplicaProyecto(e))
             .filter(e=>!FLT.turno || e.turno===FLT.turno)
             .filter(e=>!FLT.area  || e.area===FLT.area)
+            .filter(e=>aplicaSede(e))
             .filter(e=>aplicaPlanilla(e));
 }
 
@@ -5374,7 +5508,7 @@ function avisoPermisosPendientes(){
   if(!pend.length) return '';
 
   const fila = p=>{
-    const t = tipoPermiso(p.tipo);
+    const t = tipoReal(p);
     const cuando = p.fecha===hoy ? '<b>hoy</b>' : 'el '+fechaCorta(p.fecha);
     return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'+
       'padding:9px 0;border-top:1px solid rgba(0,0,0,.07)">'+
@@ -5485,7 +5619,7 @@ function tabHoy(b){
           (r.porValidar ? ' <span class="tag tag-warn" style="font-size:9px">POR VALIDAR</span>' : '')+
           (r.prog && r.prog.estado==='VALIDADO' ? ' <span class="tag tag-ok" style="font-size:9px">VALIDADO</span>' : '')+
           (r.permiso ? ' <span class="tag tag-ok" style="font-size:9px" title="'+
-            esc(tipoPermiso(r.permiso.tipo).nombre+' · '+r.permiso.motivo+
+            esc(tipoReal(r.permiso).nombre+' · '+motivoSinMarca(r.permiso)+
                 (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">'+
             esc(etiquetaPermiso(r.permiso.tipo))+'</span>' : '')+'</td>'+
         '<td class="num">'+(r.tard? r.tard+"'":'—')+'</td>'+
@@ -6127,7 +6261,7 @@ function situacionDe(m){
   });
   const perm = PERMISOS.filter(p=>p.estado==='APROBADO' && p.empId===m.empId && p.fecha===m.fecha);
   perm.forEach(p=>partes.push('<span class="tag tag-warn" style="font-size:9px">PERMISO</span> '+
-    esc(tipoPermiso(p.tipo).nombre)+(p.motivo?' · '+esc(p.motivo):'')));
+    esc(tipoReal(p).nombre)+(p.motivo?' · '+esc(motivoSinMarca(p)):'')));
 
   if(!partes.length){
     const d = new Date(m.fecha+'T12:00:00').getDay();
@@ -6182,7 +6316,7 @@ function bloqueAusencias(desde, hasta, empId){
       accion: soloVista() ? '' : '<button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button>'
     };
   }).concat(per.map(p=>{
-    const t = tipoPermiso(p.tipo);
+    const t = tipoReal(p);
     return {
       fecha: p.fecha, orden: p.fecha, quien: p.nombre,
       que: '<span class="tag tag-ok">'+esc(t.nombre)+'</span>'+
@@ -7024,24 +7158,52 @@ async function guardarTramo(reg, alTerminar){
    revolver con lo ya resuelto: si se mezclan, lo que falta atender se pierde.
    Aprobar o rechazar solo lo puede hacer administración; el acceso de consulta
    los ve pero no los toca. */
+/* Solicitudes agrupadas: los días de un mismo pedido (misma persona, mismo tipo,
+   mismo motivo y mismo estado) se ven y se resuelven como una sola fila. */
+function agruparPermisos(lista){
+  const g = {};
+  lista.forEach(p=>{
+    const k = p.empId+'|'+p.tipo+'|'+(p.motivo||'')+'|'+p.estado+'|'+(p.hora||'');
+    (g[k] = g[k] || []).push(p);
+  });
+  return Object.keys(g).map(k=>{
+    const ps = g[k].sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    return {ps, p:ps[0], ids:ps.map(x=>x.id), desde:ps[0].fecha, hasta:ps[ps.length-1].fecha};
+  });
+}
+
+let FLT_PERM = {texto:'', tipo:'', estado:'', mes:''};
+
 function tabPermisos(b){
   const hoy = hoyISO();
-  const pend = PERMISOS.filter(p=>p.estado==='PENDIENTE')
-                       .sort((a,b2)=>a.fecha.localeCompare(b2.fecha));
-  const resueltos = PERMISOS.filter(p=>p.estado!=='PENDIENTE')
-                            .sort((a,b2)=>b2.fecha.localeCompare(a.fecha));
+  const pend = agruparPermisos(PERMISOS.filter(p=>p.estado==='PENDIENTE'))
+                 .sort((a,c)=>a.desde.localeCompare(c.desde));
+  const f = FLT_PERM;
+  const todosRes = PERMISOS.filter(p=>p.estado!=='PENDIENTE');
+  const meses = Array.from(new Set(todosRes.map(p=>String(p.fecha).slice(0,7)))).sort().reverse();
+  const resueltos = agruparPermisos(todosRes.filter(p=>
+      (!f.tipo   || tipoReal(p).id===f.tipo) &&
+      (!f.estado || p.estado===f.estado) &&
+      (!f.mes    || String(p.fecha).slice(0,7)===f.mes) &&
+      (!f.texto  || (p.nombre+' '+(p.motivo||'')).toLowerCase().indexOf(f.texto.toLowerCase())>=0)))
+    .sort((a,c)=>c.desde.localeCompare(a.desde));
 
-  const fila = (p, conBotones)=>{
-    const t = tipoPermiso(p.tipo);
-    const vencido = p.fecha < hoy;
+  const rango = g => g.ps.length===1 ? esc(fechaCorta(g.desde))
+    : esc(fechaCorta(g.desde))+' → '+esc(fechaCorta(g.hasta))+
+      '<div style="font-size:11px;color:var(--muted)">'+g.ps.length+' días</div>';
+
+  const fila = (g, conBotones)=>{
+    const p = g.p, t = tipoReal(p);
+    const vencido = g.desde < hoy;
+    const ids = esc(g.ids.join(','));
     return '<tr>'+
+      (conBotones && !soloVista() ? '<td><input type="checkbox" class="pSel" value="'+ids+'"></td>' : '')+
       '<td class="name">'+esc(p.nombre)+'</td>'+
-      '<td><span class="tag '+(p.tipo==='DIA'?'tag-warn':'tag-ok')+'">'+esc(t.nombre)+'</span></td>'+
-      '<td class="num">'+esc(fechaCorta(p.fecha))+
-        (vencido && p.estado==='PENDIENTE'
-          ? '<div style="font-size:11px;color:var(--danger)">ya pasó</div>' : '')+'</td>'+
+      '<td><span class="tag '+(t.id==='DIA'||t.ausencia?'tag-warn':'tag-ok')+'">'+esc(t.nombre)+'</span></td>'+
+      '<td class="num">'+rango(g)+
+        (vencido && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--danger)">ya empezó</div>' : '')+'</td>'+
       '<td class="num">'+esc(p.hora ? (p.horaFin ? p.hora+'–'+p.horaFin : p.hora) : '—')+'</td>'+
-      '<td style="white-space:normal;min-width:180px">'+esc(p.motivo)+'</td>'+
+      '<td style="white-space:normal;min-width:180px">'+esc(motivoSinMarca(p))+'</td>'+
       '<td>'+(p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>'
              : p.estado==='RECHAZADO' ? '<span class="tag tag-bad">RECHAZADO</span>'
              : '<span class="tag tag-warn">PENDIENTE</span>')+
@@ -7050,20 +7212,22 @@ function tabPermisos(b){
       (soloVista() ? '<td></td>'
         : '<td><div style="display:flex;gap:6px;align-items:center">'+
             (conBotones
-              ? '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
-                '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'
+              ? '<button class="btn btn-sm" data-ok="'+ids+'">Aprobar</button>'+
+                '<button class="btn btn-sm btn-line" data-no="'+ids+'" style="color:var(--danger);border-color:var(--danger)">Rechazar</button>'
               : '')+
             // Borrar es para la solicitud que nació mal —una prueba, un duplicado,
-            // un día equivocado—, no para deshacer una decisión. Por eso está
-            // separado y en gris: rechazar y borrar no son lo mismo.
-            '<button class="btn btn-sm btn-line" data-delp="'+esc(p.id)+'" '+
+            // un día equivocado—, no para deshacer una decisión.
+            '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
               'style="color:var(--muted)" title="Borrar la solicitud">Borrar</button>'+
           '</div></td>')+
     '</tr>';
   };
 
-  const cabecera = '<thead><tr><th>Colaborador</th><th>Qué pide</th><th>Día</th><th>Hora</th>'+
-    '<th>Motivo</th><th>Estado</th><th>Comentario</th>'+(soloVista()?'<th></th>':'<th></th>')+'</tr></thead>';
+  const cab = conSel => '<thead><tr>'+(conSel && !soloVista() ? '<th><input type="checkbox" id="pTodos"></th>' : '')+
+    '<th>Colaborador</th><th>Qué pide</th><th>Días</th><th>Hora</th>'+
+    '<th>Motivo</th><th>Estado</th><th>Comentario</th><th></th></tr></thead>';
+
+  const opt = (v,txt,sel)=>'<option value="'+esc(v)+'"'+(sel===v?' selected':'')+'>'+esc(txt)+'</option>';
 
   b.innerHTML =
     (pend.length
@@ -7073,87 +7237,195 @@ function tabPermisos(b){
       : '<div class="alert alert-ok" style="margin-bottom:16px">✓ No hay solicitudes pendientes.</div>')+
 
     (pend.length
-      ? '<h3 style="margin:0 0 8px;font-size:15px">Pendientes</h3>'+
-        '<div class="tblwrap"><div class="tblscroll"><table>'+cabecera+'<tbody>'+
-        pend.map(p=>fila(p,true)).join('')+'</tbody></table></div></div>'
+      ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px">'+
+          '<h3 style="margin:0;font-size:15px">Pendientes</h3>'+
+          (soloVista() ? '' : '<div style="display:flex;gap:8px">'+
+            '<button class="btn btn-sm" id="pOkSel" disabled>Aprobar seleccionadas</button>'+
+            '<button class="btn btn-sm btn-line" id="pNoSel" disabled style="color:var(--danger);border-color:var(--danger)">Rechazar seleccionadas</button></div>')+
+        '</div>'+
+        '<div class="tblwrap"><div class="tblscroll"><table>'+cab(true)+'<tbody>'+
+        pend.map(g=>fila(g,true)).join('')+'</tbody></table></div></div>'
       : '')+
 
+    resumenPermisosMes()+
+
+    '<h3 style="margin:26px 0 8px;font-size:15px">Historial</h3>'+
+    '<div class="filters" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<div>'+lbl('Buscar')+'<input class="sel" id="fpT" placeholder="Nombre o motivo" value="'+esc(f.texto)+'"></div>'+
+      '<div>'+lbl('Tipo')+'<select class="sel" id="fpTi">'+opt('','Todos',f.tipo)+
+        TIPOS_PERMISO.map(t=>opt(t.id,t.nombre,f.tipo)).join('')+'</select></div>'+
+      '<div>'+lbl('Estado')+'<select class="sel" id="fpE">'+opt('','Todos',f.estado)+
+        opt('APROBADO','Aprobados',f.estado)+opt('RECHAZADO','Rechazados',f.estado)+'</select></div>'+
+      '<div>'+lbl('Mes')+'<select class="sel" id="fpM">'+opt('','Todos',f.mes)+
+        meses.map(m=>opt(m, MESES[+m.slice(5,7)-1]+' '+m.slice(0,4), f.mes)).join('')+'</select></div>'+
+    '</div>'+
     (resueltos.length
-      ? '<h3 style="margin:26px 0 8px;font-size:15px">Ya resueltos</h3>'+
-        '<div class="tblwrap"><div class="tblscroll"><table>'+cabecera+'<tbody>'+
-        resueltos.slice(0,60).map(p=>fila(p,false)).join('')+'</tbody></table></div></div>'
-      : '')+
+      ? '<div class="tblwrap"><div class="tblscroll"><table>'+cab(false)+'<tbody>'+
+        resueltos.slice(0,80).map(g=>fila(g,false)).join('')+'</tbody></table></div></div>'
+      : '<p style="color:var(--muted);font-size:13px">No hay solicitudes con esos filtros.</p>')+
 
     '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
       'El permiso <b>no borra lo que pasó</b>: la hora real se sigue registrando. Lo que cambia es cómo se cuenta. '+
       TIPOS_PERMISO.map(t=>'<br><b>'+esc(t.nombre)+':</b> '+esc(t.efecto)).join('')+
     '</p>';
 
+  const ref = ()=>renderTab();
+  const fpT = $('#fpT');
+  if(fpT) fpT.onchange = ()=>{ FLT_PERM.texto = fpT.value.trim(); ref(); };
+  [['fpTi','tipo'],['fpE','estado'],['fpM','mes']].forEach(([id,k])=>{
+    const el = $('#'+id); if(el) el.onchange = ()=>{ FLT_PERM[k] = el.value; ref(); };
+  });
+
   if(soloVista()) return;
 
-  Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
-  Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
-  Array.from(b.querySelectorAll('[data-delp]')).forEach(x=>x.onclick=()=>borrarSolicitud(x.dataset.delp));
+  const ids = s => String(s).split(',').filter(Boolean);
+  Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolverPermiso(ids(x.dataset.ok),'APROBADO'));
+  Array.from(b.querySelectorAll('[data-no]')).forEach(x=>x.onclick=()=>resolverPermiso(ids(x.dataset.no),'RECHAZADO'));
+  Array.from(b.querySelectorAll('[data-delp]')).forEach(x=>x.onclick=()=>borrarSolicitud(ids(x.dataset.delp)));
+
+  // Selección múltiple
+  const marcados = ()=>Array.from(b.querySelectorAll('.pSel:checked')).reduce((a,c)=>a.concat(ids(c.value)), []);
+  const pintarSel = ()=>{
+    const n = b.querySelectorAll('.pSel:checked').length;
+    ['pOkSel','pNoSel'].forEach(id=>{ const bt=$('#'+id); if(bt) bt.disabled = !n; });
+  };
+  b.querySelectorAll('.pSel').forEach(c=>c.onchange = pintarSel);
+  const todos = $('#pTodos');
+  if(todos) todos.onchange = ()=>{ b.querySelectorAll('.pSel').forEach(c=>c.checked = todos.checked); pintarSel(); };
+  const okS = $('#pOkSel'), noS = $('#pNoSel');
+  if(okS) okS.onclick = ()=>resolverPermiso(marcados(), 'APROBADO');
+  if(noS) noS.onclick = ()=>resolverPermiso(marcados(), 'RECHAZADO');
+}
+
+/* Cuántos días de permiso tuvo cada persona en el mes, por tipo. Solo aprobados. */
+function resumenPermisosMes(){
+  const mes = FLT_PERM.mes || hoyISO().slice(0,7);
+  const ap = PERMISOS.filter(p=>p.estado==='APROBADO' && String(p.fecha).slice(0,7)===mes);
+  if(!ap.length) return '';
+  const tipos = TIPOS_PERMISO.filter(t=>ap.some(p=>tipoReal(p).id===t.id));
+  const porPer = {};
+  ap.forEach(p=>{
+    const r = porPer[p.empId] = porPer[p.empId] || {nombre:p.nombre, n:0};
+    const k = tipoReal(p).id; r[k] = (r[k]||0)+1; r.n++;
+  });
+  const filas = Object.values(porPer).sort((a,c)=>c.n-a.n);
+  return '<h3 style="margin:26px 0 8px;font-size:15px">Permisos aprobados en '+esc(MESES[+mes.slice(5,7)-1])+'</h3>'+
+    '<div class="tblwrap"><div class="tblscroll"><table><thead><tr><th>Colaborador</th>'+
+      tipos.map(t=>'<th>'+esc(t.nombre)+'</th>').join('')+'<th>Total días</th></tr></thead><tbody>'+
+      filas.map(r=>'<tr><td class="name">'+esc(r.nombre)+'</td>'+
+        tipos.map(t=>'<td class="num">'+(r[t.id]||'—')+'</td>').join('')+
+        '<td class="num"><b>'+r.n+'</b></td></tr>').join('')+
+    '</tbody></table></div></div>';
 }
 
 /* Borra la solicitud, no lo que pasó ese día.
 
    Si al aprobarla se registró una jornada, esos marcajes se quedan: son la
    asistencia de una persona, y borrarlos de rebote al limpiar una lista sería el
-   error más caro de los dos. El aviso lo dice antes de borrar, para que nadie
-   descubra después que esperaba otra cosa. */
-async function borrarSolicitud(id){
+   error más caro de los dos. El aviso lo dice antes de borrar. */
+async function borrarSolicitud(ids){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
-  const p = PERMISOS.find(x=>x.id===id);
-  if(!p) return;
-  const t = tipoPermiso(p.tipo);
+  ids = [].concat(ids);
+  const ps = PERMISOS.filter(x=>ids.indexOf(x.id)>=0);
+  if(!ps.length) return;
+  const p = ps[0], t = tipoReal(p);
   const aviso = 'Borrar la solicitud de «'+t.nombre+'» de '+p.nombre+
-    ' para el '+fechaCorta(p.fecha)+'.\n\n'+
+    (ps.length>1 ? ' ('+ps.length+' días)' : ' para el '+fechaCorta(p.fecha))+'.\n\n'+
     'Desaparece de la lista y del historial.'+
     (p.estado==='APROBADO' ? '\n\nOJO: si al aprobarla se registró su jornada, esos marcajes NO se borran. '+
                              'Eso se hace desde Hoy o el historial, con el botón Corregir.' : '')+
     '\n\n¿Continuar?';
   if(!confirm(aviso)) return;
-  try{
-    const r = await api('borrarperm', {id}, {timeout:30000});
-    if(r && r.ok && r.borrados){
-      PERMISOS = PERMISOS.filter(x=>x.id!==id);
-      toast('Solicitud borrada');
-      renderTab();
-    }else toast((r && r.error) || 'No se pudo borrar');
-  }catch(e){ toast('Sin conexión con el servidor'); }
+  let ok = 0;
+  for(const x of ps){
+    try{
+      const r = await api('borrarperm', {id:x.id}, {timeout:30000});
+      if(r && r.ok && r.borrados){ PERMISOS = PERMISOS.filter(y=>y.id!==x.id); ok++; }
+    }catch(e){ break; }
+  }
+  toast(ok===ps.length ? 'Solicitud borrada' : 'Se borraron '+ok+' de '+ps.length+'. Revisa la conexión.');
+  renderTab();
 }
 
-/* Aprobar o rechazar. Vive fuera de la pestaña de Permisos porque también se
-   resuelve desde el tablero del día: quien revisa la asistencia de la mañana es la
-   misma persona que tiene que decidir sobre el permiso de esa mañana, y mandarla a
-   otra pestaña para eso es la forma más segura de que el permiso se quede sin
-   responder. */
-async function resolverPermiso(id, decision){
-    const p = PERMISOS.find(x=>x.id===id);
-    if(!p) return;
-    const t = tipoPermiso(p.tipo);
-    const txt = decision==='APROBADO'
-      ? 'Aprobar «'+t.nombre+'» de '+p.nombre+' para el '+fechaCorta(p.fecha)+'.'
-      : 'Rechazar «'+t.nombre+'» de '+p.nombre+' para el '+fechaCorta(p.fecha)+'.';
-    const com = prompt(txt+'\n\nComentario (opcional, lo verá esa persona):', '');
-    if(com === null) return;
-    try{
-      const r = await api('resolver', {id, decision, comentario:com,
-                                       resueltoPor: 'Administración'}, {timeout:30000});
-      if(r && r.ok){
-        p.estado = decision; p.comentario = com; p.resueltoPor = 'Administración';
-        if(r.marcajesCreados){
-          // El servidor acabó de escribir su entrada y su salida: hay que traerlas
-          // o el panel seguiría mostrando ese día como falta.
-          await sincronizarMarcajes(p.fecha, p.fecha);
-          toast('Aprobado · se registró su jornada de ese día');
-        }else{
-          toast(decision==='APROBADO' ? 'Permiso aprobado' : 'Permiso rechazado');
-        }
-        renderTab();
-      }else toast((r && r.error) || 'No se pudo guardar');
-    }catch(e){ toast('Sin conexión con el servidor'); }
+/* Aprobar o rechazar una o varias solicitudes. Vive fuera de la pestaña de
+   Permisos porque también se resuelve desde el tablero del día.
+
+   Ahora pide quién resuelve (queda registrado, antes siempre decía
+   "Administración") y, al rechazar, el motivo es obligatorio: la persona tiene
+   derecho a saber por qué. */
+function resolverPermiso(ids, decision){
+  ids = [].concat(ids);
+  const ps = PERMISOS.filter(x=>ids.indexOf(x.id)>=0);
+  if(!ps.length) return;
+  const aprobar = decision==='APROBADO';
+  const personas = Array.from(new Set(ps.map(p=>p.nombre)));
+  const m = document.createElement('div'); m.className='modal';
+  m.innerHTML = '<div class="box"><h2>'+(aprobar?'Aprobar':'Rechazar')+' '+
+      (ps.length===1?'solicitud':ps.length+' días de permiso')+'</h2>'+
+    '<p style="font-size:13.5px;line-height:1.55;margin:0 0 14px">'+
+      (personas.length===1 ? '<b>'+esc(personas[0])+'</b>' : '<b>'+personas.length+' colaboradores</b>')+' · '+
+      esc(Array.from(new Set(ps.map(p=>tipoReal(p).nombre))).join(', '))+'<br>'+
+      '<span style="color:var(--muted)">'+esc(ps.length===1 ? fechaCorta(ps[0].fecha)
+        : fechaCorta(ps[0].fecha)+' → '+fechaCorta(ps[ps.length-1].fecha))+'</span></p>'+
+    '<div class="frow"><div><label>Comentario '+(aprobar?'(opcional)':'(obligatorio)')+' — lo verá el colaborador</label>'+
+      '<input id="rsC" placeholder="'+(aprobar?'Que te mejores':'Motivo del rechazo')+'" maxlength="150"></div></div>'+
+    '<div class="frow"><div><label>Resuelto por</label>'+
+      '<input id="rsP" value="'+esc(ultimoRegistrador())+'" placeholder="Nombre y apellido"></div></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px">'+
+      '<button class="btn btn-line" id="rsX">Cancelar</button>'+
+      '<button class="btn" id="rsG"'+(aprobar?'':' style="background:var(--danger)"')+'>'+(aprobar?'Aprobar':'Rechazar')+'</button></div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#rsX').onclick = ()=>m.remove();
+  m.querySelector('#rsG').onclick = async ()=>{
+    const com = m.querySelector('#rsC').value.trim();
+    const quien = m.querySelector('#rsP').value.trim().replace(/\s+/g,' ');
+    if(!aprobar && com.length < 4){ toast('Escribe el motivo del rechazo'); return; }
+    if(quien.length < 5 || quien.indexOf(' ') < 0){ toast('Escribe nombre y apellido de quien resuelve'); return; }
+    try{ localStorage.setItem('ca_registrador', quien); }catch(e){}
+    const bt = m.querySelector('#rsG'); bt.disabled = true;
+
+    let ok = 0, conJornada = false, err = '';
+    for(const p of ps){
+      bt.textContent = (ps.length>1 ? (ok+1)+' de '+ps.length+'…' : 'Guardando…');
+      try{
+        const r = await api('resolver', {id:p.id, decision, comentario:com, resueltoPor:quien}, {timeout:30000});
+        if(r && r.ok){
+          p.estado = decision; p.comentario = com; p.resueltoPor = quien; ok++;
+          if(r.marcajesCreados) conJornada = true;
+        }else err = (r && r.error) || 'No se pudo guardar';
+      }catch(e){ err = 'Sin conexión con el servidor'; break; }
+    }
+    m.remove();
+    if(aprobar && ok) registrarAusenciaDePermisos(ps.filter(p=>p.estado==='APROBADO'), quien);
+    if(conJornada){
+      // El servidor acabó de escribir su entrada y su salida: hay que traerlas
+      // o el panel seguiría mostrando ese día como falta.
+      const fs = ps.map(p=>p.fecha).sort();
+      await sincronizarMarcajes(fs[0], fs[fs.length-1]);
+    }
+    toast(ok===ps.length
+      ? (aprobar ? (conJornada ? 'Aprobado · se registró su jornada' : 'Aprobado') : 'Rechazado')
+      : 'Se guardaron '+ok+' de '+ps.length+'. '+err);
+    renderTab();
+  };
+}
+
+/* Vacaciones y descanso médico aprobados quedan también como ausencia del mismo
+   tipo, con su rango de fechas. Así el reporte los separa de un permiso común y
+   se puede llevar la cuenta de días de vacaciones por persona. */
+function registrarAusenciaDePermisos(ps, quien){
+  const grupos = agruparPermisos(ps.filter(p=>tipoReal(p).ausencia));
+  if(!grupos.length) return;
+  grupos.forEach(g=>{
+    const t = tipoReal(g.p);
+    const ya = AUS.some(a=>a.empId===g.p.empId && a.tipo===t.ausencia && a.desde<=g.desde && a.hasta>=g.hasta);
+    if(ya) return;
+    AUS.push({id:'A'+Date.now().toString().slice(-9)+Math.floor(Math.random()*10), empId:g.p.empId, tipo:t.ausencia,
+              desde:g.desde, hasta:g.hasta, lugar:'', actividad:'', motivo:motivoSinMarca(g.p),
+              autorizadoPor:quien});
+  });
+  saveAus();
+  empujarAusencias().then(r=>{ if(r==='error') toast('⚠ Ausencia guardada aquí, pero NO llegó al servidor'); });
 }
 
 /* ---------- TAB: AUSENCIAS Y COMISIONES DE SERVICIO ---------- */
@@ -7690,6 +7962,11 @@ function editarEmp(id){
       '<option value="SI"'+(e.planilla!==false?' selected':'')+'>En planilla</option>'+
       '<option value="NO"'+(e.planilla===false?' selected':'')+'>Fuera de planilla</option>'+
     '</select></div></div>'+
+    (todasLasSedes().length > 1
+      ? '<div class="frow"><div><label>Sede donde marca</label><select id="sd">'+
+          todasLasSedes().map(x=>'<option value="'+esc(x.id)+'"'+(x.id===(e.sede||'PRINCIPAL')?' selected':'')+'>'+esc(x.nombre)+'</option>').join('')+
+          '<option value="TODAS"'+(e.sede==='TODAS'?' selected':'')+'>Cualquiera de las sedes</option>'+
+        '</select></div></div>' : '')+
     '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.5">'+
       '<b>Teletrabajo:</b> marca ingreso y salida como todos, pero sin validación de ubicación, y sí cuenta en el cuadro diario.<br>'+
       '<b>Exento:</b> no marca asistencia y no aparece en los reportes.</p>'+
@@ -7713,7 +7990,8 @@ function editarEmp(id){
       proyecto: m.querySelector('#pr') ? m.querySelector('#pr').value : (e.proyecto||''),
       modalidad:m.querySelector('#ex').value,
       exento:m.querySelector('#ex').value==='EXENTO',
-      planilla:m.querySelector('#pl').value==='SI'
+      planilla:m.querySelector('#pl').value==='SI',
+      sede: m.querySelector('#sd') ? m.querySelector('#sd').value : (e.sede||'')
     };
     if(id){ const i=EMP.findIndex(x=>x.id===id); EMP[i]=o; } else EMP.push(o);
     saveEmp(); m.remove(); renderTab();
@@ -7765,6 +8043,27 @@ function tabCfg(b){
   '</select></div></div>'+
   '<button class="btn btn-sm btn-line" id="cGeo" style="width:100%;margin-top:6px">📍 Capturar ubicación actual</button>'+
   '<div id="cGeoOut" style="font-size:13px;color:var(--muted);margin-top:10px"></div></div>'+
+
+  '<div class="cfg"><h3>Otras sedes</h3>'+
+  '<p class="hint">Fundo, almacén o cualquier otro lugar donde se marca. Cada una con su propio radio. '+
+    'A cada colaborador se le asigna su sede en Personal.</p>'+
+  '<div class="frow"><div><label>Nombre de la sede principal</label>'+
+    '<input id="cSedP" value="'+esc(CFG.nombreSedePrincipal||'Oficina')+'" placeholder="Oficina Lima"></div></div>'+
+  '<div id="cSedes">'+sedesExtra().map((x,i)=>
+    '<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px">'+
+      '<div class="frow"><div><label>Nombre</label><input class="sd" data-i="'+i+'" data-f="nombre" value="'+esc(x.nombre||'')+'"></div>'+
+        '<div><label>Radio (m)</label><input class="sd" data-i="'+i+'" data-f="radio" type="number" min="50" max="5000" value="'+(x.radio||300)+'"></div></div>'+
+      '<div class="frow"><div><label>Latitud</label><input class="sd" data-i="'+i+'" data-f="lat" value="'+esc(x.lat==null?'':x.lat)+'"></div>'+
+        '<div><label>Longitud</label><input class="sd" data-i="'+i+'" data-f="lng" value="'+esc(x.lng==null?'':x.lng)+'"></div></div>'+
+      '<div class="frow"><div><label>…o pega aquí el enlace de Google Maps</label>'+
+        '<input class="sdLink" data-i="'+i+'" placeholder="https://maps.google.com/…"></div></div>'+
+      '<div style="display:flex;gap:8px">'+
+        '<button class="btn btn-sm btn-line sdGeo" data-i="'+i+'" style="flex:1">📍 Estoy aquí ahora</button>'+
+        '<button class="btn btn-sm btn-line sdDel" data-i="'+i+'" style="color:var(--danger)">Quitar</button></div>'+
+    '</div>').join('')+'</div>'+
+  '<button class="btn btn-sm btn-line" id="cSedAdd" style="width:100%;margin-top:12px">+ Agregar sede</button>'+
+  '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.5">'+
+    'En campo el GPS es menos preciso: usa un radio de 300 m o más. No olvides <b>Guardar configuración</b>.</p></div>'+
 
   /* ---- Servidor ---- */
   '<div class="cfg" style="grid-column:1/-1"><h3>Servidor (Google Sheets)</h3>'+
@@ -7954,6 +8253,48 @@ function tabCfg(b){
     {enableHighAccuracy:true, timeout:15000});
   };
 
+  // --- Sedes adicionales ---
+  const leerSedes = ()=>{
+    $$('.sd').forEach(inp=>{
+      const x = CFG.sedesExtra[+inp.dataset.i], f = inp.dataset.f;
+      x[f] = (f==='nombre') ? inp.value.trim() : (inp.value.trim()==='' ? null : +inp.value);
+    });
+  };
+  const addS = $('#cSedAdd');
+  if(addS) addS.onclick = ()=>{
+    CFG.sedesExtra = sedesExtra();
+    leerSedes();
+    CFG.sedesExtra.push({id:'S'+Date.now().toString(36).toUpperCase(), nombre:'Nueva sede', lat:null, lng:null, radio:300});
+    saveCfg(); renderTab();
+  };
+  $$('.sdDel').forEach(bt=>bt.onclick = ()=>{
+    const x = CFG.sedesExtra[+bt.dataset.i];
+    const usan = EMP.filter(e=>e.sede===x.id).length;
+    if(!confirm('Quitar la sede «'+(x.nombre||'')+'».'+(usan?'\n\n'+usan+' colaborador(es) la tienen asignada y pasarán a la sede principal.':'')+'\n\n¿Continuar?')) return;
+    leerSedes();
+    CFG.sedesExtra.splice(+bt.dataset.i, 1);
+    saveCfg(); renderTab();
+  });
+  $$('.sdLink').forEach(inp=>inp.oninput = ()=>{
+    const c = coordsDeTexto(inp.value);
+    if(!c) return;
+    const i = inp.dataset.i;
+    $$('.sd[data-i="'+i+'"][data-f="lat"]')[0].value = c.lat.toFixed(6);
+    $$('.sd[data-i="'+i+'"][data-f="lng"]')[0].value = c.lng.toFixed(6);
+    toast('Coordenadas tomadas del enlace');
+  });
+  $$('.sdGeo').forEach(bt=>bt.onclick = ()=>{
+    if(!navigator.geolocation){ toast('Este equipo no tiene GPS'); return; }
+    bt.textContent = 'Obteniendo…';
+    navigator.geolocation.getCurrentPosition(p=>{
+      const i = bt.dataset.i;
+      $$('.sd[data-i="'+i+'"][data-f="lat"]')[0].value = p.coords.latitude.toFixed(6);
+      $$('.sd[data-i="'+i+'"][data-f="lng"]')[0].value = p.coords.longitude.toFixed(6);
+      bt.textContent = '✅ ±'+Math.round(p.coords.accuracy)+' m';
+    }, e=>{ bt.textContent = '📍 Estoy aquí ahora'; toast('No se pudo obtener la ubicación'); },
+    {enableHighAccuracy:true, timeout:15000});
+  });
+
   $('#tAdd').onclick = ()=>{
     CFG.turnos.push({id:'T'+(CFG.turnos.length+1)+Date.now().toString().slice(-4), nombre:'Nuevo turno', entrada:'09:00', salida:'18:00', trabajaSab:false, sabEntrada:'09:00', sabSalida:'13:00', trabajaDom:false, domEntrada:'10:00', domSalida:'14:00'});
     saveCfg(); renderTab();
@@ -7971,6 +8312,8 @@ function tabCfg(b){
       CFG.lat=nLat; CFG.lng=nLng;
     }
     CFG.radio=+$('#cRad').value||150;
+    if(CFG.sedesExtra) leerSedes();
+    if($('#cSedP')) CFG.nombreSedePrincipal = $('#cSedP').value.trim() || 'Oficina';
     CFG.gpsModo=$('#cMod').value;
     CFG.tolerancia=+$('#cTol').value||0;
     CFG.umbralGrave=+$('#cGrv').value||30;
