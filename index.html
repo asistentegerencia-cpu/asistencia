@@ -3510,9 +3510,31 @@ function horarioDe(emp, fechaISO){
   // persona sigue con su turno. Solo lo publicado o validado manda.
   const jp = jornadaProgramada(emp.id, fechaISO);
   if(jp) return {in:jp.in, out:jp.out, programado:jp.tramos[0], tramos:jp.tramos};
+  return horarioFijo(emp, fechaISO);
+}
+
+/* Días de trabajo propios de una persona: siete casillas (0 = domingo … 6 =
+   sábado), cada una con {in, out} si ese día trabaja o null si no. Si la persona
+   no tiene horario propio devuelve null y manda su turno. */
+function diasPersona(emp){
+  let v = emp && emp.dias;
+  if(!v) return null;
+  if(typeof v === 'string'){ try{ v = JSON.parse(v); }catch(e){ return null; } }
+  return (Array.isArray(v) && v.length === 7) ? v : null;
+}
+
+/* El horario de un día sin contar la programación: el propio de la persona si lo
+   tiene, y si no el de su turno con el calendario de la empresa. Los feriados no
+   se trabajan en ningún caso (para eso está la programación del día). */
+function horarioFijo(emp, fechaISO){
   if(esFeriado(fechaISO)) return null;
-  const t = getTurno(emp.turno);
   const d = new Date(fechaISO+'T12:00:00').getDay();
+  const propios = diasPersona(emp);
+  if(propios){
+    const v = propios[d];
+    return (v && v.in && v.out) ? {in:v.in, out:v.out} : null;
+  }
+  const t = getTurno(emp.turno);
   // Domingo y sábado funcionan igual: primero el calendario decide si la empresa
   // abre ese día concreto, y después el turno decide a quién le toca y con qué
   // horario. Los domingos la tienda atiende citas, pero solo para comercial.
@@ -4722,6 +4744,15 @@ function recordatorioActivo(emp){
 }
 
 function horasSalidaTurno(emp){
+  const propios = diasPersona(emp);
+  if(propios){
+    // Un evento por cada hora de salida distinta, con los días que la comparten
+    const COD = ['SU','MO','TU','WE','TH','FR','SA'], NOM = ['dom','lun','mar','mié','jue','vie','sáb'];
+    const por = {};
+    propios.forEach((v,d)=>{ if(v && v.out) (por[v.out] = por[v.out] || []).push(d); });
+    return Object.keys(por).sort().map(h=>({dias: por[h].map(d=>COD[d]), hora:h,
+                                            nombre: por[h].map(d=>NOM[d]).join(', ')}));
+  }
   const t = getTurno(emp.turno);
   const out = [];
   if(t && t.salida) out.push({dias:['MO','TU','WE','TH','FR'], hora:t.salida, nombre:'Lunes a viernes'});
@@ -6611,14 +6642,7 @@ function moverPeriodo(n){
 
 /* El horario que le toca a alguien un día por su turno, sin contar la programación.
    Es lo que se muestra en gris de fondo: lo que pasaría si nadie programa nada. */
-function horarioBase(e, fecha){
-  const t = getTurno(e.turno);
-  if(esFeriado(fecha)) return null;
-  const d = new Date(fecha+'T12:00:00').getDay();
-  if(d===0) return (siNo(t.trabajaDom) && domingoTrabajado(fecha)) ? {in:t.domEntrada,out:t.domSalida} : null;
-  if(d===6) return (siNo(t.trabajaSab) && sabadoTrabajado(fecha)) ? {in:t.sabEntrada,out:t.sabSalida} : null;
-  return {in:t.entrada, out:t.salida};
-}
+function horarioBase(e, fecha){ return horarioFijo(e, fecha); }
 
 /* ---- Vista de semana: la cuadrícula para armar ---- */
 function vistaSemana(gente, idsArea, barra){
@@ -7932,7 +7956,7 @@ function tabEmp(b){
       (CFG.usaProyectos?'<td>'+(e.proyecto?esc(nomProyecto(e.proyecto)):'<span class="tag tag-warn">SIN ASIGNAR</span>')+'</td>':'')+
       (soloVista()?'':'<td class="num">'+(e.tel?esc(e.tel):'—')+'</td>'+
       '<td style="font-size:13px">'+(e.email?esc(e.email):'—')+'</td>')+
-      '<td>'+esc(getTurno(e.turno).nombre)+'</td>'+
+      '<td>'+(diasPersona(e) ? '<span class="tag tag-ok">HORARIO PROPIO</span>' : esc(getTurno(e.turno).nombre))+'</td>'+
       '<td>'+(enPlanilla(e)
                ? '<span class="tag tag-ok">PLANILLA</span>'
                : '<span class="tag tag-warn">FUERA</span>')+'</td>'+
@@ -8218,6 +8242,7 @@ function editarEmp(id){
           todasLasSedes().map(x=>'<option value="'+esc(x.id)+'"'+(x.id===(e.sede||'PRINCIPAL')?' selected':'')+'>'+esc(x.nombre)+'</option>').join('')+
           '<option value="TODAS"'+(e.sede==='TODAS'?' selected':'')+'>Cualquiera de las sedes</option>'+
         '</select></div></div>' : '')+
+    editorDias(e)+
     '<div class="frow"><div><label>Días de vacaciones asignados</label>'+
         '<input id="vd" type="number" min="0" max="60" value="'+(e.vacDias==null?'':esc(e.vacDias))+'" placeholder="Sin control"></div>'+
       '<div><label>Contar desde</label><input id="vf" type="date" value="'+esc(e.vacDesde||'')+'"></div></div>'+
@@ -8248,14 +8273,95 @@ function editarEmp(id){
       exento:m.querySelector('#ex').value==='EXENTO',
       planilla:m.querySelector('#pl').value==='SI',
       sede: m.querySelector('#sd') ? m.querySelector('#sd').value : (e.sede||''),
+      dias: leerEditorDias(m),
       vacDias: m.querySelector('#vd').value==='' ? null : +m.querySelector('#vd').value,
       vacDesde: m.querySelector('#vf').value || ''
     };
+    if(o.dias === false) return;          // el editor de días avisó de un error
     if(id){ const i=EMP.findIndex(x=>x.id===id); EMP[i]=o; } else EMP.push(o);
     saveEmp(); m.remove(); renderTab();
     empujarPersonal().then(r=>{ avisarGuardado(r, 'Colaborador'); });
   };
   function fld(l,i,v){ return '<div class="frow"><div><label>'+l+'</label><input id="'+i+'" value="'+esc(v)+'"></div></div>'; }
+  conectarEditorDias(m, e);
+}
+
+/* ---------- DÍAS DE TRABAJO POR PERSONA ----------
+   Para quien no calza en un turno: trabaja domingo y descansa jueves, entra más
+   tarde los sábados, etc. Lo que se marque aquí manda sobre su turno todos los días
+   de la semana. Un cambio de un solo día se hace en Programación. */
+const NOMBRE_DIA = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+const ORDEN_DIAS = [1,2,3,4,5,6,0];
+
+function diasDesdeTurno(emp){
+  const t = getTurno(emp.turno);
+  return [0,1,2,3,4,5,6].map(d=>{
+    if(d===0) return siNo(t.trabajaDom) ? {in:t.domEntrada||'10:00', out:t.domSalida||'14:00'} : null;
+    if(d===6) return siNo(t.trabajaSab) ? {in:t.sabEntrada, out:t.sabSalida} : null;
+    return {in:t.entrada, out:t.salida};
+  });
+}
+
+function editorDias(e){
+  const propios = diasPersona(e);
+  const base = propios || diasDesdeTurno(e);
+  const otros = EMP.filter(x=>x.id!==e.id && diasPersona(x));
+  return '<div style="display:flex;gap:10px;align-items:center;margin:4px 0 12px;font-size:14px;font-weight:650;cursor:pointer" id="dPrBox">'+
+      '<input type="checkbox" id="dPr" style="width:18px;height:18px;margin:0;flex:none"'+(propios?' checked':'')+'>'+
+      '<span>Horario propio (en vez del turno)</span></div>'+
+    '<div id="dGrid" style="'+(propios?'':'display:none;')+'margin:-4px 0 12px">'+
+      '<div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:8px;font-size:11.5px;font-weight:650;color:var(--muted);margin-bottom:4px">'+
+        '<span>Día</span><span>Entrada</span><span>Salida</span></div>'+
+      ORDEN_DIAS.map(d=>{
+        const v = base[d];
+        return '<div style="display:grid;grid-template-columns:110px 1fr 1fr;gap:8px;align-items:center;margin-bottom:6px">'+
+          '<span style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" class="dOn" data-d="'+d+'" style="width:16px;height:16px;margin:0;flex:none"'+(v?' checked':'')+'>'+NOMBRE_DIA[d]+'</span>'+
+          '<input type="time" class="sel dIn" data-d="'+d+'" value="'+esc(v?v.in:'09:00')+'"'+(v?'':' disabled')+'>'+
+          '<input type="time" class="sel dOut" data-d="'+d+'" value="'+esc(v?v.out:'18:00')+'"'+(v?'':' disabled')+'>'+
+        '</div>';
+      }).join('')+
+      (otros.length ? '<div style="margin-top:6px"><select class="sel" id="dCopia" style="width:100%"><option value="">Copiar el horario de…</option>'+
+        otros.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.nombre)+'</option>').join('')+'</select></div>' : '')+
+      '<p style="font-size:12px;color:var(--muted);margin:6px 0 0;line-height:1.5">Aplica todas las semanas. Los feriados no se trabajan. '+
+        'Para cambiar un solo día, usa Programación.</p>'+
+    '</div>';
+}
+
+function conectarEditorDias(m, e){
+  const pr = m.querySelector('#dPr'), grid = m.querySelector('#dGrid');
+  if(!pr) return;
+  pr.onchange = ()=>{ grid.style.display = pr.checked ? '' : 'none'; };
+  m.querySelector('#dPrBox').onclick = ev=>{ if(ev.target !== pr){ pr.checked = !pr.checked; pr.onchange(); } };
+  m.querySelectorAll('.dOn').forEach(c=>c.onchange = ()=>{
+    const d = c.dataset.d;
+    m.querySelector('.dIn[data-d="'+d+'"]').disabled = !c.checked;
+    m.querySelector('.dOut[data-d="'+d+'"]').disabled = !c.checked;
+  });
+  const cp = m.querySelector('#dCopia');
+  if(cp) cp.onchange = ()=>{
+    const otro = EMP.find(x=>x.id===cp.value); const dias = otro && diasPersona(otro);
+    if(!dias) return;
+    dias.forEach((v,d)=>{
+      const c = m.querySelector('.dOn[data-d="'+d+'"]');
+      c.checked = !!v; c.onchange();
+      if(v){ m.querySelector('.dIn[data-d="'+d+'"]').value = v.in; m.querySelector('.dOut[data-d="'+d+'"]').value = v.out; }
+    });
+    toast('Horario copiado de '+otro.nombre);
+  };
+}
+
+/* null = sigue su turno; arreglo de 7 = horario propio; false = hay un error */
+function leerEditorDias(m){
+  const pr = m.querySelector('#dPr');
+  if(!pr || !pr.checked) return null;
+  const dias = [0,1,2,3,4,5,6].map(d=>{
+    if(!m.querySelector('.dOn[data-d="'+d+'"]').checked) return null;
+    return {in: m.querySelector('.dIn[data-d="'+d+'"]').value, out: m.querySelector('.dOut[data-d="'+d+'"]').value};
+  });
+  if(!dias.some(Boolean)){ toast('Marca al menos un día de trabajo'); return false; }
+  const mal = dias.findIndex(v=>v && (!v.in || !v.out || (toMin(v.out) <= toMin(v.in) && toMin(v.in) > 120)));
+  if(mal >= 0){ toast(NOMBRE_DIA[mal]+': la salida debe ser después de la entrada'); return false; }
+  return dias;
 }
 
 /* ---------- TAB: CONFIGURACIÓN ---------- */
