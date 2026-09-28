@@ -27,7 +27,8 @@ var HOJA = {
   ale: 'Alertas',
   per: 'Permisos',
   pro: 'Programacion',
-  not: 'NotasProg'
+  not: 'NotasProg',
+  jef: 'Jefes'
 };
 
 var COLS = {
@@ -35,7 +36,7 @@ var COLS = {
         'origen','estado','tardanza','anticipada','lat','lng','dist','fuera_zona','gps',
         'motivo','registrado_por','dispositivo','equipo','sede'],
   emp: ['id','nombre','dni','cargo','area','proyecto','tel','email','turno','activo','modalidad','planilla',
-        'sede'],
+        'sede','vac_dias','vac_desde'],
   cfg: ['clave','valor'],
   aus: ['id','emp_id','tipo','desde','hasta','lugar','actividad','motivo','autorizado_por','creado'],
   fer: ['fecha','nombre'],
@@ -53,7 +54,8 @@ var COLS = {
      agrega igual al final y a partir de ahí los valores se escriben corridos una
      posición. Ya pasó dos veces: con 'equipo' en Marcajes y con 'hora_fin' aquí. */
   per: ['ts_servidor','id','emp_id','nombre','tipo','fecha','hora','motivo',
-        'estado','resuelto_por','resuelto_el','comentario','hora_fin'],
+        'estado','resuelto_por','resuelto_el','comentario','hora_fin',
+        'adjunto','visto_jefe','visto_jefe_por','visto_jefe_el'],
   /* Horario asignado a una persona para un día concreto. Manda sobre su turno:
      el equipo de ventas se reparte la jornada y cada quien cubre una franja
      distinta, así que el turno fijo no alcanza. */
@@ -62,7 +64,11 @@ var COLS = {
   /* Las notas al pie del horario. La cuadrícula dice quién cubre qué hora, pero no
      por qué: "Fátima falta el jueves porque trabaja todo el domingo" no es un
      tramo de nadie y sin eso el horario no se entiende. Van por semana y área. */
-  not: ['ts_servidor','semana','area','texto','autor']
+  not: ['ts_servidor','semana','area','texto','autor'],
+  /* Jefes de área: dan el primer visto bueno a los permisos de su gente antes que
+     Administración. Viven en su propia hoja, como los celulares, para que subir el
+     padrón no los borre. El PIN se guarda solo como huella (hash), nunca tal cual. */
+  jef: ['emp_id','nombre','areas','pin_hash','actualizado']
 };
 
 /* ══════════════════════════════════════════════════════════════
@@ -185,13 +191,16 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 3,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 4,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
     case 'marcar':      return marcar(p);
     case 'mios':        return mios(p);
     case 'permiso':     return pedirPermiso(p);
+    // Jefes de área: se identifican con su DNI y su PIN en cada pedido
+    case 'jefepermisos': return jefePermisos(p);
+    case 'jeferesolver': return jefeResolver(p);
 
     // ---- Con clave ----
     case 'entrar':      rol = rolDe(p);
@@ -212,6 +221,7 @@ function enrutar(p) {
     case 'borrarperm':  return rolDe(p) === 'admin' ? borrarPermiso(p)        : NO_AUTORIZADO;
     case 'personal':    return rolDe(p) === 'admin' ? guardarPersonal(p)     : NO_AUTORIZADO;
     case 'config':      return rolDe(p) === 'admin' ? guardarConfig(p)       : NO_AUTORIZADO;
+    case 'guardarjefe': return rolDe(p) === 'admin' ? guardarJefe(p)         : NO_AUTORIZADO;
 
     default:            return { ok: false, error: 'Acción desconocida: ' + accion };
   }
@@ -229,7 +239,8 @@ function identificar(p) {
     ok: true,
     emp: { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, area: emp.area,
            turno: emp.turno, modalidad: emp.modalidad, activo: true,
-           dni: emp.dni, proyecto: emp.proyecto, sede: emp.sede }
+           dni: emp.dni, proyecto: emp.proyecto, sede: emp.sede,
+           vacDias: emp.vacDias, vacDesde: emp.vacDesde, esJefe: !!jefeDe(emp.id) }
   };
 }
 
@@ -280,8 +291,12 @@ function mios(p) {
     return String(x.empId) === String(emp.id);
   });
 
+  // Sus datos de ficha, por si administración le cambió la sede, el saldo de
+  // vacaciones o lo nombró jefe después de que su celular lo guardara.
   return { ok: true, empId: emp.id, marcajes: out, total: out.length,
-           programacion: miProg, permisos: misPermisos };
+           programacion: miProg, permisos: misPermisos,
+           emp: { sede: emp.sede, vacDias: emp.vacDias, vacDesde: emp.vacDesde,
+                  esJefe: !!jefeDe(emp.id), modalidad: emp.modalidad, turno: emp.turno } };
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -557,7 +572,9 @@ function instalar(p) {
                area: e.area || '', proyecto: e.proyecto || '', tel: "'" + (e.tel || ''),
                email: e.email || '', turno: e.turno || '', activo: e.activo ? 'SI' : 'NO',
                modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
-               sede: e.sede || '' };
+               sede: e.sede || '',
+               vac_dias: (e.vacDias === null || e.vacDias === undefined || e.vacDias === '') ? '' : Number(e.vacDias),
+               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '' };
     });
 
     var cfg = datos.cfg || {};
@@ -618,7 +635,7 @@ function instalar(p) {
    hecha a mano directamente en la hoja. */
 var MEMO_SEG = 60;
 var MEMO_ = {};                  // dentro de una misma ejecución, para no repetir
-var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per'];
+var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per', 'memo_jef'];
 
 function memo(clave, calcular) {
   if (MEMO_.hasOwnProperty(clave)) return MEMO_[clave];
@@ -690,7 +707,9 @@ function leerPersonalDeHoja() {
         modalidad: String(f.modalidad || 'PRESENCIAL').toUpperCase(),
         exento: String(f.modalidad || '').toUpperCase() === 'EXENTO',
         planilla: String(f.planilla).toUpperCase() !== 'NO',
-        sede: String(f.sede || '')
+        sede: String(f.sede || ''),
+        vacDias: (f.vac_dias === '' || f.vac_dias === null || f.vac_dias === undefined) ? null : Number(f.vac_dias),
+        vacDesde: fechaTexto(f.vac_desde)
       };
     });
 }
@@ -748,6 +767,9 @@ function arranque(rol) {
     r.permisos = leerPermisos();
     r.programacion = leerProgramacion();
     r.notasProg = leerNotasProg();
+    r.jefes = leerJefes().map(function (j) {             // sin la huella del PIN
+      return { empId: j.empId, nombre: j.nombre, areas: j.areas, tienePin: !!j.pinHash };
+    });
     r.rol = rol;
   }
   return r;
@@ -1098,7 +1120,10 @@ function leerPermisosDeHoja() {
       hora: horaTexto(f.hora), horaFin: horaTexto(f.hora_fin),
       motivo: String(f.motivo || ''), estado: String(f.estado || 'PENDIENTE'),
       resueltoPor: String(f.resuelto_por || ''), resueltoEl: fechaTexto(f.resuelto_el),
-      comentario: String(f.comentario || '')
+      comentario: String(f.comentario || ''),
+      adjunto: String(f.adjunto || ''),
+      vistoJefe: String(f.visto_jefe || '').toUpperCase() === 'SI',
+      vistoJefePor: String(f.visto_jefe_por || ''), vistoJefeEl: fechaTexto(f.visto_jefe_el)
     };
   });
 }
@@ -1165,6 +1190,16 @@ function pedirPermiso(p) {
   var motivo = String(p.motivo || '').trim();
   if (motivo.length < 4) return { ok: false, error: 'Escribe el motivo del permiso.' };
 
+  // El descanso médico exige la foto del certificado. Llega como imagen en el
+  // primer día del pedido; los demás días traen el enlace que se devolvió.
+  var adjuntoUrl = '';
+  if (p.adjuntoUrl && /^https:\/\/(drive|docs)\.google\.com\//.test(String(p.adjuntoUrl))) {
+    adjuntoUrl = String(p.adjuntoUrl);
+  }
+  if (esMedico && !adjuntoUrl && !p.adjunto) {
+    return { ok: false, motivo: 'sin_certificado', error: 'Adjunta la foto del certificado médico.' };
+  }
+
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -1179,13 +1214,19 @@ function pedirPermiso(p) {
                aviso: 'Ya tienes una solicitud pendiente para ese día.' };
     }
 
+    if (p.adjunto && !adjuntoUrl) {
+      try { adjuntoUrl = guardarAdjunto(emp, fecha, String(p.adjunto)); }
+      catch (e) { return { ok: false, error: 'No se pudo guardar la foto: ' + (e && e.message ? e.message : e) }; }
+    }
+
     var h = asegurarColumnas(HOJA.per, COLS.per);
     var id = 'P' + new Date().getTime() + Math.floor(Math.random() * 900 + 100);
     anexar(h, HOJA.per, COLS.per, {
       ts_servidor: new Date(), id: id, emp_id: emp.id, nombre: emp.nombre, tipo: tipo,
       fecha: "'" + fecha, hora: "'" + horaTexto(p.hora || ''),
       hora_fin: "'" + horaTexto(p.horaFin || ''), motivo: motivo,
-      estado: 'PENDIENTE', resuelto_por: '', resuelto_el: '', comentario: ''
+      estado: 'PENDIENTE', resuelto_por: '', resuelto_el: '', comentario: '',
+      adjunto: adjuntoUrl, visto_jefe: '', visto_jefe_por: '', visto_jefe_el: ''
     });
 
     // Un pedido de varios días llega como una solicitud por día: se avisa solo con la primera.
@@ -1195,8 +1236,12 @@ function pedirPermiso(p) {
       'Motivo: ' + motivo + '\n\n' +
       'Apruébalo o recházalo en el panel, pestaña Permisos.');
 
+    // Y a su jefe de área, que es quien da el primer visto bueno.
+    if (String(p.sinCorreo) !== 'true') avisarJefes(emp, tipo, fecha, motivo);
+
     return { ok: true, permiso: { id: id, empId: emp.id, nombre: emp.nombre, tipo: tipo,
-                                  fecha: fecha, motivo: motivo, estado: 'PENDIENTE' } };
+                                  fecha: fecha, motivo: motivo, estado: 'PENDIENTE',
+                                  adjunto: adjuntoUrl } };
   } finally { lock.releaseLock(); }
 }
 
@@ -1369,6 +1414,219 @@ function avisarAlColaborador(empId, decision, tipo, fecha, motivo, comentario, q
     });
     return 'enviado';
   } catch (e) { return 'falló: ' + (e && e.message ? e.message : e); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   CERTIFICADOS MÉDICOS
+   La foto llega del celular como imagen en base64 y se guarda en una carpeta de
+   Drive del dueño del script. En la hoja queda solo el enlace.
+   ══════════════════════════════════════════════════════════════ */
+var CARPETA_CERT = 'Asistencia – Certificados médicos';
+
+function guardarAdjunto(emp, fecha, dataUrl) {
+  var m = String(dataUrl).match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+  if (!m) throw new Error('El archivo debe ser una foto (JPG o PNG).');
+  var bytes = Utilities.base64Decode(m[2]);
+  if (bytes.length > 6 * 1024 * 1024) throw new Error('La foto pesa demasiado.');
+  var carpetas = DriveApp.getFoldersByName(CARPETA_CERT);
+  var carpeta = carpetas.hasNext() ? carpetas.next() : DriveApp.createFolder(CARPETA_CERT);
+  var ext = m[1] === 'image/png' ? 'png' : (m[1] === 'image/webp' ? 'webp' : 'jpg');
+  var nombre = fecha + ' ' + emp.nombre + ' (' + emp.id + ').' + ext;
+  var archivo = carpeta.createFile(Utilities.newBlob(bytes, m[1], nombre));
+  return archivo.getUrl();
+}
+
+/** Ejecútala una vez desde el editor para conceder el permiso de Drive. */
+function autorizarDrive() {
+  var c = DriveApp.getFoldersByName(CARPETA_CERT);
+  Logger.log(c.hasNext() ? 'La carpeta ya existe: ' + c.next().getUrl()
+                         : 'Permiso concedido. La carpeta se crea con el primer certificado.');
+}
+
+/* ══════════════════════════════════════════════════════════════
+   JEFES DE ÁREA
+   ══════════════════════════════════════════════════════════════ */
+
+function leerJefes() { return memo('memo_jef', leerJefesDeHoja); }
+
+function leerJefesDeHoja() {
+  var out;
+  try { out = filas(HOJA.jef, COLS.jef); } catch (e) { return []; }
+  return out.filter(function (f) { return f.emp_id; }).map(function (f) {
+    return { empId: String(f.emp_id), nombre: String(f.nombre || ''),
+             areas: String(f.areas || '').split('|').map(function (a) { return a.trim(); })
+                                         .filter(function (a) { return a; }),
+             pinHash: String(f.pin_hash || '') };
+  });
+}
+
+function jefeDe(empId) {
+  var js = leerJefes();
+  for (var i = 0; i < js.length; i++) if (js[i].empId === String(empId)) return js[i];
+  return null;
+}
+
+function huellaPin(empId, pin) {
+  var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'asistencia|' + empId + '|' + pin);
+  return d.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+}
+
+/** Administración nombra, cambia o quita a un jefe. El PIN solo se cambia si llega uno. */
+function guardarJefe(p) {
+  olvidar();
+  var empId = String(p.empId || '');
+  var emp = null, emps = leerPersonal();
+  for (var i = 0; i < emps.length; i++) if (emps[i].id === empId) emp = emps[i];
+  if (!emp) return { ok: false, error: 'No se encontró a ese colaborador.' };
+  var areas = p.areas ? (typeof p.areas === 'string' ? JSON.parse(p.areas) : p.areas) : [];
+  var pin = String(p.pin || '');
+  var borrar = String(p.borrar) === 'true' || p.borrar === true;
+  if (!borrar && !areas.length) return { ok: false, error: 'Elige al menos un área.' };
+  if (pin && !/^\d{4,6}$/.test(pin)) return { ok: false, error: 'El PIN debe tener de 4 a 6 números.' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var h = asegurarColumnas(HOJA.jef, COLS.jef);
+    var datos = h.getDataRange().getValues();
+    var cab = cabDe(HOJA.jef, COLS.jef);
+    var cEmp = cab.indexOf('emp_id'), cPin = cab.indexOf('pin_hash');
+    var fila = 0, hashPrevio = '';
+    for (var k = 1; k < datos.length; k++) {
+      if (String(datos[k][cEmp]) === empId) { fila = k + 1; hashPrevio = String(datos[k][cPin] || ''); }
+    }
+    if (borrar) { if (fila) h.deleteRow(fila); return { ok: true, borrado: !!fila }; }
+    var hash = pin ? huellaPin(empId, pin) : hashPrevio;
+    if (!hash) return { ok: false, error: 'Ponle un PIN al jefe para que pueda entrar.' };
+    var valores = filaSegunCab(cab, { emp_id: empId, nombre: emp.nombre, areas: areas.join('|'),
+                                      pin_hash: hash, actualizado: new Date() });
+    if (fila) h.getRange(fila, 1, 1, valores.length).setValues([valores]);
+    else h.appendRow(valores);
+    return { ok: true, jefe: { empId: empId, nombre: emp.nombre, areas: areas, tienePin: true } };
+  } finally { lock.releaseLock(); }
+}
+
+/* Comprueba DNI + PIN del jefe. Cinco intentos fallidos lo bloquean 15 minutos.
+   Si el sistema exige celular vinculado, tiene que ser el suyo. */
+function autenticarJefe(p) {
+  var emps = leerPersonal();
+  var emp = buscarEmp(emps, p.ident || '');
+  if (!emp || !emp.activo) return { error: 'No encontramos ese dato en el registro de personal.' };
+  var jefe = jefeDe(emp.id);
+  if (!jefe) return { error: 'No figuras como jefe de área.' };
+
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (e) { cache = null; }
+  var claveFallos = 'pinfallos_' + emp.id;
+  var fallos = cache ? Number(cache.get(claveFallos) || 0) : 0;
+  if (fallos >= 5) return { error: 'Demasiados intentos. Espera 15 minutos e inténtalo de nuevo.' };
+
+  if (!jefe.pinHash || huellaPin(emp.id, String(p.pin || '')) !== jefe.pinHash) {
+    if (cache) { try { cache.put(claveFallos, String(fallos + 1), 900); } catch (e) { } }
+    return { error: 'PIN incorrecto.' };
+  }
+  if (cache) { try { cache.remove(claveFallos); } catch (e) { } }
+
+  var cfg = leerConfig();
+  if (String(cfg.exigirDispositivo) === 'true') {
+    var suyo = leerDispositivos()[emp.id] || '';
+    if (suyo && suyo !== String(p.deviceId || '')) {
+      return { error: 'Entra desde tu propio celular, el que usas para marcar.' };
+    }
+  }
+  return { emp: emp, jefe: jefe, emps: emps };
+}
+
+/* Los permisos de la gente de sus áreas. Los suyos propios no: esos van directo
+   a Administración, nadie se aprueba a sí mismo. */
+function jefePermisos(p) {
+  var a = autenticarJefe(p);
+  if (a.error) return { ok: false, error: a.error };
+  var areaDe = {};
+  a.emps.forEach(function (e) { areaDe[e.id] = e.area; });
+  var hoy = ahoraISO().fecha;
+  var hace30 = diaDespues(hoy, -30);
+  var mios = leerPermisos().filter(function (x) {
+    return x.empId !== a.emp.id && a.jefe.areas.indexOf(areaDe[x.empId]) >= 0;
+  });
+  return {
+    ok: true, jefe: { nombre: a.emp.nombre, areas: a.jefe.areas },
+    pendientes: mios.filter(function (x) { return x.estado === 'PENDIENTE' && !x.vistoJefe; }),
+    recientes: mios.filter(function (x) {
+      return (x.vistoJefe || x.estado !== 'PENDIENTE') && x.fecha >= hace30;
+    }).slice(-60)
+  };
+}
+
+/* El jefe da el visto bueno (queda para Administración) o rechaza (y ahí termina). */
+function jefeResolver(p) {
+  var a = autenticarJefe(p);
+  if (a.error) return { ok: false, error: a.error };
+  olvidar();
+  var ids = p.ids ? (typeof p.ids === 'string' ? JSON.parse(p.ids) : p.ids) : [];
+  var decision = String(p.decision || '').toUpperCase();
+  if (decision !== 'VISTO' && decision !== 'RECHAZADO') return { ok: false, error: 'Decisión no válida.' };
+  var comentario = String(p.comentario || '').trim();
+  if (decision === 'RECHAZADO' && comentario.length < 4) return { ok: false, error: 'Escribe el motivo del rechazo.' };
+
+  var areaDe = {};
+  a.emps.forEach(function (e) { areaDe[e.id] = e.area; });
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var h = asegurarColumnas(HOJA.per, COLS.per);
+    var datos = h.getDataRange().getValues();
+    var cab = cabDe(HOJA.per, COLS.per);
+    var c = {}; ['id','emp_id','estado','tipo','fecha','motivo','comentario','resuelto_por','resuelto_el',
+                 'visto_jefe','visto_jefe_por','visto_jefe_el'].forEach(function (n) { c[n] = cab.indexOf(n); });
+    var hechos = 0, avisados = {};
+    for (var i = 1; i < datos.length; i++) {
+      var fila = datos[i];
+      if (ids.indexOf(String(fila[c.id])) < 0) continue;
+      var empId = String(fila[c.emp_id]);
+      if (empId === a.emp.id || a.jefe.areas.indexOf(areaDe[empId]) < 0) continue;   // no es de su gente
+      if (String(fila[c.estado]) !== 'PENDIENTE') continue;
+      if (decision === 'VISTO') {
+        h.getRange(i + 1, c.visto_jefe + 1).setValue('SI');
+        h.getRange(i + 1, c.visto_jefe_por + 1).setValue(a.emp.nombre);
+        h.getRange(i + 1, c.visto_jefe_el + 1).setValue("'" + ahoraISO().fecha);
+      } else {
+        h.getRange(i + 1, c.estado + 1).setValue('RECHAZADO');
+        h.getRange(i + 1, c.resuelto_por + 1).setValue(a.emp.nombre + ' (jefe de área)');
+        h.getRange(i + 1, c.resuelto_el + 1).setValue("'" + ahoraISO().fecha);
+        h.getRange(i + 1, c.comentario + 1).setValue(comentario);
+        var clave = empId + '|' + String(fila[c.motivo]);
+        if (!avisados[clave]) {
+          avisados[clave] = true;
+          avisarAlColaborador(empId, 'RECHAZADO', String(fila[c.tipo]), fechaTexto(fila[c.fecha]),
+                              String(fila[c.motivo] || ''), comentario, a.emp.nombre + ' (jefe de área)');
+        }
+      }
+      hechos++;
+    }
+    if (decision === 'VISTO' && hechos) {
+      avisarPorCorreo(leerConfig(), 'Permiso con visto bueno del jefe',
+        a.emp.nombre + ' dio su visto bueno a ' + hechos + ' día(s) de permiso.\n\n' +
+        'Falta tu aprobación final en el panel, pestaña Permisos.');
+    }
+    return { ok: true, resueltos: hechos };
+  } finally { lock.releaseLock(); }
+}
+
+/* Correo al jefe o jefes del área de esa persona cuando pide un permiso. */
+function avisarJefes(emp, tipo, fecha, motivo) {
+  var emps = leerPersonal();
+  leerJefes().forEach(function (j) {
+    if (j.empId === emp.id || j.areas.indexOf(emp.area) < 0) return;
+    var yo = null;
+    for (var i = 0; i < emps.length; i++) if (emps[i].id === j.empId) yo = emps[i];
+    if (!yo || !yo.email) return;
+    try {
+      MailApp.sendEmail({ to: yo.email, subject: '[Asistencia] ' + emp.nombre + ' pidió un permiso',
+        body: emp.nombre + ' (' + emp.area + ') pidió un permiso.\n\nTipo: ' + tipo + '\nFecha: ' + fecha +
+              '\nMotivo: ' + motivo + '\n\nRevísalo en la app de asistencia: "Permisos de mi equipo".' });
+    } catch (e) { }
+  });
 }
 
 function leerDispositivos() {
@@ -1828,7 +2086,9 @@ function guardarPersonal(p) {
                area: e.area || '', proyecto: e.proyecto || '', tel: "'" + (e.tel || ''),
                email: e.email || '', turno: e.turno || '', activo: e.activo ? 'SI' : 'NO',
                modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
-               sede: e.sede || '' };
+               sede: e.sede || '',
+               vac_dias: (e.vacDias === null || e.vacDias === undefined || e.vacDias === '') ? '' : Number(e.vacDias),
+               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '' };
     });
     return { ok: true, personal: n };
   } finally { lock.releaseLock(); }
@@ -2041,7 +2301,7 @@ function ahoraISO() {
 function fechaTexto(v) {
   if (!v) return '';
   if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, TZ, 'yyyy-MM-dd');
-  return String(v).slice(0, 10);
+  return String(v).replace(/^'/, '').slice(0, 10);
 }
 
 function horaTexto(v) {
