@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 5,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 6,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -1111,7 +1111,7 @@ function guardarProgramacion(p) {
    que quede escrito quién lo autorizó.
    ══════════════════════════════════════════════════════════════ */
 
-var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA'];
+var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA', 'SALIDA_OLVIDO'];
 
 function leerPermisosDeHoja() {
   var out;
@@ -1171,9 +1171,20 @@ function pedirPermiso(p) {
                error: 'El descanso médico se puede registrar hasta 3 días después. Habla con Administración.' };
     }
   }
-  if (tipo !== 'JORNADA' && !esMedico && fecha < hoy) {
+  var haciaAtras = (tipo === 'JORNADA' || tipo === 'SALIDA_OLVIDO');
+  if (!haciaAtras && !esMedico && fecha < hoy) {
     return { ok: false, motivo: 'fecha_pasada',
              error: 'No se puede pedir un permiso para un día que ya pasó. Habla con Administración.' };
+  }
+  if (tipo === 'SALIDA_OLVIDO') {
+    // La salida que no se marcó: la persona solo la PIDE; se registra al aprobarse.
+    if (fecha > hoy) return { ok: false, error: 'Solo se puede corregir un día que ya pasó.' };
+    var tope2 = new Date(new Date(hoy + 'T12:00:00').getTime() - 7 * 86400000);
+    if (fecha < Utilities.formatDate(tope2, TZ, 'yyyy-MM-dd')) {
+      return { ok: false, motivo: 'muy_viejo',
+               error: 'Solo se pueden corregir salidas de los últimos 7 días. Habla con Administración.' };
+    }
+    if (!p.hora) return { ok: false, error: 'Indica a qué hora saliste.' };
   }
   if (tipo === 'JORNADA') {
     if (fecha > hoy) return { ok: false, error: 'Solo se puede registrar una jornada ya trabajada.' };
@@ -1242,6 +1253,15 @@ function pedirPermiso(p) {
     // Y a su jefe de área, que es quien da el primer visto bueno.
     if (String(p.sinCorreo) !== 'true') avisarJefes(emp, tipo, fecha, motivo);
 
+    // Olvidos de salida: desde el tercero del mes se avisa al jefe y a Administración
+    if (tipo === 'SALIDA_OLVIDO') {
+      var mes = fecha.slice(0, 7);
+      var olvidos = leerPermisos().filter(function (x) {
+        return String(x.empId) === emp.id && x.tipo === 'SALIDA_OLVIDO' && x.fecha.slice(0, 7) === mes;
+      }).length + 1;
+      if (olvidos >= 3) avisarOlvidos(emp, olvidos, mes);
+    }
+
     return { ok: true, permiso: { id: id, empId: emp.id, nombre: emp.nombre, tipo: tipo,
                                   fecha: fecha, motivo: motivo, estado: 'PENDIENTE',
                                   adjunto: adjuntoUrl } };
@@ -1256,7 +1276,7 @@ function pedirPermiso(p) {
  * ya exista: si ese día ya tenía entrada, se respeta la que hay.
  */
 function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
-  if (!empId || !fecha || !entrada || !salida) return 0;
+  if (!empId || !fecha || (!entrada && !salida)) return 0;
   var emps = leerPersonal();
   var emp = null;
   for (var i = 0; i < emps.length; i++) if (emps[i].id === String(empId)) emp = emps[i];
@@ -1273,7 +1293,7 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
     return false;
   };
 
-  var nota = 'Jornada declarada y aprobada' + (motivo ? ': ' + motivo : '');
+  var nota = (entrada ? 'Jornada declarada y aprobada' : 'Salida olvidada, corrección aprobada') + (motivo ? ': ' + motivo : '');
   var creados = 0;
   var poner = function (tipo, hora) {
     if (tiene(tipo)) return;
@@ -1291,8 +1311,8 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
     });
     creados++;
   };
-  poner('ENTRADA', entrada);
-  poner('SALIDA', salida);
+  if (entrada) poner('ENTRADA', entrada);
+  if (salida) poner('SALIDA', salida);
   return creados;
 }
 
@@ -1379,6 +1399,13 @@ function resolverPermiso(p) {
             horaTexto(datos[i][cHora]), horaTexto(datos[i][cFin]),
             String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
         }
+        // La salida olvidada: al aprobarla se escribe solo la salida de ese día
+        if (decision === 'APROBADO' && String(datos[i][cTipo]) === 'SALIDA_OLVIDO') {
+          creados = registrarJornada(
+            String(datos[i][cEmp]), fechaTexto(datos[i][cFecha]),
+            '', horaTexto(datos[i][cHora]),
+            String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
+        }
         // La persona se entera por correo de la respuesta, con el comentario.
         // Un pedido de varios días se resuelve día por día: el panel pide el aviso solo una vez.
         var avisado = '';
@@ -1400,7 +1427,8 @@ function avisarAlColaborador(empId, decision, tipo, fecha, motivo, comentario, q
   for (var i = 0; i < emps.length; i++) if (emps[i].id === String(empId)) emp = emps[i];
   if (!emp || !emp.email || emp.email.indexOf('@') < 0) return 'sin correo';
   var NOMBRES = { TARDANZA: 'Llegar tarde', SALIDA_ANTES: 'Salir antes', DIA: 'Día de permiso',
-                  CASA: 'Trabajar desde casa', JORNADA: 'Trabajé y no marqué' };
+                  CASA: 'Trabajar desde casa', JORNADA: 'Trabajé y no marqué',
+                  SALIDA_OLVIDO: 'Olvidé marcar mi salida' };
   var que = NOMBRES[tipo] || tipo;
   if (motivo.indexOf('[Vacaciones]') === 0) que = 'Vacaciones';
   if (motivo.indexOf('[Descanso médico]') === 0) que = 'Descanso médico';
@@ -1614,6 +1642,23 @@ function jefeResolver(p) {
     }
     return { ok: true, resueltos: hechos };
   } finally { lock.releaseLock(); }
+}
+
+/* Desde el tercer olvido de salida del mes: correo al jefe de área y a Administración. */
+function avisarOlvidos(emp, n, mes) {
+  var cuerpo = emp.nombre + ' (' + emp.area + ') ya lleva ' + n + ' olvidos de marcar su salida en ' + mes + '.\n\n' +
+               'Cada olvido queda como solicitud de corrección para aprobar. Conviene conversarlo con esa persona.';
+  avisarPorCorreo(leerConfig(), emp.nombre + ': ' + n + ' olvidos de salida este mes', cuerpo);
+  var emps = leerPersonal();
+  leerJefes().forEach(function (j) {
+    if (j.empId === emp.id || j.areas.indexOf(emp.area) < 0) return;
+    for (var i = 0; i < emps.length; i++) {
+      if (emps[i].id === j.empId && emps[i].email) {
+        try { MailApp.sendEmail({ to: emps[i].email, subject: '[Asistencia] ' + emp.nombre + ': ' + n + ' olvidos de salida',
+                                  body: cuerpo }); } catch (e) { }
+      }
+    }
+  });
 }
 
 /* Correo al jefe o jefes del área de esa persona cuando pide un permiso. */
