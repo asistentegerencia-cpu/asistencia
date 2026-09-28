@@ -2927,7 +2927,11 @@ const TIPOS_PERMISO = [
   // Este mira hacia atrás, no hacia adelante: es para el día que ya se trabajó y
   // no se marcó. Al aprobarlo se escribe la asistencia de ese día.
   {id:'JORNADA',      nombre:'Trabajé y no marqué', pideHora:true, pideHoraFin:true, pasado:true,
-   efecto:'Se registra tu entrada y tu salida de ese día, con el visto de Administración.'}
+   efecto:'Se registra tu entrada y tu salida de ese día, con el visto de Administración.'},
+  // La salida que no se marcó ya no se declara directamente: se PIDE, y se registra
+  // solo cuando el jefe de área o Administración la aprueba.
+  {id:'SALIDA_OLVIDO', nombre:'Olvidé marcar mi salida', pideHora:true, pasado:true,
+   efecto:'Se registra tu salida de ese día a la hora que indiques, cuando tu jefe o Administración lo aprueben.'}
 ];
 const tipoPermiso = id => TIPOS_PERMISO.find(t=>t.id===id) || TIPOS_PERMISO[0];
 
@@ -2951,7 +2955,8 @@ function motivoSinMarca(p){
    "PERMISO" a secas no dice nada: quien mira quiere saber qué se autorizó. */
 const ETIQUETA_PERMISO = {
   TARDANZA:'TARDANZA OK', SALIDA_ANTES:'SALE ANTES', DIA:'PERMISO DEL DÍA',
-  CASA:'DESDE CASA', JORNADA:'JORNADA', VACACIONES:'VACACIONES', MEDICO:'DESCANSO MÉDICO'
+  CASA:'DESDE CASA', JORNADA:'JORNADA', VACACIONES:'VACACIONES', MEDICO:'DESCANSO MÉDICO',
+  SALIDA_OLVIDO:'SALIDA OLVIDADA'
 };
 const etiquetaPermiso = tipo => ETIQUETA_PERMISO[tipo] || 'PERMISO';
 
@@ -3880,6 +3885,9 @@ function salidaDe(emp, fechaISO, ahora){
   const hor = horarioDe(emp, fechaISO);
   const vencio = fechaISO < hoyISO(ahora) ||
                  (hor && toMin(hhmm(ahora)) > toMin(hor.out) + (CFG.cierreMargenMin||0));
+  const pedida = vencio && PERMISOS.find(x=>x.empId===emp.id && x.tipo==='SALIDA_OLVIDO' &&
+                                           x.fecha===fechaISO && x.estado==='PENDIENTE');
+  if(pedida) return {hora:'—', estado:'CORRECCIÓN PEDIDA '+(pedida.hora||''), cls:'tag-warn', reg:null, permiso:pedida};
   return vencio
     ? {hora:'—', estado:'NO REGISTRADA', cls:'tag-warn', reg:null}
     : {hora:'—', estado:'EN JORNADA',    cls:'tag-ok',   reg:null};
@@ -3935,7 +3943,10 @@ function acumuladosDe(emp, desde, hasta, ahora){
       a.asistidos++; a.conEntrada++;
       if(d.tard>0){ a.tardanzas++; a.minutos += d.tard; } else a.puntuales++;
       if(!d.j.salida) a.sinSalida++;
-      else if(d.j.salida.origen==='DECLARADO') a.declaradas++;   // salida dicha al día siguiente, no marcada
+      // Olvidos: salida que no se marcó en el momento (sin salida, declarada antes de
+      // este cambio, o corregida con permiso). Hoy todavía no cuenta.
+      if(f < hoy && (!d.j.salida || d.j.salida.origen==='DECLARADO' ||
+                     permisoAprobado(emp.id, f, 'SALIDA_OLVIDO'))) a.declaradas++;
       // Solo suma la jornada cerrada: un día sin salida marcada no tiene duración,
       // y estimarla haría que las horas del mes dependieran de quién se olvidó de marcar.
       const t = jornadaTrabajada(d, f, ahora);
@@ -4473,7 +4484,7 @@ function pintarPermiso(emp){
   if(bj) bj.onclick = ()=>panelJefe(emp);
 }
 
-function solicitarPermiso(emp, tipoInicial){
+function solicitarPermiso(emp, tipoInicial, pre){
   const hoy = hoyISO();
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Solicitar un permiso</h2>'+
@@ -4521,7 +4532,7 @@ function solicitarPermiso(emp, tipoInicial){
       // El descanso médico se suele avisar cuando ya empezó: hasta 3 días atrás
       const tope = hoyISO(new Date(Date.now()-(t.pasado?7:3)*86400000));
       fe.min = tope; fe.max = t.pasado ? hoy : '';
-      m.querySelector('#pkHora').querySelector('label').textContent = '¿Desde qué hora?';
+      m.querySelector('#pkHora').querySelector('label').textContent = t.id==='SALIDA_OLVIDO' ? '¿A qué hora saliste?' : '¿Desde qué hora?';
     }else{
       fe.min = hoy; fe.max = '';
       m.querySelector('#pkHora').querySelector('label').textContent = '¿A qué hora?';
@@ -4540,6 +4551,8 @@ function solicitarPermiso(emp, tipoInicial){
     }
   }
   pintarEfecto();
+  if(pre && pre.fecha) m.querySelector('#pkF').value = pre.fecha;
+  if(tipoInicial==='SALIDA_OLVIDO' && !m.querySelector('#pkM').value) m.querySelector('#pkM').value = 'Olvidé marcar mi salida';
 
   m.querySelector('#pkX').onclick = ()=>m.remove();
   m.querySelector('#pkG').onclick = async ()=>{
@@ -4556,6 +4569,13 @@ function solicitarPermiso(emp, tipoInicial){
       if(toMin(h2) <= toMin(h1)){ toast('La hora de salida debe ser posterior'); return; }
     }
     if(motivo.length < 4){ toast('Escribe el motivo'); return; }
+    if(tipo==='SALIDA_OLVIDO'){
+      const jj = jornadaDe(emp.id, fecha), h1 = m.querySelector('#pkH').value;
+      if(!h1){ toast('Indica a qué hora saliste'); return; }
+      if(!jj.entrada){ toast('Ese día no tienes entrada registrada'); return; }
+      if(jj.salida){ toast('Ese día ya tiene salida registrada'); return; }
+      if(toMin(h1) <= minEntrada(jj, fecha)){ toast('La salida debe ser después de tu entrada ('+jj.entrada.hora+')'); return; }
+    }
 
     const b = m.querySelector('#pkG');
 
@@ -4645,13 +4665,6 @@ function salidaPendiente(emp){
   return null;
 }
 
-/* Salidas que esta persona declaró al día siguiente en el mes en curso */
-function declaradasDelMes(empId){
-  const mes = hoyISO().slice(0,7);
-  return MAR.filter(m=>m.empId===empId && m.tipo==='SALIDA' && m.origen==='DECLARADO' &&
-                       String(m.fecha).slice(0,7)===mes).length;
-}
-
 function pedirSalidaPendiente(emp){
   const p = salidaPendiente(emp);
   // Contenedor propio: #mkAlert lo reescribe pintarBoton cada vez que llega el GPS
@@ -4661,68 +4674,43 @@ function pedirSalidaPendiente(emp){
   if(!p) return;
   const d = new Date(p.fecha+'T12:00:00');
   const cuando = DIAS[d.getDay()] + ' ' + d.getDate();
-  // Ya no hay botón de un toque "A mi hora": con él un tercio de las salidas del
-  // mes terminaban declaradas como jornada completa sin que nadie las verificara.
-  // Ahora hay que escribir la hora, y la persona ve cuántas lleva en el mes.
-  const n = declaradasDelMes(emp.id);
+  // La persona ya no escribe su hora de salida: pide la corrección y la aprueba su
+  // jefe de área o Administración. Hasta entonces el día queda sin salida y sin horas.
+  const pedida = PERMISOS.filter(x=>x.empId===emp.id && x.tipo==='SALIDA_OLVIDO' && x.fecha===p.fecha)
+                         .sort((x,y)=>String(y.id).localeCompare(String(x.id)))[0];
+  const n = olvidosDelMes(emp.id);
+  const pie = n ? '<div style="font-size:13px;margin-top:10px;line-height:1.45">Este mes llevas <b>'+n+'</b> olvido'+(n===1?'':'s')+
+                  ' de salida. Desde el tercero se avisa a tu jefe. Marca tu salida antes de irte.</div>' : '';
 
+  if(pedida && pedida.estado==='PENDIENTE'){
+    box.innerHTML = '<div class="alert alert-info" style="text-align:left">'+
+      '<b>Pediste corregir tu salida del '+esc(cuando)+'</b> ('+esc(pedida.hora||'')+'). '+
+      'Está esperando aprobación.'+pie+'</div>';
+    return;
+  }
   box.innerHTML =
     '<div class="alert alert-warn" style="text-align:left">'+
-      '<b>No registraste tu salida del '+esc(cuando)+'.</b><br>¿A qué hora saliste?'+
-      '<button class="btn btn-sm" id="spOtra" style="width:100%;margin-top:10px">Indicar mi hora de salida</button>'+
-      '<button class="btn btn-sm btn-line" id="spNo" style="width:100%;margin-top:8px">No marqué / no aplica</button>'+
-      '<div style="font-size:12px;margin-top:8px;line-height:1.45">'+
-        (n ? 'Este mes llevas <b>'+n+'</b> salida'+(n===1?'':'s')+' declarada'+(n===1?'':'s')+' al día siguiente. ' : '')+
-        'Administración las revisa. Para evitarlo, marca tu salida antes de irte.</div>'+
+      '<b>No marcaste tu salida del '+esc(cuando)+'.</b><br>'+
+      (pedida && pedida.estado==='RECHAZADO'
+        ? 'Tu corrección fue rechazada'+(pedida.comentario?': '+esc(pedida.comentario):'')+'. Puedes pedirla de nuevo.'
+        : 'Pide la corrección: tu jefe o Administración la aprueban. Mientras tanto ese día queda sin salida.')+
+      '<div style="display:grid;grid-template-columns:1.3fr 1fr;gap:8px;margin-top:10px">'+
+        '<button class="btn btn-sm" id="spPedir">Solicitar corrección</button>'+
+        '<button class="btn btn-sm btn-line" id="spNo">No aplica</button></div>'+pie+
     '</div>';
-
-  const registrar = hora=>{
-    if(toMin(hora) <= minEntrada({entrada:p.entrada}, p.fecha)){ toast('La salida debe ser posterior a tu entrada'); return; }
-    const ev = evaluarSalida(emp, p.fecha, hora);
-    const cid = nuevoCid();
-    const datos = {
-      ident: emp.dni || emp.tel || emp.email || emp.id, id: emp.id, cid,
-      tipo:'SALIDA', fecha:p.fecha, hora, origen:'DECLARADO', gps:'off',
-      motivo:'Declarada por el colaborador al día siguiente',
-      deviceId: idDispositivo(), equipo: infoEquipo(), confirmar:true
-    };
-    MAR.push({
-      id:'M'+Date.now()+Math.floor(Math.random()*900+100), cid,
-      empId:emp.id, nombre:emp.nombre, dni:emp.dni||'', area:emp.area, proyecto:emp.proyecto||'',
-      fecha:p.fecha, hora, ts:new Date(p.fecha+'T'+hora+':00').getTime(), tipo:'SALIDA',
-      origen:'DECLARADO', motivo:datos.motivo,
-      estado:ev.estado, tardanza:0, anticipada:ev.anticipada||0,
-      lat:null, lng:null, dist:null, fueraZona:false, gps:'off'
-    });
-    saveMar();
-    toast('Salida del '+cuando+' registrada');
-    renderMark();
-
-    // Sin esto la salida declarada vive solo en este celular y desaparece al sincronizar
-    if(hayServidor()){
-      api('marcar', datos, {timeout:45000})
-        .then(r=>{ if(r && r.ok && r.marcaje) integrarMarcaje(r.marcaje); })
-        .catch(()=>{ COLA.push(datos); saveCola(); });
-    }
-  };
-
   $('#spNo').onclick = ()=>{ box.innerHTML=''; };
-  $('#spOtra').onclick = ()=>{
-    const m=document.createElement('div'); m.className='modal';
-    m.innerHTML='<div class="box"><h2>Salida del '+esc(cuando)+'</h2>'+
-      '<p style="font-size:13px;color:var(--muted);margin:0 0 14px">Marcaste tu entrada a las '+p.entrada.hora+'.</p>'+
-      '<div class="frow"><div><label>Hora real de salida</label><input type="time" id="spH"></div></div>'+
-      '<div style="display:flex;gap:10px;margin-top:16px">'+
-        '<button class="btn btn-line" id="spX">Cancelar</button>'+
-        '<button class="btn" id="spG">Guardar</button></div></div>';
-    document.body.appendChild(m);
-    m.querySelector('#spX').onclick=()=>m.remove();
-    m.querySelector('#spG').onclick=()=>{
-      const h=m.querySelector('#spH').value;
-      if(!h){ toast('Ingresa la hora'); return; }
-      m.remove(); registrar(h);
-    };
-  };
+  $('#spPedir').onclick = ()=>solicitarPermiso(emp, 'SALIDA_OLVIDO', {fecha:p.fecha});
+}
+
+/* Olvidos de salida del mes: correcciones pedidas, más las salidas que se
+   declaraban directamente antes de este cambio */
+function olvidosDelMes(empId){
+  const mes = hoyISO().slice(0,7);
+  const pedidas = new Set(PERMISOS.filter(x=>x.empId===empId && x.tipo==='SALIDA_OLVIDO' &&
+                                             String(x.fecha).slice(0,7)===mes).map(x=>x.fecha));
+  MAR.forEach(m=>{ if(m.empId===empId && m.tipo==='SALIDA' && m.origen==='DECLARADO' &&
+                      String(m.fecha).slice(0,7)===mes) pedidas.add(m.fecha); });
+  return pedidas.size;
 }
 
 function pintarGps(){
@@ -5177,7 +5165,7 @@ async function marcar(){
           // en lugar de un aviso que se va, porque la persona no puede hacer nada más.
           $('#mkAlert').innerHTML = '<div class="alert alert-bad" style="text-align:left">'+
             '<b>El servidor no aceptó tu salida fuera de la oficina.</b><br>'+
-            'Mañana, al abrir la app, podrás indicar tu hora de salida.</div>';
+            'Mañana, al abrir la app, podrás pedir la corrección de tu salida.</div>';
           return;
         }
         toast(r.error || 'El servidor rechazó el marcaje');
@@ -6609,7 +6597,7 @@ function analisisHTML(desde, hasta, ahora){
     '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
       '<th>Colaborador</th><th>DNI</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th><th>Turno</th>'+
       '<th>Días progr.</th><th>Días asistidos</th><th>Inasistencias</th><th>Justificadas</th>'+
-      '<th>Tardanzas</th><th>Min. tardanza</th><th>Horas tardanza</th><th>% asist.</th><th>% punt.</th><th>Sin salida</th><th>Salidas declaradas</th>'+
+      '<th>Tardanzas</th><th>Min. tardanza</th><th>Horas tardanza</th><th>% asist.</th><th>% punt.</th><th>Sin salida</th><th>Olvidos de salida</th>'+
     '</tr></thead><tbody>'+
     filas.map(r=>{
       const a=r.a;
@@ -6648,7 +6636,7 @@ function analisisHTML(desde, hasta, ahora){
       '<b>Días programados</b> excluye domingos, feriados y sábados sin jornada, y descuenta las ausencias justificadas. '+
       '<b>Días asistidos</b> incluye las comisiones de servicio. '+
       '<b>Inasistencias</b> son los días programados sin marcaje y sin justificación. '+
-      '<b>Salidas declaradas</b> son las que la persona indicó al día siguiente, sin marcarlas al irse: la hora no está verificada.</p>';
+      '<b>Olvidos de salida</b> son los días en que la persona no marcó su salida al irse, se haya corregido después o no.</p>';
 }
 
 
@@ -9300,7 +9288,7 @@ function exportar(desde, hasta, nombre){
       '% de puntualidad':a.pctPuntualidad==null?'':a.pctPuntualidad+'%',
       'Tasa de absentismo':a.absentismo+'%',
       'Días sin registro de salida':a.sinSalida,
-      'Salidas declaradas al día siguiente':a.declaradas
+      'Olvidos de salida':a.declaradas
     };
   }).sort((a,b)=>b['Minutos de tardanza']-a['Minutos de tardanza']);
 
