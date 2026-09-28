@@ -2893,6 +2893,7 @@ let ALERTAS = [];                     // señales de suplantación, las manda el
 let DISP_FILAS = null;                // filas de la hoja Dispositivos, para detectar repetidos
 let ALE_FECHA = '';                   // día que se está mirando en las señales de suplantación
 let PERMISOS = [];                    // solicitudes de permiso, las manda el servidor
+let JEFES = [];                       // jefes de área (sin PIN), solo en el panel
 let PROGRAMACION = [];                // horarios asignados a mano, día por día
 let NOTAS_PROG = [];                  // las notas al pie del horario, por semana y área
 let PROG_NOTAS_EDIT = false;          // si el bloque de notas está abierto para escribir
@@ -3180,6 +3181,7 @@ async function sincronizarArranque(){
   if(r.dispositivos && typeof r.dispositivos === 'object') DISP = r.dispositivos;
   if(Array.isArray(r.alertas)) ALERTAS = r.alertas;
   if(Array.isArray(r.permisos)) PERMISOS = r.permisos;
+  if(Array.isArray(r.jefes)) JEFES = r.jefes;
   if(Array.isArray(r.programacion)) PROGRAMACION = r.programacion;
   if(Array.isArray(r.notasProg)) NOTAS_PROG = r.notasProg;
   DISP_FILAS = (typeof r.dispositivosFilas === 'number') ? r.dispositivosFilas : null;
@@ -3333,6 +3335,17 @@ async function sincronizarMios(emp, desde, hasta, forzar){
     const previo = JSON.stringify(PERMISOS.filter(x=>x.empId===emp.id));
     PERMISOS = PERMISOS.filter(x=>x.empId!==emp.id).concat(r.permisos);
     if(previo !== JSON.stringify(r.permisos)) cambioAlgo = true;
+  }
+  // Su ficha: sede, saldo de vacaciones y si es jefe. Administración puede
+  // cambiarlos después de que este celular la guardara la primera vez.
+  if(r.emp && typeof r.emp === 'object'){
+    const i = EMP.findIndex(x=>x.id===emp.id);
+    if(i >= 0){
+      const antes = JSON.stringify(EMP[i]);
+      EMP[i] = Object.assign({}, EMP[i], r.emp);
+      Object.assign(emp, r.emp);
+      if(antes !== JSON.stringify(EMP[i])){ saveEmp(); cambioAlgo = true; }
+    }
   }
 
   const enCola = new Set(COLA.map(x=>x.cid).filter(Boolean));
@@ -4123,6 +4136,120 @@ function renderMark(){
    queda PENDIENTE hasta que administración lo resuelva en el panel. Y no se puede
    pedir para un día que ya pasó — regularizar lo de ayer es un registro manual,
    que carga administración y queda a su nombre. */
+/* ---------- VACACIONES ----------
+   Administración decide cuántos días tiene cada persona (emp.vacDias) y desde
+   qué fecha se cuentan (emp.vacDesde). Se descuentan los días de vacaciones
+   aprobados desde esa fecha. Sin días asignados no hay control de saldo. */
+function saldoVac(emp){
+  if(!emp || emp.vacDias === null || emp.vacDias === undefined || emp.vacDias === '') return null;
+  const desde = emp.vacDesde || '0000-00-00';
+  const vs = PERMISOS.filter(p=>p.empId===emp.id && tipoReal(p).id==='VACACIONES' && p.fecha>=desde);
+  const usadas = vs.filter(p=>p.estado==='APROBADO').length;
+  const pendientes = vs.filter(p=>p.estado==='PENDIENTE').length;
+  return {asignados:+emp.vacDias, usadas, pendientes, saldo:+emp.vacDias - usadas};
+}
+
+/* El jefe de área que revisa los permisos de esta persona (que no sea ella misma) */
+function jefeDeEmp(empId){
+  const e = EMP.find(x=>x.id===empId);
+  if(!e) return null;
+  return JEFES.find(j=>j.empId!==empId && (j.areas||[]).indexOf(e.area) >= 0) || null;
+}
+
+/* Foto del certificado, achicada en el celular antes de enviarla: una foto de
+   cámara pesa 3–5 MB y por datos móviles no llegaría. Queda en ~200 KB. */
+async function fotoComprimida(file){
+  const url = URL.createObjectURL(file);
+  try{
+    const img = await new Promise((ok, mal)=>{ const i = new Image(); i.onload = ()=>ok(i); i.onerror = mal; i.src = url; });
+    const k = Math.min(1, 1400 / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.72);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/* ---------- PANEL DEL JEFE DE ÁREA (en su celular) ----------
+   Entra con su DNI —ya identificado en este celular— y su PIN. El PIN vive solo
+   en memoria: al cerrar la app hay que volver a escribirlo. */
+let JEFE_PIN = '';
+
+function panelJefe(emp){
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = '<div class="box" style="max-height:88vh;overflow:auto"><h2>Permisos de mi equipo</h2><div id="jfCuerpo"></div>'+
+    '<button class="btn btn-line" id="jfX" style="width:100%;margin-top:14px">Cerrar</button></div>';
+  document.body.appendChild(m);
+  m.querySelector('#jfX').onclick = ()=>m.remove();
+  const cuerpo = m.querySelector('#jfCuerpo');
+  const cred = ()=>({ident: emp.dni || emp.id, pin: JEFE_PIN, deviceId: idDispositivo()});
+
+  const pedirPin = (error)=>{
+    cuerpo.innerHTML = (error ? '<div class="alert alert-bad" style="margin-bottom:10px">'+esc(error)+'</div>' : '')+
+      '<div class="frow"><div><label>Tu PIN de jefe</label>'+
+      '<input id="jfPin" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div></div>'+
+      '<button class="btn" id="jfOk" style="width:100%">Entrar</button>';
+    const inp = cuerpo.querySelector('#jfPin'); inp.focus();
+    cuerpo.querySelector('#jfOk').onclick = ()=>{ JEFE_PIN = inp.value.trim(); cargar(); };
+    inp.onkeydown = e=>{ if(e.key==='Enter'){ JEFE_PIN = inp.value.trim(); cargar(); } };
+  };
+
+  const cargar = async ()=>{
+    cuerpo.innerHTML = '<p style="color:var(--muted)">Cargando…</p>';
+    let r;
+    try{ r = await api('jefepermisos', cred(), {timeout:30000}); }
+    catch(e){ cuerpo.innerHTML = '<div class="alert alert-bad">Sin conexión. Inténtalo de nuevo.</div>'; return; }
+    if(!r || !r.ok){ JEFE_PIN = ''; return pedirPin((r && r.error) || 'No se pudo entrar'); }
+    pintar(r);
+  };
+
+  const pintar = r=>{
+    const grupos = agruparPermisos(r.pendientes || []).sort((a,b)=>a.desde.localeCompare(b.desde));
+    const rec = agruparPermisos(r.recientes || []).sort((a,b)=>b.desde.localeCompare(a.desde)).slice(0,15);
+    const rango = g => g.ps.length===1 ? fechaCorta(g.desde) : fechaCorta(g.desde)+' → '+fechaCorta(g.hasta)+' ('+g.ps.length+' días)';
+    cuerpo.innerHTML =
+      '<p style="font-size:12.5px;color:var(--muted);margin:0 0 12px">Áreas: <b>'+esc((r.jefe.areas||[]).join(', '))+'</b>. '+
+        'Tu visto bueno pasa a Administración, que da la aprobación final. Si rechazas, la persona recibe tu motivo.</p>'+
+      (grupos.length ? grupos.map((g,i)=>{
+        const p = g.p, t = tipoReal(p);
+        return '<div class="alert alert-warn" style="text-align:left;margin-bottom:10px">'+
+          '<b>'+esc(p.nombre)+'</b> · '+esc(t.nombre)+'<br>'+
+          '<span style="font-size:12.5px">'+esc(rango(g))+(p.hora?' · '+esc(p.hora)+(p.horaFin?'–'+esc(p.horaFin):''):'')+'</span><br>'+
+          '<span style="font-size:13px">'+esc(motivoSinMarca(p))+'</span>'+
+          (p.adjunto ? '<br><a href="'+esc(p.adjunto)+'" target="_blank" rel="noopener">📎 Ver certificado</a>' : '')+
+          '<div style="display:flex;gap:8px;margin-top:10px">'+
+            '<button class="btn btn-sm" data-jv="'+i+'" style="flex:1">Visto bueno</button>'+
+            '<button class="btn btn-sm btn-line" data-jr="'+i+'" style="flex:1;color:var(--danger);border-color:var(--danger)">Rechazar</button>'+
+          '</div><div data-jm="'+i+'"></div></div>';
+      }).join('') : '<div class="alert alert-ok">✓ No hay permisos esperando tu revisión.</div>')+
+      (rec.length ? '<h3 style="font-size:14px;margin:16px 0 6px">Últimos 30 días</h3>'+
+        rec.map(g=>'<div style="font-size:12.5px;padding:6px 0;border-top:1px solid var(--line)">'+
+          esc(g.p.nombre)+' · '+esc(tipoReal(g.p).nombre)+' · '+esc(rango(g))+' — <b>'+
+          esc(g.p.estado==='PENDIENTE' ? 'Con tu visto, falta Administración' : g.p.estado)+'</b></div>').join('') : '');
+
+    const resolver = async (g, decision, comentario, bt)=>{
+      bt.disabled = true; bt.textContent = 'Guardando…';
+      try{
+        const x = await api('jeferesolver', Object.assign(cred(), {ids:g.ids, decision, comentario}), {timeout:30000});
+        if(x && x.ok){ toast(decision==='VISTO' ? 'Visto bueno enviado a Administración' : 'Permiso rechazado'); cargar(); }
+        else{ toast((x && x.error) || 'No se pudo guardar'); bt.disabled = false; bt.textContent = 'Reintentar'; }
+      }catch(e){ toast('Sin conexión'); bt.disabled = false; bt.textContent = 'Reintentar'; }
+    };
+    cuerpo.querySelectorAll('[data-jv]').forEach(bt=>bt.onclick = ()=>resolver(grupos[+bt.dataset.jv], 'VISTO', '', bt));
+    cuerpo.querySelectorAll('[data-jr]').forEach(bt=>bt.onclick = ()=>{
+      const i = +bt.dataset.jr, caja = cuerpo.querySelector('[data-jm="'+i+'"]');
+      caja.innerHTML = '<input class="sel" placeholder="Motivo del rechazo" style="width:100%;margin-top:8px" maxlength="150">'+
+        '<button class="btn btn-sm" style="width:100%;margin-top:6px;background:var(--danger)">Confirmar rechazo</button>';
+      const inp = caja.querySelector('input'), ok = caja.querySelector('button');
+      inp.focus();
+      ok.onclick = ()=>{ if(inp.value.trim().length < 4){ toast('Escribe el motivo'); return; }
+                         resolver(grupos[i], 'RECHAZADO', inp.value.trim(), ok); };
+    });
+  };
+
+  if(JEFE_PIN) cargar(); else pedirPin();
+}
+
 function pintarPermiso(emp){
   const c = $('#mkPermiso');
   if(!c) return;
@@ -4139,10 +4266,13 @@ function pintarPermiso(emp){
         (p.comentario ? '<br><span style="font-size:12.5px">'+esc(p.comentario)+'</span>' : '')+
       '</div>';
     }).join('')+
-    '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>';
+    '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>'+
+    (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">👥 Permisos de mi equipo</button>' : '');
 
   const b = $('#btnPermiso');
   if(b) b.onclick = ()=>solicitarPermiso(emp);
+  const bj = $('#btnJefe');
+  if(bj) bj.onclick = ()=>panelJefe(emp);
 }
 
 function solicitarPermiso(emp, tipoInicial){
@@ -4162,6 +4292,9 @@ function solicitarPermiso(emp, tipoInicial){
       '<div id="pkHoraFin" style="display:none"><label>¿Hasta qué hora?</label><input type="time" id="pkH2"></div>'+
     '</div>'+
     '<div class="frow"><div><label>Motivo</label><input id="pkM" placeholder="Cita médica, trámite…" maxlength="120"></div></div>'+
+    '<div class="frow" id="pkFotoBox" style="display:none"><div><label>Foto del certificado médico (obligatoria)</label>'+
+      '<input type="file" id="pkFoto" accept="image/*" capture="environment"></div></div>'+
+    '<p id="pkSaldo" style="font-size:12.5px;margin:0 0 6px;display:none"></p>'+
     '<div style="display:flex;gap:10px;margin-top:16px">'+
       '<button class="btn btn-line" id="pkX">Cancelar</button>'+
       '<button class="btn" id="pkG">Enviar</button></div></div>';
@@ -4173,6 +4306,11 @@ function solicitarPermiso(emp, tipoInicial){
     m.querySelector('#pkHora').style.display    = t.pideHora    ? '' : 'none';
     m.querySelector('#pkHoraFin').style.display = t.pideHoraFin ? '' : 'none';
     m.querySelector('#pkHasta').style.display   = t.rango ? '' : 'none';
+    m.querySelector('#pkFotoBox').style.display = t.id==='MEDICO' ? '' : 'none';
+    const sv = t.id==='VACACIONES' ? saldoVac(emp) : null, ps = m.querySelector('#pkSaldo');
+    ps.style.display = sv ? '' : 'none';
+    if(sv) ps.innerHTML = 'Te quedan <b>'+sv.saldo+' día'+(sv.saldo===1?'':'s')+'</b> de vacaciones'+
+                          (sv.pendientes ? ' ('+sv.pendientes+' ya pedidos, sin aprobar)' : '')+'.';
     m.querySelector('#pkFL').textContent        = t.rango ? '¿Desde qué día?' : '¿Qué día?';
     const fe = m.querySelector('#pkF');
     // Los permisos normales son hacia adelante; el de jornada trabajada mira atrás.
@@ -4225,6 +4363,17 @@ function solicitarPermiso(emp, tipoInicial){
       const dias = rangoFechas(fecha, hasta).filter(f=>horarioDe(emp, f));
       if(!dias.length){ toast('En esas fechas no tienes días de trabajo'); return; }
       if(dias.length > 31){ toast('Máximo 31 días por solicitud'); return; }
+      let adjunto = '', adjuntoUrl = '';
+      if(t.id==='MEDICO'){
+        const fi = m.querySelector('#pkFoto');
+        if(!fi.files || !fi.files[0]){ toast('Toma una foto del certificado médico'); return; }
+        try{ adjunto = await fotoComprimida(fi.files[0]); }
+        catch(e){ toast('No se pudo leer la foto. Intenta con otra.'); return; }
+      }
+      const sv = t.id==='VACACIONES' ? saldoVac(emp) : null;
+      if(sv && dias.length > sv.saldo - sv.pendientes &&
+         !confirm('Pides '+dias.length+' días y te quedan '+Math.max(0, sv.saldo - sv.pendientes)+
+                  ' disponibles.\n\n¿Enviar igual? Administración decidirá.')) return;
       const texto = (t.marca ? t.marca+' ' : '') + motivo +
                     (dias.length > 1 ? ' (del '+fechaCorta(dias[0])+' al '+fechaCorta(dias[dias.length-1])+')' : '');
       b.disabled = true;
@@ -4232,10 +4381,20 @@ function solicitarPermiso(emp, tipoInicial){
       for(const f of dias){
         b.textContent = 'Enviando '+(ok+1)+' de '+dias.length+'…';
         try{
+          // La foto viaja solo con el primer día; los demás llevan el enlace ya guardado
+          const conFoto = adjunto && !adjuntoUrl;
           const r = await api('permiso', {ident: emp.dni || emp.id, tipo: t.viajaComo || tipo, fecha:f,
                                           hora:'', horaFin:'', motivo:texto,
-                                          sinCorreo: f !== dias[0]}, {timeout:20000});
-          if(r && r.ok){ ok++; if(r.permiso) PERMISOS = PERMISOS.filter(p=>p.id!==r.permiso.id).concat([r.permiso]); }
+                                          adjunto: conFoto ? adjunto : '', adjuntoUrl,
+                                          sinCorreo: f !== dias[0]},
+                              conFoto ? {timeout:90000, soloPost:true} : {timeout:20000});
+          if(r && r.ok){
+            ok++;
+            if(r.permiso){
+              PERMISOS = PERMISOS.filter(p=>p.id!==r.permiso.id).concat([r.permiso]);
+              if(r.permiso.adjunto) adjuntoUrl = r.permiso.adjunto;
+            }
+          }
           else err = (r && r.error) || 'No se pudo enviar';
         }catch(e){ err = 'Sin conexión'; break; }
       }
@@ -7209,11 +7368,17 @@ function tabPermisos(b){
       '<td class="num">'+rango(g)+
         (vencido && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--danger)">ya empezó</div>' : '')+'</td>'+
       '<td class="num">'+esc(p.hora ? (p.horaFin ? p.hora+'–'+p.horaFin : p.hora) : '—')+'</td>'+
-      '<td style="white-space:normal;min-width:180px">'+esc(motivoSinMarca(p))+'</td>'+
-      '<td>'+(p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>'
+      '<td style="white-space:normal;min-width:180px">'+esc(motivoSinMarca(p))+
+        (p.adjunto ? '<div><a href="'+esc(p.adjunto)+'" target="_blank" rel="noopener" style="font-size:12px">📎 Ver certificado</a></div>' : '')+
+        (t.id==='VACACIONES' && saldoVac(EMP.find(e=>e.id===p.empId)||{}) ?
+          '<div style="font-size:11.5px;color:var(--muted)">Saldo: '+saldoVac(EMP.find(e=>e.id===p.empId)).saldo+' días</div>' : '')+'</td>'+
+      '<td>'+(p.estado==='PENDIENTE' && p.vistoJefe ? '<span class="tag tag-ok" style="margin-bottom:4px">VISTO JEFE</span><br>' :
+              p.estado==='PENDIENTE' && jefeDeEmp(p.empId) ? '<span class="tag tag-warn" style="margin-bottom:4px">ESPERA JEFE</span><br>' : '')+
+        (p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>'
              : p.estado==='RECHAZADO' ? '<span class="tag tag-bad">RECHAZADO</span>'
              : '<span class="tag tag-warn">PENDIENTE</span>')+
-        (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+'</td>'+
+        (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+
+        (p.vistoJefePor && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--muted)">Visto: '+esc(p.vistoJefePor)+'</div>' : '')+'</td>'+
       '<td style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
       (soloVista() ? '<td></td>'
         : '<td><div style="display:flex;gap:6px;align-items:center">'+
@@ -7373,6 +7538,12 @@ function resolverPermiso(ids, decision){
       esc(Array.from(new Set(ps.map(p=>tipoReal(p).nombre))).join(', '))+'<br>'+
       '<span style="color:var(--muted)">'+esc(ps.length===1 ? fechaCorta(ps[0].fecha)
         : fechaCorta(ps[0].fecha)+' → '+fechaCorta(ps[ps.length-1].fecha))+'</span></p>'+
+    (ps.some(p=>!p.vistoJefe && jefeDeEmp(p.empId))
+      ? '<div class="alert alert-warn" style="margin-bottom:12px;text-align:left">⚠ El jefe de área todavía no lo revisa. '+
+        'Puedes resolverlo igual.</div>' : '')+
+    (aprobar && ps.some(p=>tipoReal(p).id==='VACACIONES') && saldoVac(EMP.find(e=>e.id===ps[0].empId)||{})
+      ? '<p style="font-size:13px;margin:-4px 0 12px">Saldo de vacaciones: <b>'+saldoVac(EMP.find(e=>e.id===ps[0].empId)).saldo+
+        ' días</b>. Esta solicitud usa '+ps.length+'.</p>' : '')+
     '<div class="frow"><div><label>Comentario '+(aprobar?'(opcional)':'(obligatorio)')+' — lo verá el colaborador</label>'+
       '<input id="rsC" placeholder="'+(aprobar?'Que te mejores':'Motivo del rechazo')+'" maxlength="150"></div></div>'+
     '<div class="frow"><div><label>Resuelto por</label>'+
@@ -7775,6 +7946,7 @@ function tabEmp(b){
     '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
     'El colaborador ingresa con su <b>DNI</b>. El <b>equipo</b> es el celular al que quedó amarrado: '+
     'si cambia de teléfono o se le borran los datos, hay que liberarlo para que pueda volver a marcar.</p>'+
+    seccionJefes() +
     seccionSenales();
 
   const bAdd = $('#eAdd');  if(bAdd)  bAdd.onclick  = ()=>editarEmp(null);
@@ -7783,6 +7955,76 @@ function tabEmp(b){
   $$('.eEd').forEach(x=>x.onclick=()=>editarEmp(x.dataset.id));
   wireLiberar(b);
   wireSenales(b);
+  wireJefes(b);
+}
+
+/* ---------- JEFES DE ÁREA (panel de administración) ---------- */
+function seccionJefes(){
+  if(soloVista() || !hayServidor()) return '';
+  return '<div class="cfg" style="margin-top:22px"><h3>Jefes de área</h3>'+
+    '<p class="hint">Dan el primer visto bueno a los permisos de su área desde su celular, con su DNI y un PIN. '+
+      'Después decide Administración. Si un área no tiene jefe, los permisos llegan directo aquí.</p>'+
+    (JEFES.length ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr><th>Jefe</th><th>Áreas</th><th></th></tr></thead><tbody>'+
+      JEFES.map(j=>'<tr><td class="name">'+esc(j.nombre)+'</td><td>'+esc((j.areas||[]).join(', '))+'</td>'+
+        '<td><div style="display:flex;gap:6px"><button class="btn btn-sm btn-line" data-jed="'+esc(j.empId)+'">Editar</button>'+
+        '<button class="btn btn-sm btn-line" data-jdel="'+esc(j.empId)+'" style="color:var(--danger)">Quitar</button></div></td></tr>').join('')+
+      '</tbody></table></div></div>' : '<p style="font-size:13px;color:var(--muted)">Todavía no hay jefes de área.</p>')+
+    '<button class="btn btn-sm btn-line" id="jAdd" style="margin-top:10px">+ Nombrar jefe de área</button></div>';
+}
+
+function wireJefes(b){
+  const a = $('#jAdd'); if(a) a.onclick = ()=>editarJefe(null);
+  b.querySelectorAll('[data-jed]').forEach(x=>x.onclick = ()=>editarJefe(x.dataset.jed));
+  b.querySelectorAll('[data-jdel]').forEach(x=>x.onclick = async ()=>{
+    const j = JEFES.find(z=>z.empId===x.dataset.jdel);
+    if(!j || !confirm('Quitar a '+j.nombre+' como jefe de área.\n\nSus permisos pendientes pasarán a llegar directo a Administración.')) return;
+    try{
+      const r = await api('guardarjefe', {empId:j.empId, borrar:true}, {timeout:30000});
+      if(r && r.ok){ JEFES = JEFES.filter(z=>z.empId!==j.empId); toast('Jefe quitado'); renderTab(); }
+      else toast((r && r.error) || 'No se pudo guardar');
+    }catch(e){ toast('Sin conexión con el servidor'); }
+  });
+}
+
+function editarJefe(empId){
+  const j = empId ? JEFES.find(z=>z.empId===empId) : null;
+  const areas = Array.from(new Set(EMP.filter(e=>e.activo).map(e=>e.area).filter(Boolean))).sort();
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = '<div class="box"><h2>'+(j?'Editar jefe de área':'Nombrar jefe de área')+'</h2>'+
+    '<div class="frow"><div><label>Colaborador</label><select id="jE"'+(j?' disabled':'')+'>'+
+      '<option value="">— Selecciona —</option>'+
+      EMP.filter(e=>e.activo).map(e=>'<option value="'+esc(e.id)+'"'+(j&&j.empId===e.id?' selected':'')+'>'+esc(e.nombre)+'</option>').join('')+
+    '</select></div></div>'+
+    '<label style="font-size:12px;font-weight:650;color:var(--muted)">Áreas que revisa</label>'+
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0 12px">'+
+      areas.map(a=>'<label style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" class="jA" value="'+esc(a)+'"'+
+        (j && (j.areas||[]).indexOf(a)>=0 ? ' checked' : '')+'> '+esc(a)+'</label>').join('')+
+    '</div>'+
+    '<div class="frow"><div><label>PIN de 4 a 6 números'+(j?' (déjalo vacío para no cambiarlo)':'')+'</label>'+
+      '<input id="jP" inputmode="numeric" maxlength="6" autocomplete="off"></div></div>'+
+    '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.5">Dáselo en persona. El jefe entra desde la app, en su propio celular, '+
+      'con el botón "Permisos de mi equipo".</p>'+
+    '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn btn-line" id="jX">Cancelar</button>'+
+    '<button class="btn" id="jG">Guardar</button></div></div>';
+  document.body.appendChild(m);
+  m.querySelector('#jX').onclick = ()=>m.remove();
+  m.querySelector('#jG').onclick = async ()=>{
+    const id = j ? j.empId : m.querySelector('#jE').value;
+    const sel = Array.from(m.querySelectorAll('.jA:checked')).map(x=>x.value);
+    const pin = m.querySelector('#jP').value.trim();
+    if(!id){ toast('Elige al colaborador'); return; }
+    if(!sel.length){ toast('Marca al menos un área'); return; }
+    if(!j && !/^\d{4,6}$/.test(pin)){ toast('El PIN debe tener de 4 a 6 números'); return; }
+    if(pin && !/^\d{4,6}$/.test(pin)){ toast('El PIN debe tener de 4 a 6 números'); return; }
+    const bt = m.querySelector('#jG'); bt.disabled = true; bt.textContent = 'Guardando…';
+    try{
+      const r = await api('guardarjefe', {empId:id, areas:sel, pin}, {timeout:30000});
+      if(r && r.ok && r.jefe){
+        JEFES = JEFES.filter(z=>z.empId!==id).concat([r.jefe]);
+        m.remove(); toast('Jefe de área guardado'); renderTab();
+      }else{ bt.disabled = false; bt.textContent = 'Guardar'; toast((r && r.error) || 'No se pudo guardar'); }
+    }catch(e){ bt.disabled = false; bt.textContent = 'Guardar'; toast('Sin conexión con el servidor'); }
+  };
 }
 
 /* El celular al que está amarrada esa persona, con el modelo que se sacó de sus
@@ -7976,6 +8218,11 @@ function editarEmp(id){
           todasLasSedes().map(x=>'<option value="'+esc(x.id)+'"'+(x.id===(e.sede||'PRINCIPAL')?' selected':'')+'>'+esc(x.nombre)+'</option>').join('')+
           '<option value="TODAS"'+(e.sede==='TODAS'?' selected':'')+'>Cualquiera de las sedes</option>'+
         '</select></div></div>' : '')+
+    '<div class="frow"><div><label>Días de vacaciones asignados</label>'+
+        '<input id="vd" type="number" min="0" max="60" value="'+(e.vacDias==null?'':esc(e.vacDias))+'" placeholder="Sin control"></div>'+
+      '<div><label>Contar desde</label><input id="vf" type="date" value="'+esc(e.vacDesde||'')+'"></div></div>'+
+    (id && saldoVac(e) ? '<p style="font-size:12.5px;margin:-6px 0 10px">Saldo actual: <b>'+saldoVac(e).saldo+
+       ' días</b> ('+saldoVac(e).usadas+' usados'+(saldoVac(e).pendientes?', '+saldoVac(e).pendientes+' por aprobar':'')+').</p>' : '')+
     '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.5">'+
       '<b>Teletrabajo:</b> marca ingreso y salida como todos, pero sin validación de ubicación, y sí cuenta en el cuadro diario.<br>'+
       '<b>Exento:</b> no marca asistencia y no aparece en los reportes.</p>'+
@@ -8000,7 +8247,9 @@ function editarEmp(id){
       modalidad:m.querySelector('#ex').value,
       exento:m.querySelector('#ex').value==='EXENTO',
       planilla:m.querySelector('#pl').value==='SI',
-      sede: m.querySelector('#sd') ? m.querySelector('#sd').value : (e.sede||'')
+      sede: m.querySelector('#sd') ? m.querySelector('#sd').value : (e.sede||''),
+      vacDias: m.querySelector('#vd').value==='' ? null : +m.querySelector('#vd').value,
+      vacDesde: m.querySelector('#vf').value || ''
     };
     if(id){ const i=EMP.findIndex(x=>x.id===id); EMP[i]=o; } else EMP.push(o);
     saveEmp(); m.remove(); renderTab();
