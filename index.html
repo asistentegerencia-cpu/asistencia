@@ -3568,6 +3568,76 @@ function mensajeWhatsApp(r, f, esHoy){
   return '';
 }
 
+/* Quién tiene algo pendiente ese día: entrada (solo hoy) o salida. */
+function pendientesWhatsApp(filas, f, esHoy){
+  return {
+    entrada: esHoy ? filas.filter(r=>r.clase==='SIN_MARCAR') : [],
+    salida:  filas.filter(r=>r.sal && r.sal.estado==='NO REGISTRADA')
+  };
+}
+
+/* Un solo mensaje con los nombres, para mandarlo al grupo del equipo: es un toque
+   en vez de uno por persona, y a nadie le gusta aparecer en esa lista. */
+function mensajeGrupoWhatsApp(pend, f, esHoy){
+  const pila = r=>{ const n = String(r.e.nombre||'').trim().split(/\s+/)[0].toLowerCase();
+                    return n.charAt(0).toUpperCase()+n.slice(1)+' '+
+                           (String(r.e.nombre||'').trim().split(/\s+/)[1]||'').charAt(0).toUpperCase()+'.'; };
+  const lista = rs=>rs.map(r=>'• '+pila(r)).join('\n');
+  let t = 'Recordatorio de asistencia 🕘\n';
+  if(pend.entrada.length)
+    t += '\nAún no marcan su ENTRADA de hoy:\n'+lista(pend.entrada)+'\n';
+  if(pend.salida.length)
+    t += '\n'+(esHoy ? 'Todavía no marcan su SALIDA de hoy:' :
+                        'No marcaron su SALIDA del '+fechaLarga(new Date(f+'T12:00:00'))+':')+'\n'+lista(pend.salida)+'\n';
+  t += esHoy
+    ? '\nMárquenla en la app, por favor. Si hoy tienen permiso o llegan tarde, pídanlo desde la app. ¡Gracias!'
+    : '\nEntren a la app y toquen "Solicitar corrección" con la hora a la que salieron. ¡Gracias!';
+  return t;
+}
+
+function bloqueAvisosWhatsApp(filas, f, esHoy){
+  const pend = pendientesWhatsApp(filas, f, esHoy);
+  const n = pend.entrada.length + pend.salida.length;
+  if(!n) return '';
+  const partes = [];
+  if(pend.entrada.length) partes.push('<b>'+pend.entrada.length+'</b> sin marcar entrada');
+  if(pend.salida.length)  partes.push('<b>'+pend.salida.length+'</b> sin marcar salida');
+  return '<div class="alert alert-warn" style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
+    '<div style="flex:1 1 260px">'+ico('chat')+' '+partes.join(' · ')+
+      '<div style="font-size:12.5px;line-height:1.5;margin-top:2px">Avísales por WhatsApp: un mensaje al grupo del equipo con los nombres, o uno por uno a cada persona.</div></div>'+
+    '<a class="btn btn-sm btn-wa" target="_blank" rel="noopener" href="https://wa.me/?text='+
+      encodeURIComponent(mensajeGrupoWhatsApp(pend, f, esHoy))+'">Mensaje al grupo</a>'+
+    '<button class="btn btn-sm btn-line" id="waUno">Uno por uno ('+n+')</button>'+
+  '</div>';
+}
+
+/* Lista con un botón por persona. Cada envío la marca como hecha, así se avanza
+   sin perder la cuenta al ir y volver de WhatsApp. */
+function avisarUnoPorUno(filas, f, esHoy){
+  const pend = pendientesWhatsApp(filas, f, esHoy);
+  const todos = pend.entrada.concat(pend.salida);
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = '<div class="box"><h2>Avisar uno por uno</h2>'+
+    '<p style="font-size:13.5px;color:var(--muted);line-height:1.5;margin:0 0 12px">'+
+      'Toca cada botón: se abre WhatsApp con el mensaje escrito. Envíalo y vuelve aquí para el siguiente.</p>'+
+    '<div style="max-height:55vh;overflow:auto">'+
+    todos.map((r,i)=>{
+      const esEnt = pend.entrada.indexOf(r) >= 0;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(0,0,0,.07)">'+
+        '<div style="flex:1;min-width:0"><b>'+esc(r.e.nombre)+'</b>'+
+          '<div style="font-size:12px;color:var(--muted)">'+(esEnt?'Sin entrada':'Sin salida')+'</div></div>'+
+        (botonWhatsApp(r, f, esHoy).replace('<a class="btn btn-sm btn-wa"', '<a data-wa="'+i+'" class="btn btn-sm btn-wa"') ||
+         '<span style="font-size:12px;color:var(--muted)">—</span>')+
+      '</div>';
+    }).join('')+
+    '</div><button class="btn btn-line" id="waX" style="width:100%;margin-top:14px">Cerrar</button></div>';
+  document.body.appendChild(m);
+  m.querySelector('#waX').onclick = ()=>m.remove();
+  m.querySelectorAll('[data-wa]').forEach(a=>a.addEventListener('click', ()=>{
+    setTimeout(()=>{ a.outerHTML = '<span class="tag tag-ok">✓ Enviado</span>'; }, 300);
+  }));
+}
+
 function botonWhatsApp(r, f, esHoy){
   const txt = mensajeWhatsApp(r, f, esHoy);
   if(!txt) return '';
@@ -4963,52 +5033,73 @@ function ayudaUbicacion(){
    de notificaciones: el calendario del teléfono ya sabe sonar.
    iPhone abre el archivo .ics directamente en Calendario; Android lo hace mejor con
    el enlace de Google Calendar. */
-function recordatorioActivo(emp){
-  try{ return localStorage.getItem('ca_recSalida_'+emp.id) === '1'; }catch(e){ return false; }
+/* Primero solo había recordatorio de salida; el de entrada llegó después. Quien ya
+   agregó el de salida solo ve ahora el de entrada, para no duplicarle eventos. */
+function recordatoriosQueFaltan(emp){
+  const hecho = k=>{ try{ return localStorage.getItem(k+emp.id) === '1'; }catch(e){ return false; } };
+  return ['ENTRADA','SALIDA'].filter(t=>!hecho(t==='ENTRADA' ? 'ca_recEntrada_' : 'ca_recSalida_'));
+}
+function recordatorioActivo(emp){ return recordatoriosQueFaltan(emp).length === 0; }
+function marcarRecordatorio(emp, tipo){
+  try{ localStorage.setItem((tipo==='ENTRADA' ? 'ca_recEntrada_' : 'ca_recSalida_')+emp.id, '1'); }catch(e){}
 }
 
-function horasSalidaTurno(emp){
-  const propios = diasPersona(emp);
-  if(propios){
-    // Un evento por cada hora de salida distinta, con los días que la comparten
-    const COD = ['SU','MO','TU','WE','TH','FR','SA'], NOM = ['dom','lun','mar','mié','jue','vie','sáb'];
-    const por = {};
-    propios.forEach((v,d)=>{ if(v && v.out) (por[v.out] = por[v.out] || []).push(d); });
-    return Object.keys(por).sort().map(h=>({dias: por[h].map(d=>COD[d]), hora:h,
-                                            nombre: por[h].map(d=>NOM[d]).join(', ')}));
-  }
-  const t = getTurno(emp.turno);
+function horasRecordatorio(emp, tipos){
+  tipos = tipos || ['ENTRADA','SALIDA'];
   const out = [];
-  if(t && t.salida) out.push({dias:['MO','TU','WE','TH','FR'], hora:t.salida, nombre:'Lunes a viernes'});
-  if(t && siNo(t.trabajaSab) && t.sabSalida) out.push({dias:['SA'], hora:t.sabSalida, nombre:'Sábados'});
+  const propios = diasPersona(emp);
+  tipos.forEach(tipo=>{
+    const k = tipo==='ENTRADA' ? 'in' : 'out';
+    if(propios){
+      // Un evento por cada hora distinta, con los días que la comparten
+      const COD = ['SU','MO','TU','WE','TH','FR','SA'], NOM = ['dom','lun','mar','mié','jue','vie','sáb'];
+      const por = {};
+      propios.forEach((v,d)=>{ if(v && v[k]) (por[v[k]] = por[v[k]] || []).push(d); });
+      Object.keys(por).sort().forEach(h=>out.push({tipo, dias: por[h].map(d=>COD[d]), hora:h,
+                                                   nombre: por[h].map(d=>NOM[d]).join(', ')}));
+      return;
+    }
+    const t = getTurno(emp.turno);
+    const h  = t && (tipo==='ENTRADA' ? t.entrada : t.salida);
+    const hs = t && (tipo==='ENTRADA' ? t.sabEntrada : t.sabSalida);
+    if(h) out.push({tipo, dias:['MO','TU','WE','TH','FR'], hora:h, nombre:'Lunes a viernes'});
+    if(t && siNo(t.trabajaSab) && hs) out.push({tipo, dias:['SA'], hora:hs, nombre:'Sábados'});
+  });
   return out;
 }
 
 function botonesRecordatorio(emp){
-  const hs = horasSalidaTurno(emp);
+  const faltan = recordatoriosQueFaltan(emp);
+  const hs = horasRecordatorio(emp, faltan);
   if(!hs.length) return '';
   const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+  const que = faltan.length === 2 ? 'la entrada y la salida' : faltan[0]==='ENTRADA' ? 'la entrada' : 'la salida';
   const botones = ios
-    ? '<button class="btn btn-sm btn-line" data-rec="ics" style="width:100%">🔔 Recordarme marcar la salida</button>'
+    ? '<button class="btn btn-sm btn-line" data-rec="ics" style="width:100%">🔔 Recordarme marcar '+que+'</button>'
     : hs.map((h,i)=>'<button class="btn btn-sm btn-line" data-rec="'+i+'" style="width:100%;margin-top:'+(i?8:0)+'px">'+
-                     ico('bell')+' Recordatorio '+esc(h.nombre.toLowerCase())+' · '+esc(h.hora)+'</button>').join('');
+                     ico('bell')+' '+(h.tipo==='ENTRADA'?'Entrada':'Salida')+' '+esc(h.nombre.toLowerCase())+' · '+esc(h.hora)+'</button>').join('');
   return '<div class="rec-salida" style="margin-top:14px">'+botones+
     '<div style="font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45;text-align:center">'+
-      'Se agrega a tu calendario y te avisa todos los días a tu hora de salida.</div></div>';
+      'Se agrega a tu calendario y te avisa todos los días a tu hora de '+
+      (faltan.length === 2 ? 'entrada y de salida' : faltan[0]==='ENTRADA' ? 'entrada' : 'salida')+'.</div></div>';
 }
 
 function conectarRecordatorio(emp, cont){
+  const hs = horasRecordatorio(emp, recordatoriosQueFaltan(emp));
   Array.from(cont.querySelectorAll('[data-rec]')).forEach(b=>{
     b.onclick = ()=>{
-      const hs = horasSalidaTurno(emp);
-      if(b.dataset.rec === 'ics') descargarIcsSalida(hs);
-      else abrirGoogleCalendar(hs[Number(b.dataset.rec)]);
-      try{ localStorage.setItem('ca_recSalida_'+emp.id, '1'); }catch(e){}
+      if(b.dataset.rec === 'ics'){ descargarIcsSalida(hs); hs.forEach(h=>marcarRecordatorio(emp, h.tipo)); }
+      else { const h = hs[Number(b.dataset.rec)]; abrirGoogleCalendar(h); marcarRecordatorio(emp, h.tipo); }
       b.textContent = '✓ Listo — confírmalo en tu calendario';
       b.disabled = true;
     };
   });
 }
+
+const TEXTO_REC = {
+  ENTRADA: {titulo:'Marcar entrada — Asistencia', det:'Al llegar, marca tu entrada en la app', alarma:'Marca tu entrada'},
+  SALIDA:  {titulo:'Marcar salida — Asistencia',  det:'Antes de irte, marca tu salida en la app', alarma:'Marca tu salida'}
+};
 
 function fechaCal(h){
   // Primer día desde mañana que caiga en uno de sus días, a su hora de salida.
@@ -5023,8 +5114,8 @@ function abrirGoogleCalendar(h){
   const ini = fechaCal(h);
   const fin = ini.slice(0,9) + pad(Math.floor((toMin(h.hora)+5)/60)%24) + pad((toMin(h.hora)+5)%60) + '00';
   const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE'+
-    '&text='+encodeURIComponent('Marcar salida — Asistencia')+
-    '&details='+encodeURIComponent('Antes de irte, marca tu salida en la app: '+location.href.split('?')[0])+
+    '&text='+encodeURIComponent(TEXTO_REC[h.tipo||'SALIDA'].titulo)+
+    '&details='+encodeURIComponent(TEXTO_REC[h.tipo||'SALIDA'].det+': '+location.href.split('?')[0])+
     '&dates='+ini+'/'+fin+
     '&recur='+encodeURIComponent('RRULE:FREQ=WEEKLY;BYDAY='+h.dias.join(','));
   window.open(url, '_blank');
@@ -5034,19 +5125,19 @@ function descargarIcsSalida(hs){
   const ahora = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
   const ev = hs.map((h,i)=>[
     'BEGIN:VEVENT',
-    'UID:salida-'+i+'-'+Date.now()+'@asistencia',
+    'UID:'+(h.tipo||'SALIDA').toLowerCase()+'-'+i+'-'+Date.now()+'@asistencia',
     'DTSTAMP:'+ahora,
     'DTSTART:'+fechaCal(h),
     'DURATION:PT5M',
     'RRULE:FREQ=WEEKLY;BYDAY='+h.dias.join(','),
-    'SUMMARY:Marcar salida — Asistencia',
-    'DESCRIPTION:Antes de irte\\, marca tu salida en la app.',
-    'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:Marca tu salida','TRIGGER:PT0M','END:VALARM',
+    'SUMMARY:'+TEXTO_REC[h.tipo||'SALIDA'].titulo,
+    'DESCRIPTION:'+TEXTO_REC[h.tipo||'SALIDA'].det.replace(/,/g,'\\,')+'.',
+    'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+TEXTO_REC[h.tipo||'SALIDA'].alarma,'TRIGGER:PT0M','END:VALARM',
     'END:VEVENT'].join('\r\n')).join('\r\n');
   const ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Asistencia//Recordatorio//ES\r\n'+ev+'\r\nEND:VCALENDAR\r\n';
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([ics], {type:'text/calendar'}));
-  a.download = 'recordatorio-salida.ics';
+  a.download = 'recordatorio-asistencia.ics';
   document.body.appendChild(a); a.click(); a.remove();
 }
 
@@ -6014,6 +6105,7 @@ function tabHoy(b){
       '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy)+
+    (soloVista() ? '' : bloqueAvisosWhatsApp(filas, f, esHoy))+
     '<div class="tblwrap"><div class="tblscroll"><table class="tcards"><thead><tr>'+
       '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th>'+
       '<th>Entrada</th><th>Salida</th><th>Horas trabajadas</th>'+
@@ -6086,6 +6178,8 @@ function tabHoy(b){
            cabecera('FUERA DE PLANILLA', fuera.length)+ fuera.map(filaHoy).join('');
   }
 
+  const waUno = $('#waUno');
+  if(waUno) waUno.onclick = ()=>avisarUnoPorUno(filas, f, esHoy);
   b.querySelectorAll('[data-ok]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
   b.querySelectorAll('[data-no]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
 
