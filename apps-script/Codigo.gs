@@ -36,7 +36,7 @@ var COLS = {
         'origen','estado','tardanza','anticipada','lat','lng','dist','fuera_zona','gps',
         'motivo','registrado_por','dispositivo','equipo','sede'],
   emp: ['id','nombre','dni','cargo','area','proyecto','tel','email','turno','activo','modalidad','planilla',
-        'sede','vac_dias','vac_desde'],
+        'sede','vac_dias','vac_desde','dias'],
   cfg: ['clave','valor'],
   aus: ['id','emp_id','tipo','desde','hasta','lugar','actividad','motivo','autorizado_por','creado'],
   fer: ['fecha','nombre'],
@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 4,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 5,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -240,7 +240,7 @@ function identificar(p) {
     emp: { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, area: emp.area,
            turno: emp.turno, modalidad: emp.modalidad, activo: true,
            dni: emp.dni, proyecto: emp.proyecto, sede: emp.sede,
-           vacDias: emp.vacDias, vacDesde: emp.vacDesde, esJefe: !!jefeDe(emp.id) }
+           vacDias: emp.vacDias, vacDesde: emp.vacDesde, esJefe: !!jefeDe(emp.id), dias: emp.dias }
   };
 }
 
@@ -296,7 +296,8 @@ function mios(p) {
   return { ok: true, empId: emp.id, marcajes: out, total: out.length,
            programacion: miProg, permisos: misPermisos,
            emp: { sede: emp.sede, vacDias: emp.vacDias, vacDesde: emp.vacDesde,
-                  esJefe: !!jefeDe(emp.id), modalidad: emp.modalidad, turno: emp.turno } };
+                  esJefe: !!jefeDe(emp.id), modalidad: emp.modalidad, turno: emp.turno,
+                  dias: emp.dias } };
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -574,7 +575,8 @@ function instalar(p) {
                modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
                sede: e.sede || '',
                vac_dias: (e.vacDias === null || e.vacDias === undefined || e.vacDias === '') ? '' : Number(e.vacDias),
-               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '' };
+               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '',
+               dias: diasValidos(e.dias) ? JSON.stringify(diasValidos(e.dias)) : '' };
     });
 
     var cfg = datos.cfg || {};
@@ -709,7 +711,8 @@ function leerPersonalDeHoja() {
         planilla: String(f.planilla).toUpperCase() !== 'NO',
         sede: String(f.sede || ''),
         vacDias: (f.vac_dias === '' || f.vac_dias === null || f.vac_dias === undefined) ? null : Number(f.vac_dias),
-        vacDesde: fechaTexto(f.vac_desde)
+        vacDesde: fechaTexto(f.vac_desde),
+        dias: diasValidos(f.dias)
       };
     });
 }
@@ -2088,7 +2091,8 @@ function guardarPersonal(p) {
                modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
                sede: e.sede || '',
                vac_dias: (e.vacDias === null || e.vacDias === undefined || e.vacDias === '') ? '' : Number(e.vacDias),
-               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '' };
+               vac_desde: e.vacDesde ? "'" + fechaTexto(e.vacDesde) : '',
+               dias: diasValidos(e.dias) ? JSON.stringify(diasValidos(e.dias)) : '' };
     });
     return { ok: true, personal: n };
   } finally { lock.releaseLock(); }
@@ -2180,8 +2184,14 @@ function horarioDe(emp, fechaISO, cfg, prog) {
     if (j) return { in: j.in, out: j.out, programado: j.tramos[0], tramos: j.tramos };
   }
   if (esFeriado(cfg, fechaISO)) return null;
-  var t = turnoDe(cfg, emp.turno);
   var d = new Date(fechaISO + 'T12:00:00').getDay();
+  // Horario propio de la persona (columna "dias" de Personal): manda sobre su turno
+  var propios = diasValidos(emp.dias);
+  if (propios) {
+    var v = propios[d];
+    return (v && v.in && v.out) ? { in: v.in, out: v.out } : null;
+  }
+  var t = turnoDe(cfg, emp.turno);
   // El servidor consultaba solo el turno y se saltaba el calendario: daba por
   // laborable cualquier sábado del turno, marcara o no la empresa ese día concreto.
   // Eso hacía que el estado de un marcaje se calculara distinto aquí y en el panel.
@@ -2229,6 +2239,16 @@ function clasificarEntrada(diff, cfg) {
   if (diff <= cfg.tolerancia)    return { estado: 'EN TOLERANCIA',  tardanza: 0 };
   if (diff <= cfg.umbralGrave)   return { estado: 'TARDANZA',       tardanza: diff };
   return                                { estado: 'TARDANZA GRAVE', tardanza: diff };
+}
+
+/* Siete casillas (0 = domingo … 6 = sábado) con {in, out} o null; si no llega eso, null. */
+function diasValidos(v) {
+  if (!v) return null;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { return null; } }
+  if (Object.prototype.toString.call(v) !== '[object Array]' || v.length !== 7) return null;
+  return v.map(function (x) {
+    return (x && x.in && x.out) ? { in: horaTexto(x.in), out: horaTexto(x.out) } : null;
+  });
 }
 
 function siNo(v) { return v === true || v === 1 || v === '1' || v === 'true' || v === 'SI'; }

@@ -135,8 +135,15 @@ function recSal_horaSalida(p, f, ctx){
   const tramos = ctx.prog.filter(a => a.emp_id === p.id && a.fecha === f && a.estado !== 'BORRADOR' && a.salida);
   if(tramos.length) return tramos.map(a => a.salida).sort().pop();
 
-  // 2) Turno, según el calendario de la empresa
+  // 2) Horario propio de la persona (columna "dias" de Personal), si lo tiene
   if(ctx.feriados[f]) return null;
+  const propios = recSal_json(p.dias, null);
+  if(Array.isArray(propios) && propios.length === 7){
+    const v = propios[recSal_aFecha(f, '12:00', ctx.tz).getDay()];
+    return (v && v.out) ? v.out : null;
+  }
+
+  // 3) Turno, según el calendario de la empresa
   const t = ctx.turnos.filter(x => x.id === p.turno)[0] || ctx.turnos[0];
   if(!t) return null;
   const dia = recSal_aFecha(f, '12:00', ctx.tz).getDay();
