@@ -10,8 +10,12 @@
  *     correo como invitado. El evento aparece en SU Google Calendar y el celular le
  *     avisa, aunque la app de asistencia esté cerrada.
  *     La hora sale de su programación publicada si la tiene; si no, de su turno.
- *  2. (Opcional) Cada 30 minutos revisa quién marcó entrada y no salida, pasada su
+ *  2. (Opcional) Cada 15 minutos revisa quién marcó entrada y no salida, pasada su
  *     hora de salida, y le manda un correo recordándole marcarla.
+ *  3. (Opcional) En la misma revisión, a quien ya pasó su hora de entrada (más
+ *     unos minutos de margen) y no marcó, le manda un correo para que la marque.
+ *     No avisa a quien tiene un permiso del día o de tardanza, ni a quien está en
+ *     una ausencia registrada (comisión, licencia, vacaciones).
  *
  * Cómo instalarlo (una sola vez):
  *  1. En el editor de Apps Script: Archivo › Nuevo › Script, nómbralo "Recordatorios"
@@ -19,6 +23,8 @@
  *  2. Elige la función  instalarRecordatorios  y pulsa Ejecutar. Acepta los permisos
  *     (Calendar, y Gmail si activas el correo).
  *  3. Listo. Para quitarlo: ejecuta  desinstalarRecordatorios.
+ *  Si ya lo tenías instalado, vuelve a ejecutar  instalarRecordatorios  una vez para
+ *  que empiece a revisar también las entradas.
  *
  * Importante:
  *  - Solo reciben aviso quienes tienen correo en la hoja Personal.
@@ -32,7 +38,9 @@ const REC_SALIDA = {
   etiqueta:       'asistencia-salida',
   diasAdelante:   1,     // crea los de hoy y mañana
   correo:         true,  // aviso por correo a quien no marcó salida
-  margenCorreoMin: 20    // minutos después de su hora de salida
+  margenCorreoMin: 20,   // minutos después de su hora de salida
+  entrada:        true,  // aviso por correo a quien no marcó entrada
+  margenEntradaMin: 15   // minutos después de su hora de entrada
 };
 
 /* ---------------- Instalación ---------------- */
@@ -40,13 +48,14 @@ const REC_SALIDA = {
 function instalarRecordatorios(){
   desinstalarRecordatorios();
   ScriptApp.newTrigger('crearRecordatoriosSalida').timeBased().everyDays(1).atHour(5).create();
-  if(REC_SALIDA.correo) ScriptApp.newTrigger('avisarSalidasPendientes').timeBased().everyMinutes(30).create();
+  if(REC_SALIDA.correo || REC_SALIDA.entrada)
+    ScriptApp.newTrigger('revisarPendientes').timeBased().everyMinutes(15).create();
   crearRecordatoriosSalida();
 }
 
 function desinstalarRecordatorios(){
   ScriptApp.getProjectTriggers()
-    .filter(t => ['crearRecordatoriosSalida','avisarSalidasPendientes'].indexOf(t.getHandlerFunction()) >= 0)
+    .filter(t => ['crearRecordatoriosSalida','avisarSalidasPendientes','revisarPendientes'].indexOf(t.getHandlerFunction()) >= 0)
     .forEach(t => ScriptApp.deleteTrigger(t));
 }
 
@@ -95,7 +104,56 @@ function recSal_calendario(){
   });
 }
 
-/* ---------------- 2. Correo a quien no marcó salida ---------------- */
+/* ---------------- 2 y 3. Correos a quien no marcó ---------------- */
+
+function revisarPendientes(){
+  if(REC_SALIDA.correo) avisarSalidasPendientes();
+  if(REC_SALIDA.entrada) avisarEntradasPendientes();
+}
+
+function avisarEntradasPendientes(){
+  const ctx = recSal_contexto();
+  const ahora = new Date();
+  const hoy = Utilities.formatDate(ahora, ctx.tz, 'yyyy-MM-dd');
+  const minAhora = Number(Utilities.formatDate(ahora, ctx.tz, 'H'))*60 + Number(Utilities.formatDate(ahora, ctx.tz, 'm'));
+  const props = PropertiesService.getScriptProperties();
+
+  const entrada = {};
+  recSal_leerTabla(ctx.ss.getSheetByName('Marcajes'), 400).forEach(m => {
+    if(recSal_fechaISO(m.fecha, ctx.tz) === hoy && m.tipo === 'ENTRADA') entrada[String(m.emp_id)] = true;
+  });
+
+  // Quién no tiene que marcar hoy: permiso del día o de tardanza (aprobado o por
+  // responder) y ausencias registradas que cubren hoy.
+  const libre = {};
+  recSal_leerTabla(ctx.ss.getSheetByName('Permisos'), 600).forEach(x => {
+    if(recSal_fechaISO(x.fecha, ctx.tz) !== hoy || String(x.estado) === 'RECHAZADO') return;
+    if(['DIA','TARDANZA','JORNADA'].indexOf(String(x.tipo)) >= 0) libre[String(x.emp_id)] = true;
+  });
+  recSal_leerTabla(ctx.ss.getSheetByName('Ausencias')).forEach(a => {
+    const d = recSal_fechaISO(a.desde, ctx.tz), h = recSal_fechaISO(a.hasta, ctx.tz) || d;
+    if(d && d <= hoy && hoy <= h) libre[String(a.emp_id)] = true;
+  });
+
+  ctx.personal.forEach(p => {
+    if(!p.email || !recSal_activo(p) || p.modalidad === 'EXENTO' || entrada[p.id] || libre[p.id]) return;
+    const hor = recSal_horario(p, hoy, ctx);
+    if(!hor || !hor.in) return;
+    const ini = recSal_aMin(hor.in);
+    // Solo dentro de su jornada: pasado el margen y antes de su hora de salida
+    if(minAhora < ini + REC_SALIDA.margenEntradaMin) return;
+    if(hor.out && recSal_aMin(hor.out) > ini && minAhora >= recSal_aMin(hor.out)) return;
+    const clave = 'avisoEntrada|' + p.id + '|' + hoy;
+    if(props.getProperty(clave)) return;                      // uno por día
+    MailApp.sendEmail(p.email, 'No has marcado tu entrada de hoy',
+      'Hola ' + recSal_nombreCorto(p.nombre) + ',\n\n' +
+      'Tu horario de hoy empezaba a las ' + hor.in + ' y todavía no marcas tu entrada.\n' +
+      'Si ya llegaste, márcala ahora en la app de asistencia.\n' +
+      'Si hoy no vienes o vas a llegar tarde, pide el permiso desde la app.\n\n' +
+      'Asistencia ' + (ctx.cfg.empresa || ''));
+    props.setProperty(clave, '1');
+  });
+}
 
 function avisarSalidasPendientes(){
   const ctx = recSal_contexto();
@@ -131,25 +189,32 @@ function avisarSalidasPendientes(){
 /* ---------------- Horario del día (mismo criterio que la app) ---------------- */
 
 function recSal_horaSalida(p, f, ctx){
+  const h = recSal_horario(p, f, ctx);
+  return h ? h.out : null;
+}
+
+/* {in, out} del día, o null si ese día no trabaja. */
+function recSal_horario(p, f, ctx){
   // 1) Programación publicada o validada: manda sobre todo
   const tramos = ctx.prog.filter(a => a.emp_id === p.id && a.fecha === f && a.estado !== 'BORRADOR' && a.salida);
-  if(tramos.length) return tramos.map(a => a.salida).sort().pop();
+  if(tramos.length) return {in: tramos.map(a => a.entrada).filter(String).sort()[0] || '',
+                            out: tramos.map(a => a.salida).sort().pop()};
 
   // 2) Horario propio de la persona (columna "dias" de Personal), si lo tiene
   if(ctx.feriados[f]) return null;
   const propios = recSal_json(p.dias, null);
   if(Array.isArray(propios) && propios.length === 7){
     const v = propios[recSal_aFecha(f, '12:00', ctx.tz).getDay()];
-    return (v && v.out) ? v.out : null;
+    return (v && v.out) ? {in: v.in || '', out: v.out} : null;
   }
 
   // 3) Turno, según el calendario de la empresa
   const t = ctx.turnos.filter(x => x.id === p.turno)[0] || ctx.turnos[0];
   if(!t) return null;
   const dia = recSal_aFecha(f, '12:00', ctx.tz).getDay();
-  if(dia === 0) return (recSal_siNo(t.trabajaDom) && ctx.dom.indexOf(f) >= 0) ? t.domSalida : null;
-  if(dia === 6) return (recSal_siNo(t.trabajaSab) && ctx.sab.indexOf(f) >= 0) ? t.sabSalida : null;
-  return t.salida;
+  if(dia === 0) return (recSal_siNo(t.trabajaDom) && ctx.dom.indexOf(f) >= 0) ? {in:t.domEntrada, out:t.domSalida} : null;
+  if(dia === 6) return (recSal_siNo(t.trabajaSab) && ctx.sab.indexOf(f) >= 0) ? {in:t.sabEntrada, out:t.sabSalida} : null;
+  return {in:t.entrada, out:t.salida};
 }
 
 /* ---------------- Lectura de la hoja ---------------- */
@@ -163,7 +228,7 @@ function recSal_contexto(){
   recSal_leerTabla(ss.getSheetByName('Feriados')).forEach(r => { feriados[recSal_fechaISO(r.fecha, tz)] = true; });
   const prog = recSal_leerTabla(ss.getSheetByName('Programacion')).map(r => ({
     emp_id: String(r.emp_id), fecha: recSal_fechaISO(r.fecha, tz),
-    salida: recSal_horaTxt(r.salida, tz), estado: String(r.estado || '')
+    entrada: recSal_horaTxt(r.entrada, tz), salida: recSal_horaTxt(r.salida, tz), estado: String(r.estado || '')
   }));
   return {
     ss, tz, cfg, feriados, prog,
