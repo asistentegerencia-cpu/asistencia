@@ -3825,6 +3825,9 @@ function sedeMasCercana(emp, lat, lng){
    !3d-6.39!4d-79.82 o ?q=-6.39,-79.82) o dos números separados por coma. */
 function coordsDeTexto(t){
   t = String(t||'');
+  // Mapa incrustado (<iframe … !2dLNG!3dLAT …>): viene al revés, longitud primero
+  const emb = t.match(/!2d(-?\d+\.\d+)!3d(-?\d+\.\d+)/);
+  if(emb){ const la=+emb[2], lo=+emb[1]; if(Math.abs(la)<=90 && Math.abs(lo)<=180) return {lat:la, lng:lo}; }
   const pats = [/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/, /@(-?\d+\.\d+),\s*(-?\d+\.\d+)/,
                 /[?&](?:q|query|ll)=(-?\d+\.\d+),\s*(-?\d+\.\d+)/, /(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/];
   for(const re of pats){
@@ -4230,7 +4233,8 @@ function solicitarPermiso(emp, tipoInicial){
         b.textContent = 'Enviando '+(ok+1)+' de '+dias.length+'…';
         try{
           const r = await api('permiso', {ident: emp.dni || emp.id, tipo: t.viajaComo || tipo, fecha:f,
-                                          hora:'', horaFin:'', motivo:texto}, {timeout:20000});
+                                          hora:'', horaFin:'', motivo:texto,
+                                          sinCorreo: f !== dias[0]}, {timeout:20000});
           if(r && r.ok){ ok++; if(r.permiso) PERMISOS = PERMISOS.filter(p=>p.id!==r.permiso.id).concat([r.permiso]); }
           else err = (r && r.error) || 'No se pudo enviar';
         }catch(e){ err = 'Sin conexión'; break; }
@@ -5603,7 +5607,9 @@ function tabHoy(b){
       const zona = r.e.modalidad==='REMOTO' ? '<span class="tag tag-ok">REMOTO</span>'
                  : j.entrada && !debiaEstarEnOficina(r.e, j.entrada.fecha, j.entrada.hora) ? '<span class="tag tag-ok">CASA</span>'
                  : j.entrada ? (j.entrada.fueraZona ? '<span class="tag tag-bad">FUERA</span>'
-                   : j.entrada.gps==='dentro' ? '<span class="tag tag-ok">OK</span>' : '<span class="tag tag-warn">S/GPS</span>') : '—';
+                   : j.entrada.gps==='dentro' ? '<span class="tag tag-ok">'+
+                       (j.entrada.sede && j.entrada.sede!=='PRINCIPAL' ? esc(nombreSede(j.entrada.sede)) : 'OK')+'</span>'
+                   : '<span class="tag tag-warn">S/GPS</span>') : '—';
       const salTxt = r.sal.hora!=='—' ? '<b>'+r.sal.hora+'</b>'
                    : r.sal.estado ? '<span class="tag '+r.sal.cls+'">'+r.sal.estado+'</span>' : '—';
       return '<tr>'+
@@ -7385,10 +7391,13 @@ function resolverPermiso(ids, decision){
     const bt = m.querySelector('#rsG'); bt.disabled = true;
 
     let ok = 0, conJornada = false, err = '';
+    const avisados = {};   // un correo por pedido, no uno por cada día
     for(const p of ps){
+      const clavePedido = p.empId+'|'+p.tipo+'|'+(p.motivo||'');
+      const sinCorreo = !!avisados[clavePedido]; avisados[clavePedido] = true;
       bt.textContent = (ps.length>1 ? (ok+1)+' de '+ps.length+'…' : 'Guardando…');
       try{
-        const r = await api('resolver', {id:p.id, decision, comentario:com, resueltoPor:quien}, {timeout:30000});
+        const r = await api('resolver', {id:p.id, decision, comentario:com, resueltoPor:quien, sinCorreo}, {timeout:30000});
         if(r && r.ok){
           p.estado = decision; p.comentario = com; p.resueltoPor = quien; ok++;
           if(r.marcajesCreados) conJornada = true;

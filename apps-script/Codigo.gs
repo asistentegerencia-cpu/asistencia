@@ -33,8 +33,9 @@ var HOJA = {
 var COLS = {
   mar: ['ts_servidor','id','cid','emp_id','dni','nombre','area','proyecto','fecha','hora','tipo',
         'origen','estado','tardanza','anticipada','lat','lng','dist','fuera_zona','gps',
-        'motivo','registrado_por','dispositivo','equipo'],
-  emp: ['id','nombre','dni','cargo','area','proyecto','tel','email','turno','activo','modalidad','planilla'],
+        'motivo','registrado_por','dispositivo','equipo','sede'],
+  emp: ['id','nombre','dni','cargo','area','proyecto','tel','email','turno','activo','modalidad','planilla',
+        'sede'],
   cfg: ['clave','valor'],
   aus: ['id','emp_id','tipo','desde','hasta','lugar','actividad','motivo','autorizado_por','creado'],
   fer: ['fecha','nombre'],
@@ -184,7 +185,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 2,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 3,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -228,7 +229,7 @@ function identificar(p) {
     ok: true,
     emp: { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, area: emp.area,
            turno: emp.turno, modalidad: emp.modalidad, activo: true,
-           dni: emp.dni, proyecto: emp.proyecto }
+           dni: emp.dni, proyecto: emp.proyecto, sede: emp.sede }
   };
 }
 
@@ -555,7 +556,8 @@ function instalar(p) {
       return { id: e.id, nombre: e.nombre, dni: "'" + (e.dni || ''), cargo: e.cargo || '',
                area: e.area || '', proyecto: e.proyecto || '', tel: "'" + (e.tel || ''),
                email: e.email || '', turno: e.turno || '', activo: e.activo ? 'SI' : 'NO',
-               modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI' };
+               modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
+               sede: e.sede || '' };
     });
 
     var cfg = datos.cfg || {};
@@ -568,6 +570,9 @@ function instalar(p) {
     pares.push(['proyectos', JSON.stringify(cfg.proyectos || [])]);
     pares.push(['sabadosTrabajados', JSON.stringify(cfg.sabadosTrabajados || [])]);
     pares.push(['domingosTrabajados', JSON.stringify(cfg.domingosTrabajados || [])]);
+    // Sedes adicionales (fundo, almacén…). La principal sigue siendo lat/lng/radio.
+    pares.push(['nombreSedePrincipal', String(cfg.nombreSedePrincipal || '')]);
+    pares.push(['sedesExtra', JSON.stringify(listaSedesExtra(cfg.sedesExtra))]);
     var hc = limpiarHoja(HOJA.cfg, COLS.cfg);
     if (pares.length) hc.getRange(2, 1, pares.length, 2).setValues(pares);
 
@@ -653,7 +658,8 @@ function leerConfigDeHoja() {
     var k = String(f.clave || '').trim();
     if (!k) return;
     var v = f.valor;
-    if (k === 'turnos' || k === 'proyectos' || k === 'sabadosTrabajados' || k === 'domingosTrabajados') { try { v = JSON.parse(v); } catch (e) { v = []; } }
+    if (k === 'turnos' || k === 'proyectos' || k === 'sabadosTrabajados' || k === 'domingosTrabajados' ||
+        k === 'sedesExtra') { try { v = JSON.parse(v); } catch (e) { v = []; } }
     else if (['lat','lng','radio','tolerancia','umbralGrave','cierreMargenMin'].indexOf(k) >= 0) v = Number(v);
     // Si la hoja convirtió la fecha en fecha/hora, dejarla como texto AAAA-MM-DD.
     // Un "2026-08-24T05:00:00.000Z" rompe las comparaciones y esconde las faltas del día.
@@ -683,7 +689,8 @@ function leerPersonalDeHoja() {
         activo: String(f.activo).toUpperCase() !== 'NO',
         modalidad: String(f.modalidad || 'PRESENCIAL').toUpperCase(),
         exento: String(f.modalidad || '').toUpperCase() === 'EXENTO',
-        planilla: String(f.planilla).toUpperCase() !== 'NO'
+        planilla: String(f.planilla).toUpperCase() !== 'NO',
+        sede: String(f.sede || '')
       };
     });
 }
@@ -1126,7 +1133,17 @@ function pedirPermiso(p) {
   // justamente para el día que ya pasó y no se marcó: sirve para regularizarlo
   // sin que administración tenga que cargarlo a mano. Se limita a una semana para
   // que no se conviertan en un cajón de sastre para justificar faltas viejas.
-  if (tipo !== 'JORNADA' && fecha < hoy) {
+  // El descanso médico se avisa cuando ya empezó: se admite hasta 3 días atrás.
+  // Llega como DIA con la marca "[Descanso médico]" al inicio del motivo.
+  var esMedico = tipo === 'DIA' && String(p.motivo || '').indexOf('[Descanso médico]') === 0;
+  if (esMedico && fecha < hoy) {
+    var tope3 = new Date(new Date(hoy + 'T12:00:00').getTime() - 3 * 86400000);
+    if (fecha < Utilities.formatDate(tope3, TZ, 'yyyy-MM-dd')) {
+      return { ok: false, motivo: 'muy_viejo',
+               error: 'El descanso médico se puede registrar hasta 3 días después. Habla con Administración.' };
+    }
+  }
+  if (tipo !== 'JORNADA' && !esMedico && fecha < hoy) {
     return { ok: false, motivo: 'fecha_pasada',
              error: 'No se puede pedir un permiso para un día que ya pasó. Habla con Administración.' };
   }
@@ -1171,7 +1188,8 @@ function pedirPermiso(p) {
       estado: 'PENDIENTE', resuelto_por: '', resuelto_el: '', comentario: ''
     });
 
-    avisarPorCorreo(leerConfig(), 'Nueva solicitud de permiso',
+    // Un pedido de varios días llega como una solicitud por día: se avisa solo con la primera.
+    if (String(p.sinCorreo) !== 'true') avisarPorCorreo(leerConfig(), 'Nueva solicitud de permiso',
       emp.nombre + ' solicitó un permiso.\n\n' +
       'Tipo: ' + tipo + '\nFecha: ' + fecha + (p.hora ? '\nHora: ' + p.hora : '') + '\n' +
       'Motivo: ' + motivo + '\n\n' +
@@ -1313,11 +1331,44 @@ function resolverPermiso(p) {
             horaTexto(datos[i][cHora]), horaTexto(datos[i][cFin]),
             String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
         }
-        return { ok: true, id: id, estado: decision, marcajesCreados: creados };
+        // La persona se entera por correo de la respuesta, con el comentario.
+        // Un pedido de varios días se resuelve día por día: el panel pide el aviso solo una vez.
+        var avisado = '';
+        if (String(p.sinCorreo) !== 'true') {
+          avisado = avisarAlColaborador(String(datos[i][cEmp]), decision, String(datos[i][cTipo]),
+            fechaTexto(datos[i][cFecha]), String(datos[i][cMot] || ''), String(p.comentario || ''),
+            String(p.resueltoPor || 'Administración'));
+        }
+        return { ok: true, id: id, estado: decision, marcajesCreados: creados, avisado: avisado };
       }
     }
     return { ok: false, error: 'No se encontró ese permiso.' };
   } finally { lock.releaseLock(); }
+}
+
+/** Correo al colaborador con la respuesta a su permiso. Nunca interrumpe nada si falla. */
+function avisarAlColaborador(empId, decision, tipo, fecha, motivo, comentario, quien) {
+  var emp = null, emps = leerPersonal();
+  for (var i = 0; i < emps.length; i++) if (emps[i].id === String(empId)) emp = emps[i];
+  if (!emp || !emp.email || emp.email.indexOf('@') < 0) return 'sin correo';
+  var NOMBRES = { TARDANZA: 'Llegar tarde', SALIDA_ANTES: 'Salir antes', DIA: 'Día de permiso',
+                  CASA: 'Trabajar desde casa', JORNADA: 'Trabajé y no marqué' };
+  var que = NOMBRES[tipo] || tipo;
+  if (motivo.indexOf('[Vacaciones]') === 0) que = 'Vacaciones';
+  if (motivo.indexOf('[Descanso médico]') === 0) que = 'Descanso médico';
+  try {
+    MailApp.sendEmail({
+      to: emp.email,
+      subject: '[Asistencia] Tu solicitud fue ' + (decision === 'APROBADO' ? 'APROBADA' : 'RECHAZADA'),
+      body: 'Hola ' + emp.nombre.split(' ')[0] + ',\n\n' +
+            'Tu solicitud de «' + que + '» para el ' + fecha + ' fue ' +
+            (decision === 'APROBADO' ? 'APROBADA' : 'RECHAZADA') + ' por ' + quien + '.\n' +
+            (comentario ? '\nComentario: ' + comentario + '\n' : '') +
+            '\nMotivo que indicaste: ' + motivo.replace(/^\[[^\]]+\]\s*/, '') + '\n\n' +
+            '—\nAviso automático del control de asistencia.'
+    });
+    return 'enviado';
+  } catch (e) { return 'falló: ' + (e && e.message ? e.message : e); }
 }
 
 function leerDispositivos() {
@@ -1529,9 +1580,11 @@ function marcar(p) {
     var prog = leerProgramacion();
     var ev = tipo === 'ENTRADA' ? evaluarEntrada(emp, fecha, hora, cfg, prog)
                                 : evaluarSalida(emp, fecha, hora, cfg, prog);
-    var dist = (p.lat !== undefined && p.lat !== '' && p.lat !== null && cfg.lat)
-             ? Math.round(haversine(Number(p.lat), Number(p.lng), Number(cfg.lat), Number(cfg.lng))) : '';
-    var fueraZona = (dist !== '' && cfg.radio) ? (dist > Number(cfg.radio)) : false;
+    // Se mide contra la sede más cercana de las que le corresponden a la persona
+    // (oficina, fundo o cualquiera). Sin sedes adicionales, es la oficina de siempre.
+    var ubic = ubicacionEnSedes(emp, cfg, p.lat, p.lng);
+    var dist = ubic.dist === null ? '' : ubic.dist;
+    var fueraZona = (dist !== '') ? !ubic.dentro : false;
 
     // La ubicación se exigía SOLO en el celular. Aquí se guardaba la distancia pero
     // el marcaje se aceptaba igual, viniera de donde viniera. Daba lo mismo abrir por
@@ -1552,7 +1605,11 @@ function marcar(p) {
     var remotoProgramado = !!(tramoAhora && tramoAhora.modalidad === 'REMOTO');
     // El permiso solo se consulta si el GPS fuera a bloquear de verdad: leer la hoja
     // de permisos en cada marcaje cuesta tiempo dentro del candado, y casi nunca hay uno.
-    var vaAValidarGps = !manualAdmin && p.origen !== 'DECLARADO' && !remotoProgramado &&
+    // La SALIDA no se bloquea por ubicación: quien ya salió y olvidó marcar la
+    // declaraba de memoria al día siguiente. Mejor la hora real desde la calle,
+    // con su distancia a la vista, que una hora inventada. Queda como fuera de zona.
+    var vaAValidarGps = tipo === 'ENTRADA' &&
+                        !manualAdmin && p.origen !== 'DECLARADO' && !remotoProgramado &&
                         String(cfg.gpsModo) === 'bloquear' &&
                         String(emp.modalidad || 'PRESENCIAL') === 'PRESENCIAL';
     var permisoCasa = vaAValidarGps ? permisoAprobado(emp.id, fecha, 'CASA') : null;
@@ -1565,7 +1622,8 @@ function marcar(p) {
       }
       if (fueraZona) {
         return { ok: false, motivo: 'fuera_zona',
-                 error: 'Estás a ' + dist + ' m de la oficina. Acércate e inténtalo de nuevo.' };
+                 error: 'Estás a ' + dist + ' m de ' + (ubic.sedeNombre || 'la oficina') +
+                        '. Acércate e inténtalo de nuevo.' };
       }
     }
 
@@ -1587,6 +1645,9 @@ function marcar(p) {
     var todos = filasUltimas(HOJA.mar, COLS.mar, 400);
 
     // Deduplicación: mismo cid, o misma persona + tipo + fecha
+    // Excepción: la entrada de la noche (desde las 21:00) que abre un turno de
+    // madrugada del día siguiente no choca con la entrada normal de ese día.
+    var nocturna = tipo === 'ENTRADA' && esEntradaNocturna(emp, fecha, hora, cfg, prog);
     var cid = String(p.cid || '');
     for (var i = 0; i < todos.length; i++) {
       var m = todos[i];
@@ -1595,14 +1656,20 @@ function marcar(p) {
         return { ok: true, duplicado: true, marcaje: filaAObjeto(m) };
       }
       if (String(m.emp_id) === emp.id && String(m.tipo) === tipo && mismaFecha) {
+        var mNoche = aMin(horaTexto(m.hora)) >= 21 * 60;
+        if (tipo === 'ENTRADA' && nocturna !== mNoche) continue;
         return { ok: true, duplicado: true, marcaje: filaAObjeto(m),
                  aviso: tipo === 'ENTRADA' ? 'Ya registraste tu entrada hoy.' : 'Ya registraste tu salida hoy.' };
       }
     }
 
     if (tipo === 'SALIDA') {
+      var ayer = diaDespues(fecha, -1);
       var tieneEntrada = todos.some(function (m) {
-        return String(m.emp_id) === emp.id && String(m.tipo) === 'ENTRADA' && fechaTexto(m.fecha) === fecha;
+        if (String(m.emp_id) !== emp.id || String(m.tipo) !== 'ENTRADA') return false;
+        if (fechaTexto(m.fecha) === fecha) return true;
+        // Turno de madrugada: la entrada se marcó anoche, pasadas las 21:00
+        return fechaTexto(m.fecha) === ayer && aMin(horaTexto(m.hora)) >= 21 * 60;
       });
       if (!tieneEntrada) return { ok: false, error: 'No hay una entrada registrada hoy.', motivo: 'sin_entrada' };
     }
@@ -1617,7 +1684,8 @@ function marcar(p) {
       lat: p.lat !== undefined ? p.lat : '', lng: p.lng !== undefined ? p.lng : '',
       dist: dist, fuera_zona: fueraZona ? 'SI' : 'NO', gps: p.gps || '',
       motivo: p.motivo || (diferido ? 'Enviado con retraso: el celular no tenía conexión al marcar' : ''),
-      registrado_por: p.registradoPor || '', dispositivo: p.deviceId || '', equipo: p.equipo || ''
+      registrado_por: p.registradoPor || '', dispositivo: p.deviceId || '', equipo: p.equipo || '',
+      sede: ubic.sede || ''
     });
 
     return {
@@ -1628,9 +1696,10 @@ function marcar(p) {
         origen: p.origen || 'APP', estado: ev.estado,
         tardanza: ev.tardanza || 0, anticipada: ev.anticipada || 0,
         lat: p.lat || null, lng: p.lng || null, dist: dist === '' ? null : dist,
-        fueraZona: fueraZona, gps: p.gps || '', srv: true
+        fueraZona: fueraZona, gps: p.gps || '', sede: ubic.sede || '', srv: true
       },
-      emp: { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, area: emp.area, turno: emp.turno, modalidad: emp.modalidad }
+      emp: { id: emp.id, nombre: emp.nombre, cargo: emp.cargo, area: emp.area, turno: emp.turno,
+             modalidad: emp.modalidad, sede: emp.sede }
     };
   } finally {
     lock.releaseLock();
@@ -1703,6 +1772,7 @@ function filaAObjeto(m) {
     registradoPor: String(m.registrado_por || ''),
     dispositivo: String(m.dispositivo || ''),
     equipo: String(m.equipo || ''),
+    sede: String(m.sede || ''),
     ts: new Date(m.ts_servidor).getTime() || 0,
     srv: true
   };
@@ -1757,7 +1827,8 @@ function guardarPersonal(p) {
       return { id: e.id, nombre: e.nombre, dni: "'" + (e.dni || ''), cargo: e.cargo || '',
                area: e.area || '', proyecto: e.proyecto || '', tel: "'" + (e.tel || ''),
                email: e.email || '', turno: e.turno || '', activo: e.activo ? 'SI' : 'NO',
-               modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI' };
+               modalidad: e.modalidad || 'PRESENCIAL', planilla: e.planilla === false ? 'NO' : 'SI',
+               sede: e.sede || '' };
     });
     return { ok: true, personal: n };
   } finally { lock.releaseLock(); }
@@ -1789,6 +1860,9 @@ function guardarConfig(p) {
     pares.push(['proyectos', JSON.stringify(cfg.proyectos || [])]);
     pares.push(['sabadosTrabajados', JSON.stringify(cfg.sabadosTrabajados || [])]);
     pares.push(['domingosTrabajados', JSON.stringify(cfg.domingosTrabajados || [])]);
+    // Sedes adicionales (fundo, almacén…). La principal sigue siendo lat/lng/radio.
+    pares.push(['nombreSedePrincipal', String(cfg.nombreSedePrincipal || '')]);
+    pares.push(['sedesExtra', JSON.stringify(listaSedesExtra(cfg.sedesExtra))]);
     var hc = limpiarHoja(HOJA.cfg, COLS.cfg);
     if (pares.length) hc.getRange(2, 1, pares.length, 2).setValues(pares);
     var nFer = escribir(HOJA.fer, COLS.fer, cfg.feriados || [], function (f) { return { fecha: f.fecha, nombre: f.nombre }; });
@@ -1851,21 +1925,97 @@ function horarioDe(emp, fechaISO, cfg, prog) {
   // El servidor consultaba solo el turno y se saltaba el calendario: daba por
   // laborable cualquier sábado del turno, marcara o no la empresa ese día concreto.
   // Eso hacía que el estado de un marcaje se calculara distinto aquí y en el panel.
-  if (d === 0) return (enCalendario(cfg, 'domingosTrabajados', fechaISO) && t.trabajaDom)
+  if (d === 0) return (enCalendario(cfg, 'domingosTrabajados', fechaISO) && siNo(t.trabajaDom))
                       ? { in: t.domEntrada || '10:00', out: t.domSalida || '14:00' } : null;
-  if (d === 6) return (enCalendario(cfg, 'sabadosTrabajados', fechaISO) && t.trabajaSab)
+  if (d === 6) return (enCalendario(cfg, 'sabadosTrabajados', fechaISO) && siNo(t.trabajaSab))
                       ? { in: t.sabEntrada, out: t.sabSalida } : null;
   return { in: t.entrada, out: t.salida };
 }
 
 function evaluarEntrada(emp, fechaISO, hora, cfg, prog) {
+  var m = aMin(hora);
+  // Turno de madrugada marcado la noche anterior (23:58 para el de las 00:00):
+  // llegó 2 minutos antes, no 1.438 tarde.
+  if (esEntradaNocturna(emp, fechaISO, hora, cfg, prog)) {
+    var hs = horarioDe(emp, diaDespues(fechaISO, 1), cfg, prog);
+    return clasificarEntrada(m - 1440 - aMin(hs.in), cfg);
+  }
   var h = horarioDe(emp, fechaISO, cfg, prog);
   if (!h) return { estado: 'FUERA DE HORARIO', tardanza: 0 };
-  var diff = aMin(hora) - aMin(h.in);
+  return clasificarEntrada(m - aMin(inicioParaEntrada(h, m)), cfg);
+}
+
+/* Con varios tramos en el día (de 6 a 9 y de 19 a 23:59) la entrada se mide
+   contra el primer tramo que todavía no terminó: 18:57 para el de las 19:00 es
+   puntual, no 777 minutos tarde por el de las 6. */
+function inicioParaEntrada(h, m) {
+  if (!h.tramos || h.tramos.length < 2) return h.in;
+  for (var i = 0; i < h.tramos.length; i++) {
+    if (aMin(h.tramos[i].salida) > m) return h.tramos[i].entrada;
+  }
+  return h.tramos[h.tramos.length - 1].entrada;
+}
+
+/* ¿Es una entrada de la noche (desde las 21:00) para un turno que empieza entre
+   las 00:00 y las 02:00 del día siguiente? */
+function esEntradaNocturna(emp, fechaISO, hora, cfg, prog) {
+  if (aMin(hora) < 21 * 60) return false;
+  var hs = horarioDe(emp, diaDespues(fechaISO, 1), cfg, prog);
+  return !!(hs && aMin(hs.in) <= 120);
+}
+
+function clasificarEntrada(diff, cfg) {
   if (diff <= 0)                 return { estado: 'PUNTUAL',        tardanza: 0 };
   if (diff <= cfg.tolerancia)    return { estado: 'EN TOLERANCIA',  tardanza: 0 };
   if (diff <= cfg.umbralGrave)   return { estado: 'TARDANZA',       tardanza: diff };
   return                                { estado: 'TARDANZA GRAVE', tardanza: diff };
+}
+
+function siNo(v) { return v === true || v === 1 || v === '1' || v === 'true' || v === 'SI'; }
+
+function diaDespues(fechaISO, dias) {
+  var d = new Date(new Date(fechaISO + 'T12:00:00').getTime() + dias * 86400000);
+  return Utilities.formatDate(d, TZ, 'yyyy-MM-dd');
+}
+
+/* ── Sedes ─────────────────────────────────────────────────────────────── */
+
+function listaSedesExtra(v) {
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = []; } }
+  return (v || []).filter(function (s) {
+    return s && s.id && s.lat !== null && s.lat !== '' && !isNaN(Number(s.lat)) &&
+           s.lng !== null && s.lng !== '' && !isNaN(Number(s.lng));
+  }).map(function (s) {
+    return { id: String(s.id), nombre: String(s.nombre || 'Sede'), lat: Number(s.lat),
+             lng: Number(s.lng), radio: Number(s.radio) || 300 };
+  });
+}
+
+/* Las sedes donde puede marcar esa persona. Columna "sede" de Personal:
+   vacía o PRINCIPAL = oficina, TODAS = cualquiera, o el id de una sede. */
+function sedesDe(emp, cfg) {
+  var todas = [{ id: 'PRINCIPAL', nombre: String(cfg.nombreSedePrincipal || 'la oficina'),
+                 lat: Number(cfg.lat), lng: Number(cfg.lng), radio: Number(cfg.radio) || 150 }]
+              .concat(listaSedesExtra(cfg.sedesExtra));
+  var s = String(emp.sede || '');
+  if (!s || s === 'PRINCIPAL') return [todas[0]];
+  if (s === 'TODAS') return todas;
+  var una = todas.filter(function (x) { return x.id === s; });
+  return una.length ? una : [todas[0]];
+}
+
+/* La sede más cercana de las suyas: {sede, sedeNombre, dist, dentro}. */
+function ubicacionEnSedes(emp, cfg, lat, lng) {
+  if (lat === undefined || lat === '' || lat === null || lng === undefined || lng === '' || lng === null ||
+      isNaN(Number(lat)) || isNaN(Number(lng)) || !cfg.lat) {
+    return { sede: '', sedeNombre: '', dist: null, dentro: false };
+  }
+  var mejor = null;
+  sedesDe(emp, cfg).forEach(function (x) {
+    var d = Math.round(haversine(Number(lat), Number(lng), x.lat, x.lng));
+    if (!mejor || d < mejor.dist) mejor = { sede: x.id, sedeNombre: x.nombre, dist: d, dentro: d <= x.radio };
+  });
+  return mejor;
 }
 
 function evaluarSalida(emp, fechaISO, hora, cfg, prog) {
