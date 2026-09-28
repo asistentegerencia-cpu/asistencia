@@ -114,6 +114,8 @@ p.lead{margin:0 0 18px;color:var(--gray-700);font-size:18px;line-height:1.45}
 .btn-line{background:#fff;color:var(--text);border:2px solid var(--gray-400);font-weight:700}
 .btn-line:hover{background:var(--outside)}
 .btn-sm{min-height:44px;padding:8px 18px;font-size:15px;width:auto}
+.btn-wa{background:#fff;color:#0b6b3a;border:2px solid #25D366;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn-wa:hover{background:#e9fbf0}
 #viewId .btn,#viewMark .btn:not(.btn-sm),#viewDone .btn{min-height:60px;font-size:18px}
 
 /* --- botón MARCAR --- */
@@ -335,6 +337,7 @@ input.dOn:checked::after{left:19px}
 <script>
 /* Íconos Lucide del rediseño (trazo 2.75). ico('check') devuelve el SVG. */
 const ICONOS = {
+  chat:'<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   idcard:'<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M15 8h2M15 12h2M7 16h10"/>',
   pin:'<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
   login:'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5"/><path d="M15 12H3"/>',
@@ -3534,6 +3537,45 @@ function fechaCorta(iso){ const p=iso.split('-'); return p[2]+'/'+p[1]+'/'+p[0];
 function min2hhmm(m){ const s=m<0?'-':''; m=Math.abs(m); return s+pad(Math.floor(m/60))+':'+pad(m%60); }
 function toMin(hm){ if(!hm) return null; const p=hm.split(':'); return (+p[0])*60 + (+p[1]); }
 function normTel(t){ return String(t||'').replace(/\D/g,''); }
+
+/* Número para wa.me: con código de país. Un celular peruano de 9 dígitos
+   (empieza con 9) recibe el 51 delante; si ya trae código, se deja como está. */
+function numeroWhatsApp(t){
+  const d = normTel(t).replace(/^00/, '');
+  if(/^9\d{8}$/.test(d)) return '51'+d;
+  return d.length >= 10 ? d : '';
+}
+
+/* Aviso por WhatsApp desde el panel: abre WhatsApp con el mensaje escrito y quien
+   lo envía solo toca Enviar. Es gratis y sale del número de quien lo manda, que la
+   gente reconoce; a cambio no es automático. Devuelve el texto, o '' si no hay nada
+   que avisar a esa persona ese día. */
+function mensajeWhatsApp(r, f, esHoy){
+  const pila = String(r.e.nombre||'').trim().split(/\s+/)[0].toLowerCase();
+  const nombre = pila.charAt(0).toUpperCase()+pila.slice(1);
+  if(esHoy && r.clase==='SIN_MARCAR')
+    return 'Hola '+nombre+', no has marcado tu ENTRADA de hoy'+
+      (r.hor && r.hor.in ? ' (tu horario empieza a las '+r.hor.in+')' : '')+
+      '. Si ya llegaste, márcala en la app de asistencia. Si hoy no vienes o llegas tarde, pide el permiso desde la app. Gracias.';
+  if(r.sal && r.sal.estado==='NO REGISTRADA'){
+    if(esHoy)
+      return 'Hola '+nombre+', tu jornada de hoy terminaba'+
+        (r.hor && r.hor.out ? ' a las '+r.hor.out : '')+
+        ' y no has marcado tu SALIDA. Márcala ahora en la app de asistencia; si ya saliste de la oficina, igual puedes hacerlo. Gracias.';
+    return 'Hola '+nombre+', no marcaste tu SALIDA del '+fechaLarga(new Date(f+'T12:00:00'))+
+      '. Entra a la app de asistencia y toca "Solicitar corrección" con la hora a la que saliste. Gracias.';
+  }
+  return '';
+}
+
+function botonWhatsApp(r, f, esHoy){
+  const txt = mensajeWhatsApp(r, f, esHoy);
+  if(!txt) return '';
+  const num = numeroWhatsApp(r.e.tel);
+  if(!num) return '<span style="font-size:12px;color:var(--muted)" title="Agrega su celular en Personal para avisarle por WhatsApp">Sin celular</span>';
+  return '<a class="btn btn-sm btn-wa" target="_blank" rel="noopener" '+
+    'href="https://wa.me/'+num+'?text='+encodeURIComponent(txt)+'">'+ico('chat')+'WhatsApp</a>';
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function haversine(la1,lo1,la2,lo2){
@@ -6020,9 +6062,11 @@ function tabHoy(b){
         '<td class="num" data-l="Tard." style="'+(r.tard?'font-weight:800;color:'+(r.tard>(CFG.umbralGrave||30)?'var(--danger-text)':'#8a4f00'):'')+'">'+(r.tard? r.tard+"'":'—')+'</td>'+
         '<td data-l="Modalidad">'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
         '<td data-l="Zona">'+zona+'</td>'+
-        (soloVista()?'':'<td class="tc-wide">'+((j.entrada||j.salida)
+        (soloVista()?'':'<td class="tc-wide"><div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center">'+
+          botonWhatsApp(r, f, esHoy)+
+          ((j.entrada||j.salida)
           ? '<button class="btn btn-sm btn-line" data-corr="'+esc(r.e.id)+'">Corregir</button>'
-          : '')+'</td>')+'</tr>';
+          : '')+'</div></td>')+'</tr>';
   }
 
   /* Dos grupos: en planilla y fuera. Si todos están en el mismo, no se parte la
