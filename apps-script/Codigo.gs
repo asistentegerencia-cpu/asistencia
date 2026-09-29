@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 7,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 8,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -583,7 +583,7 @@ function instalar(p) {
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
      'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
-     'whatsappSoporte'].forEach(function (k) {
+     'whatsappSoporte','resumenPara'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
     pares.push(['turnos', JSON.stringify(cfg.turnos || [])]);
@@ -1112,7 +1112,7 @@ function guardarProgramacion(p) {
    que quede escrito quién lo autorizó.
    ══════════════════════════════════════════════════════════════ */
 
-var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA', 'SALIDA_OLVIDO'];
+var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA', 'SALIDA_OLVIDO', 'ENTRADA_FALLIDA'];
 
 function leerPermisosDeHoja() {
   var out;
@@ -1172,7 +1172,7 @@ function pedirPermiso(p) {
                error: 'El descanso médico se puede registrar hasta 3 días después. Habla con Administración.' };
     }
   }
-  var haciaAtras = (tipo === 'JORNADA' || tipo === 'SALIDA_OLVIDO');
+  var haciaAtras = (tipo === 'JORNADA' || tipo === 'SALIDA_OLVIDO' || tipo === 'ENTRADA_FALLIDA');
   if (!haciaAtras && !esMedico && fecha < hoy) {
     return { ok: false, motivo: 'fecha_pasada',
              error: 'No se puede pedir un permiso para un día que ya pasó. Habla con Administración.' };
@@ -1186,6 +1186,18 @@ function pedirPermiso(p) {
                error: 'Solo se pueden corregir salidas de los últimos 7 días. Habla con Administración.' };
     }
     if (!p.hora) return { ok: false, error: 'Indica a qué hora saliste.' };
+  }
+  /* "No pude marcar mi entrada": la persona está en el trabajo y la app no la deja
+     marcar (GPS, celular cambiado…) y nadie le responde. Deja constancia de la
+     hora de llegada —la del servidor, no una que escriba— y con eso ya puede
+     marcar su salida. Al aprobarse se registra la entrada. */
+  if (tipo === 'ENTRADA_FALLIDA') {
+    if (fecha !== hoy) return { ok: false, error: 'Solo se puede registrar la llegada de hoy.' };
+    p.hora = ahoraISO().hora;
+    var yaPedida = leerPermisos().some(function (x) {
+      return String(x.empId) === emp.id && x.tipo === 'ENTRADA_FALLIDA' && x.fecha === hoy && x.estado !== 'RECHAZADO';
+    });
+    if (yaPedida) return { ok: false, error: 'Ya registraste tu llegada de hoy. Ahora puedes marcar tu salida.' };
   }
   if (tipo === 'JORNADA') {
     if (fecha > hoy) return { ok: false, error: 'Solo se puede registrar una jornada ya trabajada.' };
@@ -1265,6 +1277,7 @@ function pedirPermiso(p) {
 
     return { ok: true, permiso: { id: id, empId: emp.id, nombre: emp.nombre, tipo: tipo,
                                   fecha: fecha, motivo: motivo, estado: 'PENDIENTE',
+                                  hora: horaTexto(p.hora || ''), horaFin: horaTexto(p.horaFin || ''),
                                   adjunto: adjuntoUrl } };
   } finally { lock.releaseLock(); }
 }
@@ -1294,7 +1307,9 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
     return false;
   };
 
-  var nota = (entrada ? 'Jornada declarada y aprobada' : 'Salida olvidada, corrección aprobada') + (motivo ? ': ' + motivo : '');
+  var nota = (entrada && salida ? 'Jornada declarada y aprobada'
+              : entrada ? 'Llegada registrada sin poder marcar, aprobada'
+              : 'Salida olvidada, corrección aprobada') + (motivo ? ': ' + motivo : '');
   var creados = 0;
   var poner = function (tipo, hora) {
     if (tiene(tipo)) return;
@@ -1400,6 +1415,13 @@ function resolverPermiso(p) {
             horaTexto(datos[i][cHora]), horaTexto(datos[i][cFin]),
             String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
         }
+        // La llegada que no se pudo marcar: al aprobarla se escribe la entrada
+        if (decision === 'APROBADO' && String(datos[i][cTipo]) === 'ENTRADA_FALLIDA') {
+          creados = registrarJornada(
+            String(datos[i][cEmp]), fechaTexto(datos[i][cFecha]),
+            horaTexto(datos[i][cHora]), '',
+            String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
+        }
         // La salida olvidada: al aprobarla se escribe solo la salida de ese día
         if (decision === 'APROBADO' && String(datos[i][cTipo]) === 'SALIDA_OLVIDO') {
           creados = registrarJornada(
@@ -1429,7 +1451,7 @@ function avisarAlColaborador(empId, decision, tipo, fecha, motivo, comentario, q
   if (!emp || !emp.email || emp.email.indexOf('@') < 0) return 'sin correo';
   var NOMBRES = { TARDANZA: 'Llegar tarde', SALIDA_ANTES: 'Salir antes', DIA: 'Día de permiso',
                   CASA: 'Trabajar desde casa', JORNADA: 'Trabajé y no marqué',
-                  SALIDA_OLVIDO: 'Olvidé marcar mi salida' };
+                  SALIDA_OLVIDO: 'Olvidé marcar mi salida', ENTRADA_FALLIDA: 'No pude marcar mi entrada' };
   var que = NOMBRES[tipo] || tipo;
   if (motivo.indexOf('[Vacaciones]') === 0) que = 'Vacaciones';
   if (motivo.indexOf('[Descanso médico]') === 0) que = 'Descanso médico';
@@ -1978,6 +2000,11 @@ function marcar(p) {
         // Turno de madrugada: la entrada se marcó anoche, pasadas las 21:00
         return fechaTexto(m.fecha) === ayer && aMin(horaTexto(m.hora)) >= 21 * 60;
       });
+      // Quien registró su llegada porque no pudo marcarla puede marcar la salida
+      // aunque todavía nadie la haya aprobado.
+      if (!tieneEntrada) tieneEntrada = leerPermisos().some(function (x) {
+        return String(x.empId) === emp.id && x.tipo === 'ENTRADA_FALLIDA' && x.fecha === fecha && x.estado !== 'RECHAZADO';
+      });
       if (!tieneEntrada) return { ok: false, error: 'No hay una entrada registrada hoy.', motivo: 'sin_entrada' };
     }
 
@@ -2164,7 +2191,7 @@ function guardarConfig(p) {
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
      'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
-     'whatsappSoporte'].forEach(function (k) {
+     'whatsappSoporte','resumenPara'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
     pares.push(['turnos', JSON.stringify(cfg.turnos || [])]);
