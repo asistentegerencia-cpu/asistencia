@@ -418,6 +418,7 @@ function ico(n, extra){
         <div id="mkPermiso" style="margin-top:14px"></div>
       </div>
       <div class="note">
+        <a href="#" id="lnkAyuda" style="font-weight:700">¿Problemas para marcar?</a><br>
         <span id="mkDeviceNote">Equipo vinculado</span> · <a href="#" id="lnkChange">¿No eres tú?</a><br>
         <a href="#" id="lnkAdmin2">Acceso administrador</a>
       </div>
@@ -2857,6 +2858,7 @@ const DEF_CFG = {
      No evita que le presten el celular desbloqueado: eso no lo resuelve el software. */
   /* A dónde avisar al instante si alguien intenta marcar por otro. Vacío = sin avisos. */
   correoAlertas:'',
+  whatsappSoporte:'',
 
   exigirDispositivo:false,
 
@@ -3350,7 +3352,7 @@ async function sincronizarArranque(){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados','domingosTrabajados',
      'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas',
-     'sedesExtra','nombreSedePrincipal'].forEach(k=>{
+     'sedesExtra','nombreSedePrincipal','whatsappSoporte'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -4588,6 +4590,95 @@ function panelJefe(emp){
   if(JEFE_PIN) cargar(); else pedirPin();
 }
 
+/* ---------- ¿PROBLEMAS PARA MARCAR? ----------
+   Revisa lo que suele fallar —ubicación, conexión, marcajes que no salieron, un
+   rechazo del servidor— y le dice a la persona qué hacer. Si con eso no basta,
+   abre WhatsApp hacia soporte con el diagnóstico ya escrito: quien responde no
+   tiene que preguntar nada y contesta en un minuto. Gratis: sale del WhatsApp
+   de la propia persona. */
+let ULTIMO_PROBLEMA = null;
+
+function diagnosticoMarcaje(emp){
+  const hoy = hoyISO(), j = jornadaDe(emp.id, hoy), hor = horarioDe(emp, hoy);
+  const items = [];   // {ok, titulo, detalle, consejo}
+
+  // Ubicación
+  if(GEO.estado==='dentro') items.push({ok:true, titulo:'Ubicación', detalle:GEO.msg});
+  else if(GEO.estado==='error' || GEO.estado==='off')
+    items.push({ok:false, titulo:'Ubicación', detalle:GEO.msg||'Sin ubicación',
+                consejo:'Activa la ubicación del celular y dale permiso al navegador. Luego toca Reintentar.', gps:true});
+  else if(GEO.estado==='fuera')
+    items.push({ok: !j.entrada ? CFG.gpsModo!=='bloquear' : true, titulo:'Ubicación', detalle:GEO.msg,
+                consejo: j.entrada ? 'Puedes marcar tu salida aunque estés fuera: queda registrada igual.'
+                                   : 'Para la entrada tienes que estar en tu sede. Si ya estás ahí, espera unos segundos al aire libre o junto a una ventana y vuelve a abrir la app.'});
+  else items.push({ok:false, titulo:'Ubicación', detalle:'Todavía buscando tu ubicación…',
+                   consejo:'Espera unos segundos. Si no avanza, cierra la app y vuelve a abrirla.'});
+
+  // Conexión
+  const online = navigator.onLine !== false;
+  items.push(online ? {ok:true, titulo:'Internet', detalle:'Conectado'}
+                    : {ok:false, titulo:'Internet', detalle:'Sin conexión',
+                       consejo:'Puedes marcar igual: se guarda en el celular y se envía solo cuando vuelva la señal.'});
+
+  // Marcajes sin enviar
+  const mios = COLA.filter(c=>c.id===emp.id);
+  if(mios.length) items.push({ok:false, titulo:'Marcajes sin enviar', detalle:mios.length+' guardado'+(mios.length===1?'':'s')+' en este celular',
+                              consejo:'No los vuelvas a marcar. Se envían solos al tener señal; abre la app con internet para que salgan.'});
+
+  // Último rechazo
+  if(ULTIMO_PROBLEMA && ULTIMO_PROBLEMA.motivo!=='sin_conexion'){
+    const m = ULTIMO_PROBLEMA.motivo;
+    items.push({ok:false, titulo:'Último intento ('+ULTIMO_PROBLEMA.hora+')', detalle:ULTIMO_PROBLEMA.error||m,
+      consejo: (m==='otro_dispositivo'||m==='sin_dispositivo') ? 'Tu cuenta está vinculada a otro celular. Administración tiene que liberarlo para que puedas marcar desde este.'
+             : m==='fuera_zona' ? 'El sistema te ubicó fuera de tu sede. Acércate a la entrada y vuelve a intentar.'
+             : m==='sin_ubicacion' ? 'No llegó tu ubicación. Actívala y vuelve a intentar.'
+             : m==='sin_entrada' ? 'No hay una entrada registrada hoy. Si te olvidaste de marcarla, pide el permiso "Trabajé y no marqué".'
+             : 'Escríbele a soporte con este diagnóstico.'});
+  }
+
+  // Estado de hoy
+  items.push({ok:true, titulo:'Hoy', detalle:
+    (j.entrada ? 'Entrada '+j.entrada.hora : 'Sin entrada')+' · '+(j.salida ? 'Salida '+j.salida.hora : 'sin salida')+
+    (hor ? ' · horario '+hor.in+'–'+hor.out : ' · hoy no figura como laborable')});
+  return items;
+}
+
+function ayudaMarcar(emp){
+  const items = diagnosticoMarcaje(emp);
+  const problemas = items.filter(x=>!x.ok);
+  const sop = numeroWhatsApp(CFG.whatsappSoporte);
+  const texto = 'Hola, soy '+emp.nombre+'. Tengo problemas para marcar mi asistencia.\n\n'+
+    'Diagnóstico de la app ('+fechaCorta(hoyISO())+' '+hhmm(new Date())+'):\n'+
+    items.map(x=>(x.ok?'✅ ':'⚠️ ')+x.titulo+': '+x.detalle).join('\n')+
+    '\n📱 Equipo: '+infoEquipo()+
+    '\n\n¿Qué pasó?: ';
+  const m = document.createElement('div'); m.className='modal';
+  m.innerHTML = '<div class="box" style="max-height:88vh;overflow:auto"><h2>¿Problemas para marcar?</h2>'+
+    '<p style="font-size:13.5px;color:var(--muted);line-height:1.5;margin:0 0 10px">'+
+      (problemas.length ? 'Revisamos tu celular. Esto es lo que encontramos:' : 'Revisamos tu celular y todo se ve bien.')+'</p>'+
+    items.map(x=>
+      '<div style="padding:10px 0;border-top:1px solid rgba(0,0,0,.07)">'+
+        '<div style="display:flex;gap:8px;align-items:baseline"><span>'+(x.ok?'✅':'⚠️')+'</span>'+
+        '<div><b>'+esc(x.titulo)+'</b><div style="font-size:13px;color:var(--muted)">'+esc(x.detalle)+'</div>'+
+        (x.consejo ? '<div style="font-size:13.5px;margin-top:4px;line-height:1.45">'+esc(x.consejo)+'</div>' : '')+
+        (x.gps ? '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-sm btn-line" data-ay="retry">Reintentar</button>'+
+                 '<button class="btn btn-sm btn-line" data-ay="help">¿Cómo la activo?</button></div>' : '')+
+        '</div></div></div>').join('')+
+    (sop
+      ? '<a class="btn btn-wa" style="width:100%;justify-content:center;margin-top:14px" target="_blank" rel="noopener" '+
+          'href="https://wa.me/'+sop+'?text='+encodeURIComponent(texto)+'">'+ico('chat')+' Escribir a soporte por WhatsApp</a>'+
+        '<div style="font-size:11.5px;color:var(--muted);margin-top:6px;text-align:center;line-height:1.45">'+
+          'Se abre WhatsApp con este diagnóstico ya escrito. Agrega qué pasó y envíalo.</div>'
+      : '<div class="alert alert-warn" style="margin-top:12px">Si no se resuelve, avisa a Administración.</div>')+
+    '<button class="btn btn-line" id="ayX" style="width:100%;margin-top:10px">Cerrar</button></div>';
+  document.body.appendChild(m);
+  m.querySelector('#ayX').onclick = ()=>m.remove();
+  const r = m.querySelector('[data-ay="retry"]'), h = m.querySelector('[data-ay="help"]');
+  if(r) r.onclick = ()=>{ m.remove(); GEO.estado='pendiente'; GEO.msg='Obteniendo tu ubicación…'; pintarGps(); pintarBoton(emp);
+                          pedirUbicacion(()=>{ pintarGps(); pintarBoton(emp); }, true); };
+  if(h) h.onclick = ()=>{ m.remove(); ayudaUbicacion(); };
+}
+
 function pintarPermiso(emp){
   const c = $('#mkPermiso');
   if(!c) return;
@@ -5302,6 +5393,7 @@ async function marcar(){
         if(RECHAZOS.indexOf(r.motivo) < 0){
           throw new Error('servidor ocupado');   // lo recoge el catch y lo encola
         }
+        ULTIMO_PROBLEMA = {hora: hhmm(new Date()), tipo, motivo: r.motivo, error: r.error || ''};
         btn.disabled=false; $('#mkBtnLabel').textContent = etiquetaPrevia;
         // El rechazo por dispositivo merece una explicación en pantalla, no un aviso que se va
         if(r.motivo==='otro_dispositivo' || r.motivo==='sin_dispositivo'){
@@ -5323,6 +5415,8 @@ async function marcar(){
       }
     }catch(e){
       // Sin conexión: se guarda localmente y se reintenta después
+      ULTIMO_PROBLEMA = {hora: hhmm(new Date()), tipo, motivo: 'sin_conexion',
+                         error: 'No se pudo conectar con el servidor; quedó guardado para enviarse después.'};
       pendiente = true;
       reg.pendiente = true;
       COLA.push(Object.assign({}, datosMarcaje,
@@ -5415,6 +5509,11 @@ $('#btnMark').addEventListener('click', marcar);
 $('#lnkBack').addEventListener('click', e=>{
   e.preventDefault();
   CFG.modoRecepcion ? soltarRecepcion() : renderMark();
+});
+$('#lnkAyuda').addEventListener('click', e=>{
+  e.preventDefault();
+  const emp = DEV && EMP.find(x=>x.id===DEV.empId);
+  if(emp) ayudaMarcar(emp);
 });
 $('#lnkChange').addEventListener('click', e=>{
   e.preventDefault();
@@ -8825,6 +8924,12 @@ function tabCfg(b){
       const n = (CFG.correoAlertas||'').split(/[,;\s]+/).filter(x=>x.trim() && x.indexOf('@')>0).length;
       return n ? '<br><span style="color:var(--ok)">✓ '+n+' destinatario'+(n===1?'':'s')+' configurado'+(n===1?'':'s')+'.</span>' : '';
     })()+'</p>'+
+  '<div class="frow" style="margin-top:14px"><div><label>WhatsApp de soporte</label>'+
+    '<input id="cWaSop" inputmode="tel" value="'+esc(CFG.whatsappSoporte||'')+'" placeholder="987654321"></div></div>'+
+  '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px;line-height:1.55">'+
+    'El número al que el personal escribe desde <b>"¿Problemas para marcar?"</b> en la app. '+
+    'El mensaje te llega con el diagnóstico de su celular ya escrito: ubicación, conexión, '+
+    'marcajes sin enviar y el último error. Déjalo vacío para no mostrar el botón de WhatsApp.</p>'+
   '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
   (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
     ' esperando enviarse.</b> Se reintenta solo cada dos minutos.'+
@@ -9073,6 +9178,7 @@ function tabCfg(b){
     CFG.inicioOperacion=$('#cIni').value||'';
     CFG.exigirDispositivo = $('#cDev').value==='1';
     CFG.correoAlertas = ($('#cMail').value||'').trim();
+    CFG.whatsappSoporte = normTel($('#cWaSop') ? $('#cWaSop').value : CFG.whatsappSoporte);
     CFG.apiUrl=limpiarApiUrl($('#cApi').value);
     const recAntes = !!CFG.modoRecepcion;
     CFG.modoRecepcion = $('#cRec').value==='1';
