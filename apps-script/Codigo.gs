@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 6,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 7,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -582,7 +582,8 @@ function instalar(p) {
     var cfg = datos.cfg || {};
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
-     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas'].forEach(function (k) {
+     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
+     'whatsappSoporte'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
     pares.push(['turnos', JSON.stringify(cfg.turnos || [])]);
@@ -2162,7 +2163,8 @@ function guardarConfig(p) {
 
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
-     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas'].forEach(function (k) {
+     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
+     'whatsappSoporte'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
     pares.push(['turnos', JSON.stringify(cfg.turnos || [])]);
