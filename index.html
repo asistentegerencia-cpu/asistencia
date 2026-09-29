@@ -2859,6 +2859,7 @@ const DEF_CFG = {
   /* A dónde avisar al instante si alguien intenta marcar por otro. Vacío = sin avisos. */
   correoAlertas:'',
   whatsappSoporte:'',
+  resumenPara:'',          // ids de Personal, separados por coma: reciben el resumen del día
 
   exigirDispositivo:false,
 
@@ -2936,7 +2937,11 @@ const TIPOS_PERMISO = [
   // La salida que no se marcó ya no se declara directamente: se PIDE, y se registra
   // solo cuando el jefe de área o Administración la aprueba.
   {id:'SALIDA_OLVIDO', nombre:'Olvidé marcar mi salida', pideHora:true, pasado:true,
-   efecto:'Se registra tu salida de ese día a la hora que indiques, cuando tu jefe o Administración lo aprueben.'}
+   efecto:'Se registra tu salida de ese día a la hora que indiques, cuando tu jefe o Administración lo aprueben.'},
+  // No se elige de la lista: sale de "¿Problemas para marcar?" cuando la app no deja
+  // marcar la entrada. La hora la pone el servidor, la del momento del pedido.
+  {id:'ENTRADA_FALLIDA', nombre:'No pude marcar mi entrada', interno:true,
+   efecto:'Queda registrada la hora a la que llegaste. Tu jefe o Administración lo aprueban y ya puedes marcar tu salida.'}
 ];
 const tipoPermiso = id => TIPOS_PERMISO.find(t=>t.id===id) || TIPOS_PERMISO[0];
 
@@ -2961,8 +2966,13 @@ function motivoSinMarca(p){
 const ETIQUETA_PERMISO = {
   TARDANZA:'TARDANZA OK', SALIDA_ANTES:'SALE ANTES', DIA:'PERMISO DEL DÍA',
   CASA:'DESDE CASA', JORNADA:'JORNADA', VACACIONES:'VACACIONES', MEDICO:'DESCANSO MÉDICO',
-  SALIDA_OLVIDO:'SALIDA OLVIDADA'
+  SALIDA_OLVIDO:'SALIDA OLVIDADA', ENTRADA_FALLIDA:'LLEGADA REGISTRADA'
 };
+
+/* La llegada que se registró sin poder marcar (pendiente o aprobada). */
+function llegadaRegistrada(empId, fechaISO){
+  return PERMISOS.find(x=>x.empId===empId && x.tipo==='ENTRADA_FALLIDA' && x.fecha===fechaISO && x.estado!=='RECHAZADO') || null;
+}
 const etiquetaPermiso = tipo => ETIQUETA_PERMISO[tipo] || 'PERMISO';
 
 /* El permiso aprobado que manda ese día, sea del tipo que sea. Se usa para que la
@@ -3352,7 +3362,7 @@ async function sincronizarArranque(){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados','domingosTrabajados',
      'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas',
-     'sedesExtra','nombreSedePrincipal','whatsappSoporte'].forEach(k=>{
+     'sedesExtra','nombreSedePrincipal','whatsappSoporte','resumenPara'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -3590,6 +3600,166 @@ function mensajeWhatsApp(r, f, esHoy){
       '. Entra a la app de asistencia y toca "Solicitar corrección" con la hora a la que saliste. Gracias.';
   }
   return '';
+}
+
+/* ---------- RESUMEN DEL DÍA (imagen) ----------
+   Una tarjeta para leer en el celular de un vistazo: cuántos vinieron, quién falta,
+   quién llegó tarde y qué queda pendiente. Se copia como imagen y se pega en
+   WhatsApp; la tarea programada de Cowork la manda sola al mediodía. Mira a todo
+   el personal, sin los filtros del tablero. */
+function nombreCortoRes(n){
+  return String(n||'').trim().split(/\s+/).slice(0,2)
+    .map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(' ');
+}
+function destinatariosResumen(){
+  const ids = String(CFG.resumenPara||'').split(',').map(x=>x.trim()).filter(Boolean);
+  return ids.map(id=>EMP.find(e=>e.id===id)).filter(Boolean);
+}
+
+function datosResumen(){
+  const hoy = hoyISO(), ahora = new Date(), ayer = diaISO(hoy, -1);
+  const gente = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO');
+  const filas = gente.map(e=>Object.assign({e}, estadoDia(e, hoy, ahora)));
+  const cuenta = filas.filter(r=>r.clase!=='NO_LABORABLE' && r.clase!=='JUSTIFICADA' && r.clase!=='SIN_SISTEMA');
+  const presentes = filas.filter(r=>r.clase==='ASISTIO' || r.clase==='COMISION');
+  const faltan = filas.filter(r=>r.clase==='SIN_MARCAR' || r.clase==='FALTA');
+  const tardes = filas.filter(r=>r.tard>0).sort((a,b)=>b.tard-a.tard);
+  const llegadas = filas.filter(r=>r.permiso && r.permiso.tipo==='ENTRADA_FALLIDA' && r.permiso.estado==='PENDIENTE');
+  const conPermiso = filas.filter(r=>r.clase==='JUSTIFICADA' || r.clase==='COMISION');
+  const sinSalidaAyer = gente.map(e=>({e, s:salidaDe(e, ayer, ahora)})).filter(x=>x.s.estado==='NO REGISTRADA');
+  const pendientes = PERMISOS.filter(p=>p.estado==='PENDIENTE' && p.fecha>=diaISO(hoy,-7)).length;
+  return {
+    fecha: fechaLarga(ahora).replace(/^./,c=>c.toUpperCase()), hora: hhmm(ahora),
+    pct: cuenta.length ? Math.round(presentes.length/cuenta.length*100) : null,
+    presentes: presentes.length, programados: cuenta.length,
+    minutos: tardes.reduce((s,r)=>s+r.tard,0),
+    secciones: [
+      {titulo:'No marcaron entrada', color:'#b42318', items: faltan.map(r=>({n:nombreCortoRes(r.e.nombre), d:r.hor&&r.hor.in?'entra '+r.hor.in:''}))},
+      {titulo:'Llegaron tarde', color:'#b25e09', items: tardes.map(r=>({n:nombreCortoRes(r.e.nombre),
+         d:r.tard+' min', rojo: r.tard>(CFG.umbralGrave||30)}))},
+      {titulo:'Llegada registrada sin poder marcar (por aprobar)', color:'#b25e09',
+         items: llegadas.map(r=>({n:nombreCortoRes(r.e.nombre), d:r.permiso.hora||''}))},
+      {titulo:'Con permiso, comisión o ausencia', color:'#224370', items: conPermiso.map(r=>({n:nombreCortoRes(r.e.nombre), d:String(r.etiqueta||'').toLowerCase()}))},
+      {titulo:'Ayer no marcaron salida', color:'#b42318', items: sinSalidaAyer.map(x=>({n:nombreCortoRes(x.e.nombre), d:''}))}
+    ].filter(x=>x.items.length),
+    pendientes
+  };
+}
+
+function dibujarResumen(d){
+  const W = 1080, P = 56, F = 'Figtree, "Segoe UI", Roboto, Arial, sans-serif';
+  const colW = (W - P*2 - 24) / 2, lh = 46;
+  const lineasDe = sec => sec.items.length > 6 ? Math.ceil(sec.items.length/2) : sec.items.length;
+  let H = 250 + 190 + 40;
+  d.secciones.forEach(sec=>{ H += 64 + lineasDe(sec)*lh + 24; });
+  if(!d.secciones.length) H += 90;
+  if(d.pendientes) H += 90;
+  H += 70;
+
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const rr = (x,y,w,h,r,fill)=>{ g.beginPath(); g.moveTo(x+r,y); g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+                                 g.arcTo(x,y+h,x,y,r); g.arcTo(x,y,x+w,y,r); g.closePath(); g.fillStyle=fill; g.fill(); };
+  const txt = (t,x,y,size,color,weight,align)=>{ g.font=(weight||500)+' '+size+'px '+F; g.fillStyle=color; g.textAlign=align||'left'; g.fillText(t,x,y); };
+  const corta = (t,max,size,weight)=>{ g.font=(weight||500)+' '+size+'px '+F; if(g.measureText(t).width<=max) return t;
+    while(t.length>1 && g.measureText(t+'…').width>max) t=t.slice(0,-1); return t+'…'; };
+
+  g.fillStyle = '#f4f6fa'; g.fillRect(0,0,W,H);
+  // Cabecera
+  g.fillStyle = '#17294A'; g.fillRect(0,0,W,210);
+  txt('Resumen de asistencia', P, 92, 54, '#ffffff', 800);
+  txt(d.fecha+' · corte '+d.hora, P, 146, 30, '#c9d6ea', 600);
+  txt((CFG.empresa||'Grupo Robles'), W-P, 146, 26, '#8fa6c9', 600, 'right');
+
+  // Indicadores
+  let y = 250;
+  const kpis = [
+    {l:'Asistencia', v: d.pct==null?'—':d.pct+'%', c: d.pct==null?'#475467':d.pct>=90?'#067647':d.pct>=75?'#b25e09':'#b42318'},
+    {l:'Presentes', v: d.presentes+'/'+d.programados, c:'#067647'},
+    {l:'Faltan', v: String((d.secciones.find(s=>s.titulo==='No marcaron entrada')||{items:[]}).items.length), c:'#b42318'},
+    {l:'Tardanzas', v: String((d.secciones.find(s=>s.titulo==='Llegaron tarde')||{items:[]}).items.length), c:'#b25e09',
+     sub: d.minutos ? d.minutos+' min en total' : ''}
+  ];
+  const kw = (W - P*2 - 3*20)/4;
+  kpis.forEach((k,i)=>{
+    const x = P + i*(kw+20);
+    rr(x, y, kw, 160, 24, '#ffffff');
+    txt(k.l, x+24, y+44, 26, '#475467', 700);
+    txt(k.v, x+24, y+112, 58, k.c, 800);
+    if(k.sub) txt(k.sub, x+24, y+145, 21, '#667085', 600);
+  });
+  y += 190 + 40;
+
+  // Secciones
+  d.secciones.forEach(sec=>{
+    g.beginPath(); g.arc(P+10, y+22, 10, 0, Math.PI*2); g.fillStyle = sec.color; g.fill();
+    txt(sec.titulo+' · '+sec.items.length, P+32, y+33, 32, '#101828', 800);
+    y += 64;
+    const dos = sec.items.length > 6, n = lineasDe(sec);
+    sec.items.forEach((it,i)=>{
+      const col = dos ? Math.floor(i/n) : 0, fila = dos ? i%n : i;
+      const x = P + col*(colW+24), yy = y + fila*lh + 30;
+      const ancho = dos ? colW : W-P*2;
+      const det = it.d ? '  '+it.d : '';
+      g.font = '700 30px '+F; const wDet = det ? (g.font='600 26px '+F, g.measureText(det).width) : 0;
+      const nom = corta(it.n, ancho - wDet - 10, 30, 700);
+      txt(nom, x, yy, 30, '#101828', 700);
+      g.font = '700 30px '+F; const wn = g.measureText(nom).width;
+      if(det) txt(det, x+wn, yy, 26, it.rojo ? '#b42318' : '#667085', 600);
+    });
+    y += n*lh + 24;
+  });
+  if(!d.secciones.length){ txt('✓ Todo en orden: nadie falta y nadie llegó tarde.', P, y+50, 32, '#067647', 800); y += 90; }
+  if(d.pendientes){
+    rr(P, y, W-P*2, 70, 18, '#fef0c7');
+    txt('Tienes '+d.pendientes+' permiso'+(d.pendientes===1?'':'s')+' por responder en el panel.', P+24, y+46, 28, '#93370d', 700);
+    y += 90;
+  }
+  txt('Control de Asistencia · '+(CFG.empresa||''), W/2, H-30, 22, '#98a2b3', 600, 'center');
+  return c;
+}
+
+function verResumenDia(){
+  const c = dibujarResumen(datosResumen());
+  const url = c.toDataURL('image/png');
+  const sop = numeroWhatsApp(CFG.whatsappSoporte);
+  const m = document.createElement('div'); m.className='modal';
+  m.innerHTML = '<div class="box" style="max-width:560px;max-height:92vh;overflow:auto"><h2>Resumen del día</h2>'+
+    '<img id="resImg" src="'+url+'" alt="Resumen del día" style="width:100%;border-radius:14px;border:1px solid var(--gray-200)">'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'+
+      '<button class="btn btn-sm" id="resCopiar">Copiar imagen</button>'+
+      '<button class="btn btn-sm btn-line" id="resBajar">Descargar</button>'+
+    '</div>'+
+    // Un botón por destinatario (Configuración → Enviar el resumen del día a). La
+    // tarea de Cowork recorre #resDestinos: copia la imagen, abre cada chat y la pega.
+    '<div id="resDestinos" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+      destinatariosResumen().map(e=>{
+        const n = numeroWhatsApp(e.tel);
+        return n ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="'+esc(e.nombre)+'" href="https://web.whatsapp.com/send?phone='+n+'">'+
+                   ico('chat')+esc(nombreCortoRes(e.nombre))+'</a>'
+                 : '<span style="font-size:12.5px;color:var(--danger-text)">'+esc(nombreCortoRes(e.nombre))+': sin celular</span>';
+      }).join('')+
+      (!destinatariosResumen().length && sop ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="Soporte" href="https://web.whatsapp.com/send?phone='+sop+'">'+ico('chat')+'Mi WhatsApp</a>' : '')+
+    '</div>'+
+    '<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5">Copia la imagen, abre el chat y pégala con Ctrl+V.'+
+      (destinatariosResumen().length ? '' : ' Elige a quién enviarlo en Configuración → "Enviar el resumen del día a".')+'</p>'+
+    '<button class="btn btn-line" id="resX" style="width:100%;margin-top:12px">Cerrar</button></div>';
+  document.body.appendChild(m);
+  m.querySelector('#resX').onclick = ()=>m.remove();
+  m.querySelector('#resBajar').onclick = ()=>{
+    const a = document.createElement('a'); a.href = url; a.download = 'resumen-asistencia-'+hoyISO()+'.png';
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+  const bc = m.querySelector('#resCopiar');
+  bc.onclick = ()=>{
+    c.toBlob(async blob=>{
+      try{
+        await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]);
+        bc.textContent = '✓ Imagen copiada';
+      }catch(e){ bc.textContent = 'No se pudo copiar: usa Descargar'; }
+      setTimeout(()=>{ bc.textContent = 'Copiar imagen'; }, 3000);
+    }, 'image/png');
+  };
 }
 
 /* Quién tiene algo pendiente ese día: entrada (solo hoy) o salida. */
@@ -3995,6 +4165,12 @@ function estadoDia(emp, fechaISO, ahora){
     });
   }
 
+  // Llegó y no pudo marcar: está en el trabajo, a la espera de que lo aprueben
+  const llegada = !j.entrada ? llegadaRegistrada(emp.id, fechaISO) : null;
+  if(llegada)
+    return Object.assign(base, {clase:'ASISTIO', etiqueta:'LLEGADA '+(llegada.hora||'')+' POR APROBAR',
+                                cls:'tag-warn', permiso:llegada});
+
   if(j.entrada){
     const ev = evaluarEntrada(emp, fechaISO, j.entrada.hora, j.entrada.fecha < fechaISO);
     // La hora real no se toca; lo que cambia es que esos minutos dejen de contar.
@@ -4040,7 +4216,7 @@ function salidaDe(emp, fechaISO, ahora){
     return {hora:j.salida.hora, estado: perm ? 'SALIDA AUTORIZADA' : 'REGISTRADA',
             cls:'tag-ok', reg:j.salida, permiso:perm||null};
   }
-  if(!j.entrada) return {hora:'—', estado:'', cls:''};
+  if(!j.entrada && !llegadaRegistrada(emp.id, fechaISO)) return {hora:'—', estado:'', cls:''};
   const hor = horarioDe(emp, fechaISO);
   const vencio = fechaISO < hoyISO(ahora) ||
                  (hor && toMin(hhmm(ahora)) > toMin(hor.out) + (CFG.cierreMargenMin||0));
@@ -4671,6 +4847,11 @@ function diagnosticoMarcaje(emp){
   return items;
 }
 
+function puedeRegistrarLlegada(emp){
+  const hoy = hoyISO();
+  return hayServidor() && !CFG.modoRecepcion && !jornadaDe(emp.id, hoy).entrada && !llegadaRegistrada(emp.id, hoy);
+}
+
 function ayudaMarcar(emp){
   const items = diagnosticoMarcaje(emp);
   const problemas = items.filter(x=>!x.ok);
@@ -4692,6 +4873,13 @@ function ayudaMarcar(emp){
         (x.gps ? '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-sm btn-line" data-ay="retry">Reintentar</button>'+
                  '<button class="btn btn-sm btn-line" data-ay="help">¿Cómo la activo?</button></div>' : '')+
         '</div></div></div>').join('')+
+    (puedeRegistrarLlegada(emp)
+      ? '<div style="margin-top:14px;padding:12px;border-radius:14px;background:var(--surface-2)">'+
+          '<b>¿Ya estás en el trabajo y no puedes marcar?</b>'+
+          '<div style="font-size:13px;line-height:1.45;margin:4px 0 10px">Registra tu llegada: queda la hora de ahora, '+
+          'tu jefe o Administración la aprueban y ya puedes marcar tu salida normalmente.</div>'+
+          '<button class="btn" id="ayLlegada" style="width:100%">Registrar mi llegada ahora</button></div>'
+      : '')+
     (sop
       ? '<a class="btn btn-wa" style="width:100%;justify-content:center;margin-top:14px" target="_blank" rel="noopener" '+
           'href="https://wa.me/'+sop+'?text='+encodeURIComponent(texto)+'">'+ico('chat')+' Escribir a soporte por WhatsApp</a>'+
@@ -4701,6 +4889,22 @@ function ayudaMarcar(emp){
     '<button class="btn btn-line" id="ayX" style="width:100%;margin-top:10px">Cerrar</button></div>';
   document.body.appendChild(m);
   m.querySelector('#ayX').onclick = ()=>m.remove();
+  const bl = m.querySelector('#ayLlegada');
+  if(bl) bl.onclick = async ()=>{
+    if(!confirm('Se registrará tu llegada con la hora de ahora ('+hhmm(new Date())+').\n\n¿Continuar?')) return;
+    bl.disabled = true; bl.textContent = 'Registrando…';
+    const motivo = 'No pude marcar: '+items.filter(x=>!x.ok).map(x=>x.titulo+' ('+x.detalle+')').join('; ');
+    try{
+      const r = await api('permiso', {ident: emp.dni || emp.tel || emp.email || emp.id, tipo:'ENTRADA_FALLIDA',
+                                      fecha: hoyISO(), motivo: motivo.slice(0, 400)}, {timeout:30000});
+      if(!r || !r.ok) throw new Error((r && r.error) || 'No se pudo registrar');
+      if(r.permiso) PERMISOS.push(r.permiso);
+      m.remove(); toast('Llegada registrada. Al irte, marca tu salida.'); renderMark();
+    }catch(e){
+      bl.disabled = false; bl.textContent = 'Registrar mi llegada ahora';
+      alert(/fetch|network|timeout|abort/i.test(e.message) ? 'Sin conexión. Inténtalo de nuevo cuando tengas señal.' : e.message);
+    }
+  };
   const r = m.querySelector('[data-ay="retry"]'), h = m.querySelector('[data-ay="help"]');
   if(r) r.onclick = ()=>{ m.remove(); GEO.estado='pendiente'; GEO.msg='Obteniendo tu ubicación…'; pintarGps(); pintarBoton(emp);
                           pedirUbicacion(()=>{ pintarGps(); pintarBoton(emp); }, true); };
@@ -4740,10 +4944,10 @@ function solicitarPermiso(emp, tipoInicial, pre){
       'Lo revisa Administración. Hasta que lo apruebe, tu día se cuenta normal.</p>'+
     '<label style="display:block;font-size:15px;font-weight:700;margin-bottom:8px">¿Qué necesitas?</label>'+
     '<div class="pchips" id="pkChips">'+
-      TIPOS_PERMISO.map(t=>'<button type="button" class="pchip" data-t="'+t.id+'">'+esc(t.nombre)+'</button>').join('')+
+      TIPOS_PERMISO.filter(t=>!t.interno).map(t=>'<button type="button" class="pchip" data-t="'+t.id+'">'+esc(t.nombre)+'</button>').join('')+
     '</div>'+
     '<select id="pkT" class="hidden">'+
-      TIPOS_PERMISO.map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join('')+
+      TIPOS_PERMISO.filter(t=>!t.interno).map(t=>'<option value="'+t.id+'">'+esc(t.nombre)+'</option>').join('')+
     '</select>'+
     '<p id="pkEf" style="font-size:12px;color:var(--muted);margin:-6px 0 12px;line-height:1.5"></p>'+
     '<div class="frow">'+
@@ -4976,8 +5180,9 @@ function pintarBoton(emp){
   const j = jornadaDe(emp.id, hoyISO());
   const btn=$('#btnMark'), lab=$('#mkBtnLabel'), hint=$('#mkBtnHint'), al=$('#mkAlert'), icn=$('#mkBtnIcon');
   al.innerHTML='';
+  const llegada = !j.entrada ? llegadaRegistrada(emp.id, hoyISO()) : null;
 
-  if(j.entrada && j.salida){
+  if((j.entrada || llegada) && j.salida){
     btn.disabled = true; btn.className='markbtn mb-done';
     if(icn) icn.innerHTML = ico('check');
     lab.textContent='JORNADA COMPLETA';
@@ -4986,7 +5191,7 @@ function pintarBoton(emp){
     return;
   }
 
-  const esSalida = !!j.entrada;
+  const esSalida = !!j.entrada || !!llegada;
   btn.className = 'markbtn ' + (esSalida ? 'mb-out' : 'mb-in');
   if(icn) icn.innerHTML = ico(esSalida ? 'logout' : 'login');
   lab.textContent = esSalida ? 'MARCAR SALIDA' : 'MARCAR ENTRADA';
@@ -5055,6 +5260,10 @@ function pintarBoton(emp){
   } else {
     hint.textContent = 'Toca para registrar';
   }
+  if(llegada) al.insertAdjacentHTML('afterbegin',
+    '<div class="alert alert-info" style="text-align:left">Registraste tu llegada a las <b>'+esc(llegada.hora||'')+'</b>'+
+    (llegada.estado==='APROBADO' ? ' y ya fue aprobada.' : '; está esperando la aprobación de tu jefe o Administración.')+
+    ' Al irte, marca tu salida aquí.</div>');
 }
 
 function pintarDia(emp){
@@ -6280,6 +6489,7 @@ function tabHoy(b){
       '</div>'+
       htmlFiltros('h') +'<div class="grow"></div>'+
       (soloVista()?'':'<button class="btn btn-sm" id="mHoy" style="align-self:flex-end">Registrar marcaje</button>')+
+      (esHoy ? '<button class="btn btn-sm btn-line" id="resHoy" style="align-self:flex-end">Resumen del día</button>' : '')+
       '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy)+
@@ -6356,6 +6566,8 @@ function tabHoy(b){
            cabecera('FUERA DE PLANILLA', fuera.length)+ fuera.map(filaHoy).join('');
   }
 
+  const resB = $('#resHoy');
+  if(resB) resB.onclick = ()=>verResumenDia();
   const waUno = $('#waUno');
   if(waUno) waUno.onclick = ()=>avisarUnoPorUno(filas, f, esHoy);
   const waCop = $('#waCopiar');
@@ -8992,6 +9204,16 @@ function tabCfg(b){
     'El número al que el personal escribe desde <b>"¿Problemas para marcar?"</b> en la app. '+
     'El mensaje te llega con el diagnóstico de su celular ya escrito: ubicación, conexión, '+
     'marcajes sin enviar y el último error. Déjalo vacío para no mostrar el botón de WhatsApp.</p>'+
+  '<div style="margin-top:14px"><label>Enviar el resumen del día a</label>'+
+    '<div id="cResPara" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px">'+
+      EMP.filter(e=>e.activo).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(e=>
+        '<label style="display:flex;gap:6px;align-items:center;font-size:13.5px;font-weight:500;cursor:pointer">'+
+          '<input type="checkbox" value="'+esc(e.id)+'"'+(destinatariosResumen().some(x=>x.id===e.id)?' checked':'')+'>'+
+          esc(nombreCortoRes(e.nombre))+(e.tel?'':' <span style="color:var(--danger-text);font-size:11.5px">(sin celular)</span>')+'</label>').join('')+
+    '</div></div>'+
+  '<p style="font-size:12.5px;color:var(--muted);margin:6px 0 10px;line-height:1.55">'+
+    'En Hoy → <b>Resumen del día</b> aparece un botón de WhatsApp para cada una de estas personas. '+
+    'La tarea programada de Cowork se lo envía al mediodía.</p>'+
   '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
   (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
     ' esperando enviarse.</b> Se reintenta solo cada dos minutos.'+
@@ -9241,6 +9463,7 @@ function tabCfg(b){
     CFG.exigirDispositivo = $('#cDev').value==='1';
     CFG.correoAlertas = ($('#cMail').value||'').trim();
     CFG.whatsappSoporte = normTel($('#cWaSop') ? $('#cWaSop').value : CFG.whatsappSoporte);
+    if($('#cResPara')) CFG.resumenPara = Array.from($('#cResPara').querySelectorAll('input:checked')).map(x=>x.value).join(',');
     CFG.apiUrl=limpiarApiUrl($('#cApi').value);
     const recAntes = !!CFG.modoRecepcion;
     CFG.modoRecepcion = $('#cRec').value==='1';
