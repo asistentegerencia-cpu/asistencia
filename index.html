@@ -3552,6 +3552,18 @@ function numeroWhatsApp(t){
    lo envía solo toca Enviar. Es gratis y sale del número de quien lo manda, que la
    gente reconoce; a cambio no es automático. Devuelve el texto, o '' si no hay nada
    que avisar a esa persona ese día. */
+/* ¿Hay que avisarle que marque su salida? El día se da por cerrado sin salida
+   recién pasado el margen de cierre (dos horas por defecto), pero para el aviso
+   eso es tarde: se avisa a los 15 minutos de su hora de salida. */
+const AVISO_SALIDA_MIN = 15;
+function salidaParaAviso(r, esHoy){
+  if(!r.sal) return false;
+  if(r.sal.estado==='NO REGISTRADA') return true;
+  if(!esHoy || r.sal.estado!=='EN JORNADA' || !r.hor || !r.hor.out || !r.hor.in) return false;
+  if(toMin(r.hor.out) <= toMin(r.hor.in)) return false;      // turno que cruza la medianoche
+  return toMin(hhmm(new Date())) >= toMin(r.hor.out) + AVISO_SALIDA_MIN;
+}
+
 function mensajeWhatsApp(r, f, esHoy){
   const pila = String(r.e.nombre||'').trim().split(/\s+/)[0].toLowerCase();
   const nombre = pila.charAt(0).toUpperCase()+pila.slice(1);
@@ -3559,7 +3571,7 @@ function mensajeWhatsApp(r, f, esHoy){
     return 'Hola '+nombre+', no has marcado tu ENTRADA de hoy'+
       (r.hor && r.hor.in ? ' (tu horario empieza a las '+r.hor.in+')' : '')+
       '. Si ya llegaste, márcala en la app de asistencia. Si hoy no vienes o llegas tarde, pide el permiso desde la app. Gracias.';
-  if(r.sal && r.sal.estado==='NO REGISTRADA'){
+  if(salidaParaAviso(r, esHoy)){
     if(esHoy)
       return 'Hola '+nombre+', tu jornada de hoy terminaba'+
         (r.hor && r.hor.out ? ' a las '+r.hor.out : '')+
@@ -3574,7 +3586,7 @@ function mensajeWhatsApp(r, f, esHoy){
 function pendientesWhatsApp(filas, f, esHoy){
   return {
     entrada: esHoy ? filas.filter(r=>r.clase==='SIN_MARCAR') : [],
-    salida:  filas.filter(r=>r.sal && r.sal.estado==='NO REGISTRADA')
+    salida:  filas.filter(r=>salidaParaAviso(r, esHoy))
   };
 }
 
