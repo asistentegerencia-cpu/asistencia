@@ -3607,7 +3607,10 @@ function bloqueAvisosWhatsApp(filas, f, esHoy){
       '<div style="font-size:12.5px;line-height:1.5;margin-top:2px">Avísales por WhatsApp: un mensaje al grupo del equipo con los nombres, o uno por uno a cada persona.</div></div>'+
     '<a class="btn btn-sm btn-wa" target="_blank" rel="noopener" href="https://wa.me/?text='+
       encodeURIComponent(mensajeGrupoWhatsApp(pend, f, esHoy))+'">Mensaje al grupo</a>'+
+    '<button class="btn btn-sm btn-line" id="waCopiar">Copiar mensaje</button>'+
     '<button class="btn btn-sm btn-line" id="waUno">Uno por uno ('+n+')</button>'+
+    // El texto tal cual, para copiarlo o para que lo lea una tarea automática
+    '<textarea id="waTexto" hidden readonly>'+esc(mensajeGrupoWhatsApp(pend, f, esHoy))+'</textarea>'+
   '</div>';
 }
 
@@ -6105,7 +6108,7 @@ function tabHoy(b){
       '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
       '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
     bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy)+
-    (soloVista() ? '' : bloqueAvisosWhatsApp(filas, f, esHoy))+
+    bloqueAvisosWhatsApp(filas, f, esHoy)+
     '<div class="tblwrap"><div class="tblscroll"><table class="tcards"><thead><tr>'+
       '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th>'+
       '<th>Entrada</th><th>Salida</th><th>Horas trabajadas</th>'+
@@ -6180,6 +6183,14 @@ function tabHoy(b){
 
   const waUno = $('#waUno');
   if(waUno) waUno.onclick = ()=>avisarUnoPorUno(filas, f, esHoy);
+  const waCop = $('#waCopiar');
+  if(waCop) waCop.onclick = async ()=>{
+    const t = $('#waTexto').value;
+    try{ await navigator.clipboard.writeText(t); }
+    catch(e){ const x = $('#waTexto'); x.hidden = false; x.select(); document.execCommand('copy'); x.hidden = true; }
+    waCop.textContent = '✓ Copiado';
+    setTimeout(()=>{ waCop.textContent = 'Copiar mensaje'; }, 2000);
+  };
   b.querySelectorAll('[data-ok]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
   b.querySelectorAll('[data-no]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
 
