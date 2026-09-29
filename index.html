@@ -3611,7 +3611,21 @@ function bloqueAvisosWhatsApp(filas, f, esHoy){
     '<button class="btn btn-sm btn-line" id="waUno">Uno por uno ('+n+')</button>'+
     // El texto tal cual, para copiarlo o para que lo lea una tarea automática
     '<textarea id="waTexto" hidden readonly>'+esc(mensajeGrupoWhatsApp(pend, f, esHoy))+'</textarea>'+
+    listaIndividualesWhatsApp(pend, f, esHoy)+
   '</div>';
+}
+
+/* Enlaces directos a WhatsApp Web, uno por persona con celular: es lo que recorre
+   la tarea programada de Cowork. web.whatsapp.com/send abre el chat con el texto
+   escrito, sin la página intermedia de wa.me. Oculto: en pantalla ya está la tabla. */
+function listaIndividualesWhatsApp(pend, f, esHoy){
+  const filas = pend.entrada.concat(pend.salida).map(r=>{
+    const num = numeroWhatsApp(r.e.tel), txt = mensajeWhatsApp(r, f, esHoy);
+    if(!num || !txt) return '';
+    return '<li><a data-nombre="'+esc(r.e.nombre)+'" href="https://web.whatsapp.com/send?phone='+num+
+           '&text='+encodeURIComponent(txt)+'">'+esc(r.e.nombre)+'</a></li>';
+  }).join('');
+  return '<ul id="waIndividuales" hidden>'+filas+'</ul>';
 }
 
 /* Lista con un botón por persona. Cada envío la marca como hecha, así se avanza
