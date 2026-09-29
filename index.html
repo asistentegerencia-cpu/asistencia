@@ -3552,16 +3552,25 @@ function numeroWhatsApp(t){
    lo envía solo toca Enviar. Es gratis y sale del número de quien lo manda, que la
    gente reconoce; a cambio no es automático. Devuelve el texto, o '' si no hay nada
    que avisar a esa persona ese día. */
-/* ¿Hay que avisarle que marque su salida? El día se da por cerrado sin salida
-   recién pasado el margen de cierre (dos horas por defecto), pero para el aviso
-   eso es tarde: se avisa a los 15 minutos de su hora de salida. */
-const AVISO_SALIDA_MIN = 15;
-function salidaParaAviso(r, esHoy){
-  if(!r.sal) return false;
-  if(r.sal.estado==='NO REGISTRADA') return true;
-  if(!esHoy || r.sal.estado!=='EN JORNADA' || !r.hor || !r.hor.out || !r.hor.in) return false;
+/* ¿Hay que avisarle que marque su salida?
+
+   Hoy: UNA sola vez, en la hora que sigue a su salida (de +5 a +65 minutos). La
+   tarea programada corre cada hora en punto y cinco, así que a cada persona le
+   toca exactamente una pasada, la más cercana a su hora. Quien se queda
+   trabajando recibe un solo mensaje, que le dice que lo ignore y marque al
+   terminar; no se le vuelve a escribir cada hora. Si igual se olvida, al día
+   siguiente la app le pide la corrección.
+
+   Días anteriores (mirando el tablero de otro día): los que quedaron sin salida. */
+const AVISO_SALIDA_DESDE = 5, AVISO_SALIDA_HASTA = 65;
+function salidaParaAviso(r, esHoy, manual){
+  if(!r.sal || r.sal.reg || r.sal.hora !== '—') return false;
+  if(!esHoy) return r.sal.estado==='NO REGISTRADA';
+  if(!r.hor || !r.hor.out || !r.hor.in || !(r.sal.estado==='EN JORNADA' || r.sal.estado==='NO REGISTRADA')) return false;
   if(toMin(r.hor.out) <= toMin(r.hor.in)) return false;      // turno que cruza la medianoche
-  return toMin(hhmm(new Date())) >= toMin(r.hor.out) + AVISO_SALIDA_MIN;
+  const pasados = toMin(hhmm(new Date())) - toMin(r.hor.out);
+  // El botón de cada fila (lo usa una persona) sigue disponible toda la tarde
+  return pasados >= AVISO_SALIDA_DESDE && (manual || pasados < AVISO_SALIDA_HASTA);
 }
 
 function mensajeWhatsApp(r, f, esHoy){
@@ -3571,11 +3580,12 @@ function mensajeWhatsApp(r, f, esHoy){
     return 'Hola '+nombre+', no has marcado tu ENTRADA de hoy'+
       (r.hor && r.hor.in ? ' (tu horario empieza a las '+r.hor.in+')' : '')+
       '. Si ya llegaste, márcala en la app de asistencia. Si hoy no vienes o llegas tarde, pide el permiso desde la app. Gracias.';
-  if(salidaParaAviso(r, esHoy)){
+  if(salidaParaAviso(r, esHoy, true)){
     if(esHoy)
       return 'Hola '+nombre+', tu jornada de hoy terminaba'+
         (r.hor && r.hor.out ? ' a las '+r.hor.out : '')+
-        ' y no has marcado tu SALIDA. Márcala ahora en la app de asistencia; si ya saliste de la oficina, igual puedes hacerlo. Gracias.';
+        ' y no has marcado tu SALIDA. Si ya te fuiste, márcala ahora en la app de asistencia (desde donde estés, igual queda registrada). '+
+        'Si todavía sigues trabajando, ignora este mensaje y márcala al terminar. Gracias.';
     return 'Hola '+nombre+', no marcaste tu SALIDA del '+fechaLarga(new Date(f+'T12:00:00'))+
       '. Entra a la app de asistencia y toca "Solicitar corrección" con la hora a la que saliste. Gracias.';
   }
@@ -3585,7 +3595,13 @@ function mensajeWhatsApp(r, f, esHoy){
 /* Quién tiene algo pendiente ese día: entrada (solo hoy) o salida. */
 function pendientesWhatsApp(filas, f, esHoy){
   return {
-    entrada: esHoy ? filas.filter(r=>r.clase==='SIN_MARCAR') : [],
+    // Igual que la salida: una sola vez, en la hora que sigue a su entrada (+15 a +75 min)
+    entrada: esHoy ? filas.filter(r=>{
+      if(r.clase!=='SIN_MARCAR') return false;
+      if(!r.hor || !r.hor.in) return true;
+      const pasados = toMin(hhmm(new Date())) - toMin(r.hor.in);
+      return pasados >= 15 && pasados < 75;
+    }) : [],
     salida:  filas.filter(r=>salidaParaAviso(r, esHoy))
   };
 }
