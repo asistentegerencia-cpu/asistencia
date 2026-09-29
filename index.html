@@ -5649,6 +5649,7 @@ function boot(){
   $('#brandLogo').alt = CFG.empresa;
   $('#adLogo').src = LOGO;
   document.title = 'Asistencia · ' + CFG.empresa;
+  if(restaurarSesion()) return;
   if(location.hash==='#admin'){ pedirPass(); return; }
 
   // Con servidor: traer padrón y reglas al vuelo, y reintentar lo que quedó en cola.
@@ -5696,11 +5697,41 @@ let TAB='hoy';
 let ROL = 'admin';
 const soloVista = ()=> ROL === 'vista';
 
+/* ---------- SESIÓN RECORDADA ----------
+   En un equipo de confianza (la PC de administración, donde además corre la tarea
+   programada que avisa por WhatsApp) el panel puede abrir sin pedir la clave.
+   Es opcional, dura 30 días y "Salir" la borra. Se guarda la clave en este
+   navegador: por eso conviene usarla con la clave de solo vista. */
+const K_SESION = 'ca_sesion';
+function recordarSesion(clave, rol){
+  try{ localStorage.setItem(K_SESION, JSON.stringify({clave, rol, hasta: Date.now() + 30*86400000})); }catch(e){}
+}
+function olvidarSesion(){ try{ localStorage.removeItem(K_SESION); }catch(e){} }
+function restaurarSesion(){
+  let ses = null;
+  try{ ses = JSON.parse(localStorage.getItem(K_SESION) || 'null'); }catch(e){}
+  if(!ses || !ses.clave || !(ses.hasta > Date.now())){ if(ses) olvidarSesion(); return false; }
+  CLAVE = ses.clave; ROL = ses.rol === 'vista' ? 'vista' : 'admin';
+  abrirAdmin();
+  // Si la clave cambió desde entonces, se olvida y se vuelve a pedir
+  if(hayServidor()){
+    api('entrar', {clave:ses.clave}, {timeout:15000}).then(r=>{
+      if(r && r.ok === false){ olvidarSesion(); $('#btnExit').click(); pedirPass(); }
+      else if(r && r.rol && r.rol !== ROL){ ROL = r.rol; recordarSesion(ses.clave, r.rol); abrirAdmin(); }
+    }).catch(()=>{});
+  }
+  return true;
+}
+
 function pedirPass(){
   const m=document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Acceso al panel</h2>'+
     '<p class="lead" style="font-size:14px">Ingresa la clave para ver los reportes de asistencia.</p>'+
     '<input class="input input-sm" id="pw" type="password" placeholder="Clave" autocomplete="off">'+
+    '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:13.5px;line-height:1.45;cursor:pointer">'+
+      '<input type="checkbox" id="pwRec" style="margin-top:3px;width:18px;height:18px;flex:none">'+
+      '<span>Mantener la sesión abierta en este equipo (30 días)'+
+      '<span style="display:block;font-size:12px;color:var(--muted)">Solo en una computadora de confianza. Se cierra con "Salir".</span></span></label>'+
     '<div id="pwErr"></div>'+
     '<div style="display:flex;gap:10px;margin-top:14px">'+
       '<button class="btn btn-line" id="pwX">Cancelar</button>'+
@@ -5724,6 +5755,7 @@ function pedirPass(){
         btn.disabled = false; btn.textContent = 'Entrar';
         if(r && r.ok && r.rol){
           CLAVE = v; ROL = r.rol;
+          if(m.querySelector('#pwRec').checked) recordarSesion(v, r.rol);
           m.remove(); abrirAdmin(); return;
         }
         return err('Clave incorrecta');
@@ -5733,8 +5765,9 @@ function pedirPass(){
       }
     }
 
-    if(v === CFG.adminPass){ ROL='admin'; CLAVE=v; m.remove(); abrirAdmin(); return; }
-    if(CFG.vistaPass && v === CFG.vistaPass){ ROL='vista'; CLAVE=v; m.remove(); abrirAdmin(); return; }
+    const rec = m.querySelector('#pwRec').checked;
+    if(v === CFG.adminPass){ ROL='admin'; CLAVE=v; if(rec) recordarSesion(v, ROL); m.remove(); abrirAdmin(); return; }
+    if(CFG.vistaPass && v === CFG.vistaPass){ ROL='vista'; CLAVE=v; if(rec) recordarSesion(v, ROL); m.remove(); abrirAdmin(); return; }
     err('Clave incorrecta');
   };
   m.querySelector('#pwOk').onclick=go;
@@ -5772,6 +5805,7 @@ function abrirAdmin(){
 }
 $('#btnExit').addEventListener('click', ()=>{
   ROL='admin'; CLAVE='';             // al salir se olvidan rol y clave: la próxima vez se vuelve a pedir
+  olvidarSesion();
   $$('#adTabs .tab').forEach(t=>t.classList.remove('hidden'));
   $('#appAdmin').classList.add('hidden');
   $('#appMarcaje').classList.remove('hidden');
