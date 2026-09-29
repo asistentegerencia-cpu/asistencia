@@ -3646,6 +3646,25 @@ function datosResumen(){
   };
 }
 
+/* El mismo resumen en texto, con el formato de WhatsApp (*negrita*). Es lo que
+   viaja en los botones de envío: un enlace puede llevar texto escrito, no una
+   imagen, y así la tarea programada lo manda sin tener que adjuntar archivos. */
+function textoResumen(d){
+  const falta = (d.secciones.find(s=>s.titulo==='No marcaron entrada')||{items:[]}).items.length;
+  const tarde = (d.secciones.find(s=>s.titulo==='Llegaron tarde')||{items:[]}).items.length;
+  let t = '📊 *Resumen de asistencia*\n'+d.fecha+' · corte '+d.hora+'\n\n'+
+    '✅ Asistencia: *'+(d.pct==null?'—':d.pct+'%')+'* ('+d.presentes+' de '+d.programados+')\n'+
+    '❌ Faltan: *'+falta+'*\n'+
+    '⏰ Tardanzas: *'+tarde+'*'+(d.minutos?' ('+d.minutos+' min en total)':'')+'\n';
+  d.secciones.forEach(sec=>{
+    t += '\n*'+sec.titulo+' ('+sec.items.length+')*\n'+
+         sec.items.map(it=>'• '+it.n+(it.d ? ' — '+it.d : '')).join('\n')+'\n';
+  });
+  if(!d.secciones.length) t += '\n✓ Todo en orden: nadie falta y nadie llegó tarde.\n';
+  if(d.pendientes) t += '\n📝 '+d.pendientes+' permiso'+(d.pendientes===1?'':'s')+' por responder en el panel.';
+  return t.trim();
+}
+
 function dibujarResumen(d){
   const W = 1080, P = 56, F = 'Figtree, "Segoe UI", Roboto, Arial, sans-serif';
   const colW = (W - P*2 - 24) / 2, lh = 46;
@@ -3720,7 +3739,9 @@ function dibujarResumen(d){
 }
 
 function verResumenDia(){
-  const c = dibujarResumen(datosResumen());
+  const datos = datosResumen();
+  const c = dibujarResumen(datos);
+  const texto = encodeURIComponent(textoResumen(datos));
   const url = c.toDataURL('image/png');
   const sop = numeroWhatsApp(CFG.whatsappSoporte);
   const m = document.createElement('div'); m.className='modal';
@@ -3735,13 +3756,14 @@ function verResumenDia(){
     '<div id="resDestinos" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
       destinatariosResumen().map(e=>{
         const n = numeroWhatsApp(e.tel);
-        return n ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="'+esc(e.nombre)+'" href="https://web.whatsapp.com/send?phone='+n+'">'+
+        return n ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="'+esc(e.nombre)+'" href="https://web.whatsapp.com/send?phone='+n+'&text='+texto+'">'+
                    ico('chat')+esc(nombreCortoRes(e.nombre))+'</a>'
                  : '<span style="font-size:12.5px;color:var(--danger-text)">'+esc(nombreCortoRes(e.nombre))+': sin celular</span>';
       }).join('')+
-      (!destinatariosResumen().length && sop ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="Soporte" href="https://web.whatsapp.com/send?phone='+sop+'">'+ico('chat')+'Mi WhatsApp</a>' : '')+
+      (!destinatariosResumen().length && sop ? '<a class="btn btn-sm btn-wa res-dest" data-nombre="Soporte" href="https://web.whatsapp.com/send?phone='+sop+'&text='+texto+'">'+ico('chat')+'Mi WhatsApp</a>' : '')+
     '</div>'+
-    '<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5">Copia la imagen, abre el chat y pégala con Ctrl+V.'+
+    '<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5">Los botones de WhatsApp abren el chat con el resumen ya escrito en texto. '+
+      'La imagen es para verla o compartirla a mano.'+
       (destinatariosResumen().length ? '' : ' Elige a quién enviarlo en Configuración → "Enviar el resumen del día a".')+'</p>'+
     '<button class="btn btn-line" id="resX" style="width:100%;margin-top:12px">Cerrar</button></div>';
   document.body.appendChild(m);
