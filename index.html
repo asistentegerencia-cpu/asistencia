@@ -303,8 +303,24 @@ tr:hover td{background:var(--outside)}
 .rkc .l{font-size:14px;font-weight:700;color:var(--gray-700)}.rkc .v{font-size:38px;font-weight:800;letter-spacing:-.02em;line-height:1.15;margin-top:4px;font-variant-numeric:tabular-nums}
 .rkc .s{font-size:13px;color:var(--muted);font-weight:600}
 .rgrid{display:grid;grid-template-columns:1.25fr 1fr;gap:14px;margin-bottom:14px}.rgrid.r2{grid-template-columns:1fr 1fr}
-.rcard{background:var(--surface);border:1px solid var(--card-border);border-radius:var(--r-sm);box-shadow:var(--sh);padding:18px 20px;min-width:0}
-.rcard h3{margin:0;font-size:17px}.rd{font-size:13px;color:var(--muted);margin:2px 0 14px;line-height:1.45}
+.clay{display:grid;grid-template-columns:230px minmax(0,1fr);gap:24px;align-items:start}
+.cmenu{display:flex;flex-direction:column;gap:4px;position:sticky;top:12px}
+.cmenu button{display:flex;gap:10px;align-items:center;padding:11px 14px;border-radius:14px;font-weight:700;font-size:15px;color:var(--gray-700);text-align:left}
+.cmenu button:hover{background:var(--surface-2)}.cmenu button.on{background:var(--navy-100);color:var(--navy-dark)}
+.cmenu i{font-style:normal;width:22px;text-align:center}.cmenu small{margin-left:auto;background:var(--surface-2);border-radius:99px;padding:1px 8px;font-size:12px;color:var(--muted)}
+.csave{position:sticky;bottom:10px;z-index:20;margin-top:16px;background:#fff;border:1px solid var(--card-border);box-shadow:0 -6px 22px rgba(16,24,40,.10);border-radius:18px;padding:10px 12px 10px 18px;display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600;color:var(--muted)}
+.csave.sucio{border-color:var(--navy);color:var(--text)}
+.csave .grow{flex:1}
+.cres{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.cchip{display:inline-flex;align-items:center;gap:6px;background:var(--navy-100);color:var(--navy-dark);border-radius:99px;padding:6px 8px 6px 14px;font-weight:700;font-size:14px}
+.cchip small{color:var(--danger-text);font-weight:600}.cchip button{width:24px;height:24px;border-radius:50%;background:#fff;font-size:12px}
+.ptr{display:grid;grid-template-columns:minmax(220px,2fr) minmax(0,1.1fr) minmax(0,1fr) minmax(0,1.4fr) 20px;gap:12px;align-items:center;padding:10px 16px;border-top:1px solid var(--line);font-size:14px;cursor:pointer}
+.ptr:hover{background:#f8f9fc}.rtbl>.ptr:first-child{border-top:0}.ptr.pvista{cursor:default}
+.ptr.rth{cursor:default}.ptr.pcel{grid-template-columns:minmax(200px,1.5fr) 2fr auto;cursor:default}
+.pdat .tag{margin:1px 3px 1px 0;font-size:10.5px}.pfalta{color:var(--danger-text);font-size:12px;font-weight:700;margin-top:2px}
+.ftabs{margin:8px 0 12px}
+.rpcard{background:var(--surface);border:1px solid var(--card-border);border-radius:var(--r-sm);box-shadow:var(--sh);padding:18px 20px;min-width:0}
+.rpcard h3{margin:0;font-size:17px}.rd{font-size:13px;color:var(--muted);margin:2px 0 14px;line-height:1.45}
 .rarea{display:grid;grid-template-columns:minmax(0,150px) 1fr 84px;gap:10px;align-items:center;padding:6px 0;font-size:13.5px}
 .rarea b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px;font-weight:700}.rarea b small{color:var(--muted);font-weight:600}
 .rsem{grid-template-columns:40px 1fr 50px;padding:3px 0}
@@ -315,7 +331,7 @@ tr:hover td{background:var(--outside)}
 .rcols div{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px;height:100%}
 .rcols i{display:block;width:100%;border-radius:5px 5px 2px 2px}
 .rcols.rmuchos b{visibility:hidden}.rcols.rmuchos div:hover b{visibility:visible}.rcols small{font-size:10.5px;color:var(--muted);font-weight:600}.rcols b{font-size:10px;color:var(--gray-700)}
-.rri{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}.rcard .rri:nth-of-type(1){border-top:0}
+.rri{display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}.rpcard .rri:nth-of-type(1){border-top:0}
 .rpos{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;flex:none}
 .rpos.rbien{background:var(--ok-bg);color:var(--ok-text)}.rpos.rmal{background:var(--danger-bg);color:var(--danger-text)}
 .rnm{flex:1;min-width:0}.rnm b{display:block;font-size:14.5px}.rnm small{color:var(--muted);font-size:12.5px}
@@ -344,6 +360,14 @@ tr:hover td{background:var(--outside)}
 .rficha{max-width:560px}.rfg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
 .rfg div{background:var(--surface-2);border-radius:14px;padding:10px 12px;font-size:12.5px;color:var(--muted);font-weight:600}.rfg b{display:block;font-size:20px;color:var(--text)}
 @media (max-width:820px){
+  .clay{grid-template-columns:minmax(0,1fr);gap:12px}
+  .cmenu{position:static;flex-direction:row;overflow-x:auto;gap:6px;padding-bottom:4px;min-width:0;max-width:100%}
+  .cmenu button{white-space:nowrap;padding:8px 12px;font-size:14px;background:var(--surface-2)}
+  .ptr{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px}
+  .ptr>.hwho{grid-column:1/-1}.ptr>.parea,.ptr>.pturno{font-size:13px;color:var(--muted);padding-left:44px}
+  .ptr>.pturno{padding-left:0;text-align:right}.ptr>.pdat{grid-column:1/-1;padding-left:44px}.ptr .rgo{display:none}
+  .ptr.pcel{grid-template-columns:1fr auto}.ptr.pcel>div:nth-child(2){grid-column:1/-1;grid-row:2}
+  .csave{flex-wrap:wrap}
   .rk{grid-template-columns:1fr 1fr}.rkc .v{font-size:30px}
   .rgrid,.rgrid.r2{grid-template-columns:1fr}
   .rth{display:none}
@@ -590,7 +614,6 @@ function ico(n, extra){
   <div class="tabs" id="adTabs">
     <div class="tab on" data-tab="hoy">Hoy</div>
     <div class="tab" data-tab="rep">Reportes</div>
-    <div class="tab" data-tab="emp">Personal</div>
     <div class="tab" data-tab="prog">Programación</div>
     <div class="tab" data-tab="perm">Permisos</div>
     <div class="tab" data-tab="cfg">Configuración</div>
@@ -3750,6 +3773,11 @@ function destinatariosResumen(){
   return ids.map(id=>EMP.find(e=>e.id===id)).filter(Boolean);
 }
 
+function chipResumen(e){
+  return '<span class="cchip"><input type="checkbox" value="'+esc(e.id)+'" checked hidden>'+esc(nombrePropio(e.nombre))+
+    (e.tel?'':' <small>(sin celular)</small>')+'<button type="button" data-qres aria-label="Quitar">✕</button></span>';
+}
+
 function datosResumen(){
   const hoy = hoyISO(), ahora = new Date(), ayer = diaISO(hoy, -1);
   const gente = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO');
@@ -4015,7 +4043,7 @@ function botonWhatsApp(r, f, esHoy){
   const txt = mensajeWhatsApp(r, f, esHoy);
   if(!txt) return '';
   const num = numeroWhatsApp(r.e.tel);
-  if(!num) return '<span style="font-size:12px;color:var(--muted)" title="Agrega su celular en Personal para avisarle por WhatsApp">Sin celular</span>';
+  if(!num) return '<span style="font-size:12px;color:var(--muted)" title="Agrega su celular en Configuración → Personal para avisarle por WhatsApp">Sin celular</span>';
   return '<a class="btn btn-sm btn-wa" target="_blank" rel="noopener" '+
     'href="https://wa.me/'+num+'?text='+encodeURIComponent(txt)+'">'+ico('chat')+'WhatsApp</a>';
 }
@@ -6179,7 +6207,7 @@ function abrirAdmin(){
           // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
-  const ocultas = soloVista() ? ['cfg'] : [];
+  const ocultas = [];   // en solo lectura, Configuración muestra solo Personal
   $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
   if(ocultas.indexOf(TAB)>=0){
     TAB='hoy';
@@ -6227,15 +6255,15 @@ function renderTab(){
   pintarNavPanelSeguro();
   const b=$('#adBody');
   // Cerrojo: aunque alguien fuerce la pestaña, en solo lectura no se abre
-  if(TAB==='disp') TAB='emp';   // Celulares se fusionó con Personal
+  if(TAB==='disp'){ TAB='cfg'; CFG_SEC='personal'; PER_SUB='cel'; }   // Celulares vive en Personal
+  if(TAB==='emp'){ TAB='cfg'; CFG_SEC='personal'; }                    // Personal vive en Configuración
+  $$('#adTabs .tab').forEach(x=>x.classList.toggle('on', x.dataset.tab===TAB));
   if(TAB==='aus')  TAB='rep';   // Ausencias, Historial y Análisis son una sola
   if(TAB==='hist') TAB='rep';
   if(TAB==='ana')  TAB='rep';
   if(TAB==='qr')   TAB='cfg';   // El código QR vive dentro de Configuración
-  if(soloVista() && TAB==='cfg') TAB='hoy';
   if(TAB==='hoy')  return tabHoy(b);
   if(TAB==='rep')  return tabReportes(b);
-  if(TAB==='emp')  return tabEmp(b);
   if(TAB==='prog') return tabProgramacion(b);
   if(TAB==='perm') return tabPermisos(b);
   if(TAB==='cfg')  return tabConfiguracion(b);
@@ -6822,7 +6850,7 @@ function notaExentos(){
     ex.length+' colaborador'+(ex.length===1?'':'es')+' está'+(ex.length===1?'':'n')+
     ' marcado'+(ex.length===1?'':'s')+' como <b>exento de control de asistencia</b> y no aparece'+
     (ex.length===1?'':'n')+' en este cuadro: '+ ex.map(e=>esc(e.nombre)).join(', ')+
-    '. Puedes cambiarlo en la pestaña Personal.</p>';
+    '. Puedes cambiarlo en Configuración → Personal.</p>';
 }
 /* La hora que le tocaba, en pequeño y debajo de la que marcó.
    Se muestra siempre que haya horario, aunque no haya marcado: así se ve a qué
@@ -7173,12 +7201,12 @@ function resumenReporte(desde, hasta, ahora){
         '<div class="s">'+(tot.tardanzas ? Math.round(tot.minutos/tot.tardanzas)+' min en promedio cada una' : 'nadie llegó tarde')+'</div></div>'+
     '</div>'+
     '<div class="rgrid">'+
-      '<div class="rcard"><h3>Asistencia y puntualidad por área</h3><p class="rd">Qué área cumple más. De mayor a menor asistencia.</p>'+
+      '<div class="rpcard"><h3>Asistencia y puntualidad por área</h3><p class="rd">Qué área cumple más. De mayor a menor asistencia.</p>'+
         listaAreas.map(a=>'<div class="rarea"><b>'+esc(nombrePropio(a.k))+' <small>· '+a.n+'</small></b>'+
           '<div class="rbars"><div><i style="width:'+(a.pa||0)+'%;background:var(--navy)"></i></div><div><i style="width:'+(a.pp||0)+'%;background:#7fb0e0"></i></div></div>'+
           '<div class="rnum">'+(a.pa==null?'—':a.pa+'%')+'<small>'+(a.pp==null?'—':a.pp+'%')+' puntual</small></div></div>').join('')+
         '<div class="rleg"><span><i class="hdot" style="background:var(--navy)"></i>Asistencia</span><span><i class="hdot" style="background:#7fb0e0"></i>Puntualidad</span></div></div>'+
-      '<div class="rcard"><h3>Asistencia día a día</h3><p class="rd">% del equipo que vino cada día. En rojo, menos de 75%.</p>'+
+      '<div class="rpcard"><h3>Asistencia día a día</h3><p class="rd">% del equipo que vino cada día. En rojo, menos de 75%.</p>'+
         (porDia.length ? '<div class="rcols'+(porDia.length>14?' rmuchos':'')+'">'+porDia.map(d=>{ const p=pctDe(d.asis,d.prog);
           return '<div title="'+esc(fechaCorta(d.f))+': '+d.asis+' de '+d.prog+'"><b>'+p+'</b><i style="height:'+Math.max(2,p)+'%;background:'+colorPct(p)+'"></i><small>'+Number(d.f.slice(8))+'</small></div>'; }).join('')+'</div>'
           : '<div class="empty">Sin días laborables en el periodo.</div>')+
@@ -7188,10 +7216,10 @@ function resumenReporte(desde, hasta, ahora){
       '</div>'+
     '</div>'+
     '<div class="rgrid r2">'+
-      '<div class="rcard"><h3>🏅 Los más puntuales</h3><p class="rd">Mayor % de días a tiempo (mínimo 5 días con entrada).</p>'+
+      '<div class="rpcard"><h3>🏅 Los más puntuales</h3><p class="rd">Mayor % de días a tiempo (mínimo 5 días con entrada).</p>'+
         (punt.length ? punt.map((r,i)=>persona(r,i,'rbien', pctDe(r.a.puntuales,r.a.conEntrada)+'%', r.a.puntuales+' de '+r.a.conEntrada+' días')).join('')
                      : '<div class="empty">Todavía no hay suficientes días en el periodo.</div>')+'</div>'+
-      '<div class="rcard"><h3>⏰ Los que más llegan tarde</h3><p class="rd">Más tardanzas en el periodo, y cuánto suman.</p>'+
+      '<div class="rpcard"><h3>⏰ Los que más llegan tarde</h3><p class="rd">Más tardanzas en el periodo, y cuánto suman.</p>'+
         (tarde.length ? tarde.map((r,i)=>persona(r,i,'rmal', r.a.tardanzas+' tardanza'+(r.a.tardanzas===1?'':'s'), min2hhmm(r.a.minutos)+' en total')).join('')
                       : '<div class="empty">Nadie llegó tarde en el periodo. 🎉</div>')+'</div>'+
     '</div>';
@@ -8866,55 +8894,6 @@ function wireSenales(b){
   sel.onchange = ()=>{ ALE_FECHA = sel.value; pintar(); };
 }
 
-function tabEmp(b){
-  const badgeMod = e => e.modalidad==='EXENTO' ? ' <span class="tag tag-warn">EXENTO</span>'
-                      : e.modalidad==='REMOTO' ? ' <span class="tag tag-warn">TELETRABAJO</span>' : '';
-  b.innerHTML = avisoDni() + avisoSinIdentificador() + avisoProyectos() +
-    '<div class="toolbar"><div class="grow"></div>'+
-      (CFG.usaProyectos?'<button class="btn btn-sm btn-line" id="eProy">🗂 Asignar proyectos</button>':'')+
-      '<button class="btn btn-sm btn-line" id="eBulk">Cargar DNI desde Excel</button>'+
-      '<button class="btn btn-sm" id="eAdd">+ Agregar colaborador</button></div>'+
-    '<div class="tblwrap"><div class="tblscroll"><table class="tcards"><thead><tr>'+
-      '<th>Colaborador</th>'+(soloVista()?'':'<th>DNI</th>')+'<th>Cargo</th><th>Área</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+
-      (soloVista()?'':'<th>Celular</th><th>Correo</th>')+'<th>Turno</th><th>Vínculo</th><th>Estado</th>'+
-      '<th>Equipo con el que marca</th>'+(soloVista()?'':'<th></th>')+
-    '</tr></thead><tbody>'+
-    EMP.map(e=>'<tr>'+
-      '<td class="name"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div>'+
-        esc(e.nombre)+(DEV&&DEV.empId===e.id?' <span class="tag tag-ok">ESTE EQUIPO</span>':'')+
-        '<div class="tc-only" style="font-size:13px;color:var(--gray-700);font-weight:500">'+esc(e.cargo)+' · '+esc(e.area)+'</div></div>'+
-        '<span class="tag '+(e.activo?'tag-ok':'tag-bad')+' tc-only">'+(e.activo?'ACTIVO':'INACTIVO')+'</span></div></td>'+
-      (soloVista()?'':'<td class="num" data-l="DNI" style="font-weight:700">'+(normTel(e.dni)?esc(e.dni):'<span class="tag tag-warn">FALTA</span>')+'</td>')+
-      '<td class="tc-hide">'+esc(e.cargo)+'</td><td class="tc-hide">'+esc(e.area)+'</td>'+
-      (CFG.usaProyectos?'<td>'+(e.proyecto?esc(nomProyecto(e.proyecto)):'<span class="tag tag-warn">SIN ASIGNAR</span>')+'</td>':'')+
-      (soloVista()?'':'<td class="num tc-hide">'+(e.tel?esc(e.tel):'—')+'</td>'+
-      '<td class="tc-hide" style="font-size:14px">'+(e.email?esc(e.email):'—')+'</td>')+
-      '<td data-l="Turno">'+(diasPersona(e) ? '<span class="tag tag-info">HORARIO PROPIO</span>' : esc(getTurno(e.turno).nombre))+'</td>'+
-      '<td data-l="Vínculo">'+(enPlanilla(e)
-               ? '<span class="tag tag-info">PLANILLA</span>'
-               : '<span class="tag tag-warn">FUERA</span>')+'</td>'+
-      '<td class="tc-hide"><span class="tag '+(e.activo?'tag-ok':'tag-bad')+'">'+(e.activo?'ACTIVO':'INACTIVO')+'</span>'+ badgeMod(e) +'</td>'+
-      '<td class="tc-wide" data-l="Equipo">'+celularDe(e)+'</td>'+
-      (soloVista()?'':'<td class="tc-wide"><div style="display:flex;gap:6px">'+
-        '<button class="btn btn-sm btn-line eEd" data-id="'+e.id+'">Editar</button>'+
-        (DISP[e.id]?'<button class="btn btn-sm btn-line" data-lib="'+esc(e.id)+'">Liberar</button>':'')+
-      '</div></td>')+
-    '</tr>').join('')+'</tbody></table></div></div>'+
-    '<p style="font-size:12.5px;color:var(--muted);margin-top:14px;line-height:1.6">'+
-    'El colaborador ingresa con su <b>DNI</b>. El <b>equipo</b> es el celular al que quedó amarrado: '+
-    'si cambia de teléfono o se le borran los datos, hay que liberarlo para que pueda volver a marcar.</p>'+
-    seccionJefes() +
-    seccionSenales();
-
-  const bAdd = $('#eAdd');  if(bAdd)  bAdd.onclick  = ()=>editarEmp(null);
-  const bBul = $('#eBulk'); if(bBul)  bBul.onclick  = cargarDniMasivo;
-  const bProy = $('#eProy'); if(bProy) bProy.onclick = asignarProyectos;
-  $$('.eEd').forEach(x=>x.onclick=()=>editarEmp(x.dataset.id));
-  wireLiberar(b);
-  wireSenales(b);
-  wireJefes(b);
-}
-
 /* ---------- JEFES DE ÁREA (panel de administración) ---------- */
 function seccionJefes(){
   if(soloVista() || !hayServidor()) return '';
@@ -9148,7 +9127,11 @@ function editarEmp(id){
   const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:'', planilla:true};
   const m=document.createElement('div'); m.className='modal side';
   m.onclick = ev=>{ if(ev.target === m) m.remove(); };       // clic fuera cierra la ficha
-  m.innerHTML='<div class="box"><h2>'+(id?'Editar colaborador':'Nuevo colaborador')+'</h2>'+
+  m.innerHTML='<div class="box"><h2>'+(id?esc(nombrePropio(e.nombre)):'Nuevo colaborador')+'</h2>'+
+    (id ? '<div class="rd" style="margin:-4px 0 6px">'+esc(e.cargo||'')+' · '+esc(nombrePropio(e.area))+'</div>' : '')+
+    '<div class="rsub ftabs">'+[['datos','Datos'],['horario','Horario'],['vac','Vacaciones']].concat(id?[['cel','Celular']]:[])
+      .map(([k,t],i)=>'<button type="button" data-ft="'+k+'" class="'+(i?'':'on')+'">'+t+'</button>').join('')+'</div>'+
+    '<div data-fp="datos">'+
     fld('Nombre completo','nm',e.nombre)+
     fld('DNI (con esto ingresa a marcar)','dn',e.dni||'')+
     fld('Cargo','cg',e.cargo)+
@@ -9176,15 +9159,24 @@ function editarEmp(id){
           todasLasSedes().map(x=>'<option value="'+esc(x.id)+'"'+(x.id===(e.sede||'PRINCIPAL')?' selected':'')+'>'+esc(x.nombre)+'</option>').join('')+
           '<option value="TODAS"'+(e.sede==='TODAS'?' selected':'')+'>Cualquiera de las sedes</option>'+
         '</select></div></div>' : '')+
+    '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.5">'+
+      '<b>Teletrabajo:</b> marca ingreso y salida como todos, pero sin validación de ubicación, y sí cuenta en el cuadro diario.<br>'+
+      '<b>Exento:</b> no marca asistencia y no aparece en los reportes.</p>'+
+    '</div><div data-fp="horario" class="hidden">'+
     editorDias(e)+
+    '</div><div data-fp="vac" class="hidden">'+
     '<div class="frow"><div><label>Días de vacaciones asignados</label>'+
         '<input id="vd" type="number" min="0" max="60" value="'+(e.vacDias==null?'':esc(e.vacDias))+'" placeholder="Sin control"></div>'+
       '<div><label>Contar desde</label><input id="vf" type="date" value="'+esc(e.vacDesde||'')+'"></div></div>'+
     (id && saldoVac(e) ? '<p style="font-size:12.5px;margin:-6px 0 10px">Saldo actual: <b>'+saldoVac(e).saldo+
        ' días</b> ('+saldoVac(e).usadas+' usados'+(saldoVac(e).pendientes?', '+saldoVac(e).pendientes+' por aprobar':'')+').</p>' : '')+
-    '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.5">'+
-      '<b>Teletrabajo:</b> marca ingreso y salida como todos, pero sin validación de ubicación, y sí cuenta en el cuadro diario.<br>'+
-      '<b>Exento:</b> no marca asistencia y no aparece en los reportes.</p>'+
+    '<p style="font-size:12px;color:var(--muted);margin:0;line-height:1.5">Déjalo vacío si esta persona no lleva control de vacaciones.</p>'+
+    '</div>'+
+    (id ? '<div data-fp="cel" class="hidden"><label style="font-size:12px;font-weight:650;color:var(--muted)">Celular con el que marca</label>'+
+      '<div style="margin:6px 0 12px">'+celularDe(e)+'</div>'+
+      (DISP[e.id] ? '<button type="button" class="btn btn-sm btn-line" data-lib="'+esc(e.id)+'">Liberar celular</button>'+
+        '<p style="font-size:12px;color:var(--muted);margin:8px 0 0;line-height:1.5">Libéralo si cambió de teléfono o se le borraron los datos: el próximo desde el que marque quedará como el suyo.</p>'
+        : '<p style="font-size:12px;color:var(--muted);margin:0">Todavía no tiene un celular vinculado.</p>')+'</div>' : '')+
     '<div style="display:flex;gap:10px;margin-top:16px">'+
       '<button class="btn btn-line" id="mX">Cancelar</button>'+
       '<button class="btn" id="mS">Guardar</button></div></div>';
@@ -9218,6 +9210,11 @@ function editarEmp(id){
   };
   function fld(l,i,v){ return '<div class="frow"><div><label>'+l+'</label><input id="'+i+'" value="'+esc(v)+'"></div></div>'; }
   conectarEditorDias(m, e);
+  m.querySelectorAll('[data-ft]').forEach(x=>x.onclick=()=>{
+    m.querySelectorAll('[data-ft]').forEach(y=>y.classList.toggle('on', y===x));
+    m.querySelectorAll('[data-fp]').forEach(p=>p.classList.toggle('hidden', p.dataset.fp!==x.dataset.ft));
+  });
+  wireLiberar(m);
 }
 
 /* ---------- DÍAS DE TRABAJO POR PERSONA ----------
@@ -9303,12 +9300,146 @@ function leerEditorDias(m){
    es una cosa que se genera a partir de la configuración —la dirección de la app y
    la del servidor— y se imprime una vez. Tenerlo suelto obligaba a saltar entre dos
    pantallas para comprobar que el enlace del cartel apuntaba a donde debía. */
+let CFG_SEC = 'personal';   // sección del menú lateral
+let PER_SUB = 'col';        // Personal: col · jef · cel
+let PER_FIL = 'act';        // Personal: act · ina · todos
+let PER_BUS = '';           // Personal: texto del buscador
+
+/* Qué bloque va en cada tema. Los bloques se siguen dibujando todos —así el botón
+   de guardar lee todos los campos como siempre—, pero solo se ve el tema elegido. */
+const CFG_MAPA = {
+  horarios: ['Turnos','Sábados que se trabaja','Domingos que se abre','Feriados','Tolerancias','Inicio de operación'],
+  sedes:    ['Modo de uso','Ubicación de la oficina','Otras sedes','Un celular por persona'],
+  avisos:   ['Avisos y WhatsApp'],
+  empresa:  ['Empresa y acceso','Equipos y proyectos'],
+  sistema:  ['Servidor (Google Sheets)','Auditoría','Datos','Dirección de la aplicación','Código QR']
+};
+
 function tabConfiguracion(b){
-  b.innerHTML = '<div id="cfgBloque"></div>'+
-    '<div style="margin:30px 0 22px;border-top:1px solid var(--line)"></div>'+
-    '<div id="qrBloque"></div>';
+  if(soloVista()) CFG_SEC = 'personal';
+  const secs = [['personal','👥','Personal'],['horarios','🕘','Horarios y calendario'],['sedes','📍','Sedes y marcaje'],
+                ['avisos','💬','Avisos y WhatsApp'],['empresa','🏢','Empresa y acceso'],['sistema','⚙️','Servidor y datos']]
+               .filter(x=>!soloVista() || x[0]==='personal');
+  const activos = EMP.filter(e=>e.activo).length;
+  b.innerHTML = '<div class="clay"><nav class="cmenu">'+
+      secs.map(([k,i,t])=>'<button data-sec="'+k+'" class="'+(CFG_SEC===k?'on':'')+'"><i>'+i+'</i>'+t+
+        (k==='personal'?'<small>'+activos+'</small>':'')+'</button>').join('')+
+    '</nav><div class="cmain" id="cMain"></div></div>';
+  b.querySelectorAll('[data-sec]').forEach(x=>x.onclick=()=>{ CFG_SEC = x.dataset.sec; renderTab(); window.scrollTo(0,0); });
+  const main = $('#cMain');
+  if(CFG_SEC==='personal') return tabPersonal(main);
+  main.innerHTML = '<div id="cfgBloque"></div><div id="qrBloque"></div>';
   tabCfg($('#cfgBloque'));
   tabQr($('#qrBloque'));
+  organizarConfig(main);
+}
+
+function organizarConfig(main){
+  const ver = CFG_MAPA[CFG_SEC] || [];
+  main.querySelectorAll('.cfg').forEach(c=>{
+    const h = c.querySelector('h3'); const t = h ? h.textContent.trim() : '';
+    if(ver.indexOf(t) < 0) c.classList.add('hidden');
+  });
+  main.querySelectorAll('.cfgrid').forEach(g=>{
+    if(!Array.from(g.children).some(x=>!x.classList.contains('hidden'))) g.classList.add('hidden');
+  });
+  // Los avisos de arriba (ubicación, modo recepción) son de Sedes
+  if(CFG_SEC!=='sedes') Array.from($('#cfgBloque').children).forEach(x=>{ if(x.classList.contains('alert')) x.classList.add('hidden'); });
+  // Resumen del día: agregar y quitar personas
+  const add = $('#cResAdd'), lista = $('#cResPara');
+  if(add && lista){
+    add.onchange = ()=>{
+      const e = EMP.find(x=>x.id===add.value); if(!e) return;
+      lista.insertAdjacentHTML('beforeend', chipResumen(e));
+      add.querySelector('option[value="'+add.value+'"]').remove(); add.value='';
+    };
+    lista.addEventListener('click', ev=>{ const q = ev.target.closest('[data-qres]'); if(q){ q.parentElement.remove(); sucio(); } });
+  }
+  // Guardar sin buscar el botón: una barra fija al pie
+  const sv = $('#cSave');
+  if(!sv) return;
+  sv.parentElement.classList.add('hidden');
+  if(CFG_SEC==='sistema' && !main.querySelector('#cApi')) return;
+  main.insertAdjacentHTML('beforeend', '<div class="csave" id="cSaveBar"><span id="cSaveTxt">Los cambios de esta sección se guardan con este botón.</span>'+
+    '<span class="grow"></span><button class="btn btn-sm btn-line hidden" id="cDesc">Descartar</button>'+
+    '<button class="btn btn-sm" id="cSave2">Guardar cambios</button></div>');
+  function sucio(){ const bar = $('#cSaveBar'); if(!bar) return; bar.classList.add('sucio');
+    $('#cSaveTxt').textContent = '✏️ Tienes cambios sin guardar'; $('#cDesc').classList.remove('hidden'); }
+  main.addEventListener('input', ev=>{ if(!ev.target.closest('#qrBloque')) sucio(); });
+  main.addEventListener('change', ev=>{ if(!ev.target.closest('#qrBloque')) sucio(); });
+  main.addEventListener('click', ev=>{ const x = ev.target.closest('button,[role=button],.chip,label');
+    if(x && !x.closest('#cSaveBar') && !x.closest('#qrBloque') && !x.closest('.cmenu')) sucio(); });
+  $('#cSave2').onclick = ()=>sv.click();
+  $('#cDesc').onclick = ()=>{ if(confirm('Se descartarán los cambios sin guardar de esta sección.')) renderTab(); };
+}
+
+/* ---------- PERSONAL (dentro de Configuración) ---------- */
+function tabPersonal(b){
+  const subs = [['col','Colaboradores']].concat(soloVista() ? [] : [['jef','Jefes de área'],['cel','Celulares vinculados']]);
+  if(!subs.some(x=>x[0]===PER_SUB)) PER_SUB = 'col';
+  const cab = '<div class="rsub">'+subs.map(([k,t])=>'<button data-psub="'+k+'" class="'+(PER_SUB===k?'on':'')+'">'+t+'</button>').join('')+'</div>';
+  if(PER_SUB==='jef'){
+    b.innerHTML = cab + (seccionJefes() || '<div class="cfg"><p class="hint" style="margin:0">Los jefes de área necesitan el servidor conectado.</p></div>');
+    wireJefes(b);
+  }else if(PER_SUB==='cel'){
+    const gente = EMP.filter(e=>e.activo).sort((a,c)=>a.nombre.localeCompare(c.nombre));
+    b.innerHTML = cab +
+      '<p class="rd" style="margin:0 0 10px">'+(CFG.exigirDispositivo
+        ? 'El control de dispositivo está <b>activado</b>: cada quien marca solo desde su celular. Si alguien cambia de teléfono, libéralo aquí.'
+        : 'El control de dispositivo está <b>desactivado</b> (Configuración → Sedes y marcaje). Los vínculos se registran igual.')+'</p>'+
+      '<div class="rtbl">'+gente.map(e=>'<div class="ptr pcel"><div class="rwho"><b>'+esc(nombrePropio(e.nombre))+'</b><small>'+esc(nombrePropio(e.area))+'</small></div>'+
+        '<div>'+celularDe(e)+'</div><div style="text-align:right">'+(DISP[e.id]?'<button class="btn btn-sm btn-line" data-lib="'+esc(e.id)+'">Liberar</button>':'')+'</div></div>').join('')+'</div>'+
+      seccionSenales();
+    wireLiberar(b); wireSenales(b);
+  }else{
+    const norm = t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    const q = norm(PER_BUS);
+    const nAct = EMP.filter(e=>e.activo).length, nIna = EMP.length - nAct;
+    const lista = EMP.filter(e=>PER_FIL==='todos' || (PER_FIL==='act' ? e.activo : !e.activo))
+      .filter(e=>!q || norm(e.nombre+' '+e.dni+' '+e.area+' '+e.cargo).indexOf(q)>=0)
+      .sort((a,c)=>a.nombre.localeCompare(c.nombre));
+    const tags = e=>
+      (enPlanilla(e) ? '<span class="tag tag-info">PLANILLA</span>' : '<span class="tag tag-neutral">FUERA DE PLANILLA</span>')+
+      (e.modalidad==='REMOTO' ? '<span class="tag tag-warn">REMOTO</span>' : e.modalidad==='EXENTO' ? '<span class="tag tag-neutral">EXENTO</span>' : '')+
+      (!e.activo ? '<span class="tag tag-bad">INACTIVO</span>' : '')+
+      (CFG.usaProyectos ? (e.proyecto ? '<span class="tag tag-neutral">'+esc(nomProyecto(e.proyecto))+'</span>' : '<span class="tag tag-warn">SIN PROYECTO</span>') : '')+
+      (DEV && DEV.empId===e.id ? '<span class="tag tag-ok">ESTE EQUIPO</span>' : '');
+    const falta = e=>{ if(soloVista()) return '';
+      const f = [!normTel(e.dni)?'DNI':'', !e.tel?'celular':'', !e.email?'correo':''].filter(Boolean);
+      return f.length ? '<div class="pfalta">⚠ falta '+f.join(', ').replace(/, ([^,]*)$/,' y $1')+'</div>' : ''; };
+    b.innerHTML = cab + avisoDni() + avisoSinIdentificador() + avisoProyectos() +
+      '<div class="hbar">'+
+        '<input class="hbusca" id="pBus" type="search" placeholder="Buscar por nombre, DNI o área" value="'+esc(PER_BUS)+'">'+
+        '<div class="rseg">'+[['act','Activos '+nAct],['ina','Inactivos '+nIna],['todos','Todos']].map(([k,t])=>
+          '<button data-pfil="'+k+'" class="'+(PER_FIL===k?'on':'')+'">'+t+'</button>').join('')+'</div>'+
+        '<span class="grow"></span>'+
+        (soloVista() ? '' :
+          (CFG.usaProyectos?'<button class="btn btn-sm btn-line" id="eProy">🗂 Asignar proyectos</button>':'')+
+          '<button class="btn btn-sm btn-line" id="eBulk">Cargar DNI desde Excel</button>'+
+          '<button class="btn btn-sm" id="eAdd">+ Agregar</button>')+
+      '</div>'+
+      '<div class="rtbl"><div class="ptr rth"><div>Colaborador</div><div>Área</div><div>Turno</div><div>Datos</div><div></div></div>'+
+      (lista.length ? lista.map(e=>'<div class="ptr'+(soloVista()?' pvista':'')+'" data-emp="'+esc(e.id)+'">'+
+          '<div class="hwho"><span class="hav">'+esc(String(e.nombre||'').trim().split(/\s+/).slice(0,2).map(w=>w.charAt(0)).join(''))+'</span>'+
+            '<div class="hwt"><b>'+esc(nombrePropio(e.nombre))+'</b><small>'+esc(e.cargo||'')+(soloVista()?'':' · DNI '+(normTel(e.dni)?esc(e.dni):'—'))+'</small></div></div>'+
+          '<div class="parea">'+esc(nombrePropio(e.area))+'</div>'+
+          '<div class="pturno">'+(diasPersona(e) ? '<span class="tag tag-info">HORARIO PROPIO</span>' : esc(getTurno(e.turno).nombre))+'</div>'+
+          '<div class="pdat">'+tags(e)+falta(e)+'</div>'+
+          '<div class="rgo">'+(soloVista()?'':'›')+'</div></div>').join('')
+        : '<div class="empty">'+(q ? 'Nadie coincide con “'+esc(PER_BUS)+'”.' : 'No hay colaboradores en esta lista.')+'</div>')+
+      '</div>'+
+      '<p style="font-size:12.5px;color:var(--muted);margin-top:12px;line-height:1.6">'+
+      'El colaborador ingresa con su <b>DNI</b>. Toca a una persona para ver y editar su ficha: datos, horario propio, vacaciones y el celular con el que marca.</p>';
+    const bAdd = $('#eAdd');  if(bAdd)  bAdd.onclick  = ()=>editarEmp(null);
+    const bBul = $('#eBulk'); if(bBul)  bBul.onclick  = cargarDniMasivo;
+    const bProy = $('#eProy'); if(bProy) bProy.onclick = asignarProyectos;
+    if(!soloVista()) b.querySelectorAll('[data-emp]').forEach(x=>x.onclick=()=>editarEmp(x.dataset.emp));
+    b.querySelectorAll('[data-pfil]').forEach(x=>x.onclick=()=>{ PER_FIL = x.dataset.pfil; renderTab(); });
+    const bus = $('#pBus');
+    if(bus) bus.oninput = ()=>{ PER_BUS = bus.value; renderTab();
+      const n = $('#pBus'); if(n){ n.focus(); const L=n.value.length; try{ n.setSelectionRange(L,L); }catch(e){} } };
+  }
+  b.querySelectorAll('[data-psub]').forEach(x=>x.onclick=()=>{ PER_SUB = x.dataset.psub; renderTab(); });
 }
 
 function tabCfg(b){
@@ -9379,7 +9510,14 @@ function tabCfg(b){
     '<button class="btn btn-sm btn-line" id="apiSync">Traer marcajes</button>'+
     '<button class="btn btn-sm btn-line" id="apiBorrar" style="color:var(--danger);border-color:var(--danger)">Borrar marcajes de un rango</button>'+
   '</div>'+
-  '<div class="frow" style="margin-top:14px"><div><label>Correos para avisos de suplantación</label>'+
+  '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
+  (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
+    ' esperando enviarse.</b> Se reintenta solo cada dos minutos.'+
+    '<button class="btn btn-sm btn-line" id="apiCola" style="margin-top:8px">Reintentar ahora</button></div>' : '')+
+  '</div>'+
+
+  '<div class="cfg" style="grid-column:1/-1"><h3>Avisos y WhatsApp</h3>'+
+  '<div class="frow"><div><label>Correos para avisos de suplantación</label>'+
     '<input id="cMail" value="'+esc(CFG.correoAlertas||'')+'" placeholder="uno@empresa.com, otro@empresa.com"></div></div>'+
   '<p style="font-size:12.5px;color:var(--muted);margin:-4px 0 10px;line-height:1.55">'+
     'Te llega un correo <b>al instante</b> cuando un celular marca por otra persona, o cuando alguien '+
@@ -9397,19 +9535,15 @@ function tabCfg(b){
     'El mensaje te llega con el diagnóstico de su celular ya escrito: ubicación, conexión, '+
     'marcajes sin enviar y el último error. Déjalo vacío para no mostrar el botón de WhatsApp.</p>'+
   '<div style="margin-top:14px"><label>Enviar el resumen del día a</label>'+
-    '<div id="cResPara" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px">'+
-      EMP.filter(e=>e.activo).sort((a,b)=>a.nombre.localeCompare(b.nombre)).map(e=>
-        '<label style="display:flex;gap:6px;align-items:center;font-size:13.5px;font-weight:500;cursor:pointer">'+
-          '<input type="checkbox" value="'+esc(e.id)+'"'+(destinatariosResumen().some(x=>x.id===e.id)?' checked':'')+'>'+
-          esc(nombreCortoRes(e.nombre))+(e.tel?'':' <span style="color:var(--danger-text);font-size:11.5px">(sin celular)</span>')+'</label>').join('')+
-    '</div></div>'+
+    // Solo las personas elegidas, como etiquetas; se agregan con el desplegable
+    '<div id="cResPara" class="cres">'+destinatariosResumen().map(chipResumen).join('')+'</div>'+
+    '<select class="sel" id="cResAdd" style="max-width:340px;margin-top:8px"><option value="">+ Agregar persona…</option>'+
+      EMP.filter(e=>e.activo && !destinatariosResumen().some(x=>x.id===e.id)).sort((a,b)=>a.nombre.localeCompare(b.nombre))
+        .map(e=>'<option value="'+esc(e.id)+'">'+esc(nombrePropio(e.nombre))+(e.tel?'':' (sin celular)')+'</option>').join('')+
+    '</select></div>'+
   '<p style="font-size:12.5px;color:var(--muted);margin:6px 0 10px;line-height:1.55">'+
     'En Hoy → <b>Resumen del día</b> aparece un botón de WhatsApp para cada una de estas personas. '+
     'La tarea programada de Cowork se lo envía al mediodía.</p>'+
-  '<div id="apiOut" style="font-size:13px;color:var(--muted);margin-top:12px;line-height:1.6"></div>'+
-  (COLA.length ? '<div class="alert alert-warn" style="margin-top:12px">📤 <b>'+COLA.length+' marcaje'+(COLA.length===1?'':'s')+
-    ' esperando enviarse.</b> Se reintenta solo cada dos minutos.'+
-    '<button class="btn btn-sm btn-line" id="apiCola" style="margin-top:8px">Reintentar ahora</button></div>' : '')+
   '</div>'+
 
   /* ---- Vinculación por dispositivo ---- */
@@ -9461,7 +9595,7 @@ function tabCfg(b){
     '<b>Que sea distinta de la de administrador</b>, o no sirve de nada.</p></div>'+
 
   '<div class="cfg" style="grid-column:1/-1"><h3>Turnos</h3>'+
-  '<p class="hint">Horarios asignables a cada colaborador desde la pestaña Personal.</p>'+
+  '<p class="hint">Horarios asignables a cada colaborador desde Configuración → Personal.</p>'+
   '<div class="tblscroll"><table><thead><tr><th>Turno</th><th>Entrada L-V</th><th>Salida L-V</th><th>Sábado</th><th>Entrada sáb.</th><th>Salida sáb.</th><th>Domingo</th><th>Entrada dom.</th><th>Salida dom.</th></tr></thead><tbody>'+
   CFG.turnos.map((t,i)=>'<tr>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="nombre" value="'+esc(t.nombre)+'" style="width:150px"></td>'+
