@@ -4005,7 +4005,9 @@ function listaIndividualesWhatsApp(pend, f, esHoy){
   const filas = pend.entrada.concat(pend.salida).map(r=>{
     const num = numeroWhatsApp(r.e.tel), txt = mensajeWhatsApp(r, f, esHoy);
     if(!num || !txt) return '';
-    return '<li><a data-nombre="'+esc(r.e.nombre)+'" href="https://web.whatsapp.com/send?phone='+num+
+    // data-tel (9 dígitos) y data-msg permiten enviar desde la búsqueda de WhatsApp Web
+    // sin recargar la página por cada persona, que es lo que más tarda.
+    return '<li><a data-nombre="'+esc(r.e.nombre)+'" data-tel="'+esc(num.replace(/^51(?=9\d{8}$)/,''))+'" data-msg="'+esc(txt)+'" href="https://web.whatsapp.com/send?phone='+num+
            '&text='+encodeURIComponent(txt)+'">'+esc(r.e.nombre)+'</a></li>';
   }).join('');
   const n = (filas.match(/<li>/g)||[]).length;
