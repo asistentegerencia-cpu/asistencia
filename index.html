@@ -170,6 +170,7 @@ p.lead{margin:0 0 18px;color:var(--gray-700);font-size:18px;line-height:1.45}
 .tag-ok{background:var(--ok-bg);color:var(--ok-text)}
 .tag-warn{background:var(--warn-bg);color:var(--warn-text)}
 .tag-bad{background:var(--danger-bg);color:var(--danger-text)}
+.tag-neutral{background:var(--neutral-bg);color:var(--neutral-text)}
 .tag-info{background:var(--navy-100);color:var(--navy-dark)}
 
 /* --- confirmación --- */
@@ -234,6 +235,74 @@ td.name{font-weight:700;white-space:normal;min-width:170px}
 td.num{font-variant-numeric:tabular-nums}
 tr:hover td{background:var(--outside)}
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+/* ---- Pestaña Hoy ---- */
+.hbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.hbar .grow{flex:1}
+.hdia{display:flex;align-items:center;border:2px solid var(--gray-400);border-radius:99px;background:#fff;height:44px}
+.hdia button{width:40px;height:40px;font-size:22px;font-weight:800;color:var(--navy)}
+.hdia button:disabled{color:var(--gray-400);cursor:default}
+.hdia span{font-weight:700;font-size:15px;display:flex;align-items:center;white-space:nowrap}
+.hdia input{border:0;background:none;font-weight:700;font-size:15px;padding:0 2px;width:132px}
+.hbusca{flex:1 1 200px;max-width:320px;height:44px;border:2px solid var(--gray-400);border-radius:99px;padding:0 18px;font-size:15px;background:#fff}
+.hdrop{position:relative}
+.hdrop>summary{list-style:none;cursor:pointer}.hdrop>summary::-webkit-details-marker{display:none}
+.hpop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;background:#fff;border:1px solid var(--card-border);border-radius:18px;box-shadow:var(--sh-modal);padding:12px;display:flex;flex-direction:column;gap:8px;min-width:190px}
+.hbar .hdrop:first-of-type .hpop{left:0;right:auto}
+.hfil{min-width:260px}.hfil .sel{width:100%}
+.hres{display:grid;grid-template-columns:auto 1fr auto;gap:28px;align-items:center;background:var(--surface);border:1px solid var(--card-border);border-radius:var(--r-sm);box-shadow:var(--sh);padding:18px 22px}
+.hbig{display:flex;align-items:baseline;gap:12px}
+.hbig>b{font-size:52px;line-height:1;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.hbig span{font-size:14px;color:var(--muted);font-weight:600;line-height:1.35}.hbig span b{color:var(--text);font-size:15px}
+.hbarra{display:flex;gap:2px;height:16px;border-radius:99px;overflow:hidden;background:var(--gray-300)}
+.hbarra i{display:block;min-width:6px}
+.hleg{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.hleg button{display:flex;align-items:center;gap:7px;border:1px solid var(--card-border);background:#fff;border-radius:99px;padding:6px 12px 6px 10px;font-size:13.5px;font-weight:700}
+.hleg button.on{outline:2px solid var(--navy);background:var(--navy-100)}
+.hleg .hver{color:var(--navy)}
+.hdot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:none}
+.hmini{display:grid;gap:8px;text-align:right}.hmini div{font-size:13px;color:var(--muted);font-weight:600;line-height:1.2}
+.hmini b{display:block;font-size:20px;color:var(--text)}
+.hatn{display:flex;flex-direction:column;gap:10px;margin:14px 0 4px}
+.hatn>*{margin:0!important}
+.hperm>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
+.hperm>summary::-webkit-details-marker{display:none}
+.hbtnx{margin-left:auto;background:#fff;border-radius:99px;padding:4px 12px;font-weight:800;font-size:13px}
+.hgrp{margin-top:18px}
+.hgrp h3{display:flex;align-items:center;gap:8px;font-size:13.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.hplegar{font-size:12px;text-transform:none;letter-spacing:0;color:var(--navy);font-weight:700;text-decoration:underline}
+.hlist{background:var(--surface);border:1px solid var(--card-border);border-radius:var(--r-sm);box-shadow:var(--sh)}
+.hrow{display:grid;grid-template-columns:minmax(220px,2.4fr) repeat(3,minmax(72px,.8fr)) minmax(150px,1.5fr) 150px;gap:12px;align-items:center;padding:10px 16px;border-top:1px solid var(--line);font-size:14px}
+.hlist>.hrow:first-child{border-top:0}
+.hhead{font-size:11.5px;font-weight:800;letter-spacing:.05em;color:var(--muted);text-transform:uppercase;background:var(--surface-2);padding:9px 16px;border-radius:var(--r-sm) var(--r-sm) 0 0}
+.htimes{display:contents}
+.hwho{display:flex;gap:10px;align-items:center;min-width:0}
+.hav{width:34px;height:34px;border-radius:50%;background:var(--navy-100);color:var(--navy);display:grid;place-items:center;font-weight:800;font-size:13px;flex:none}
+.hwt{min-width:0}.hwt b{display:block;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hwt small{display:block;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hrem{font-size:11.5px;color:var(--muted);font-weight:700}
+.ht b{font-size:15px;font-variant-numeric:tabular-nums}.ht small{display:block;color:var(--gray-600);font-size:11.5px;font-weight:600}
+.ht .tag{font-size:10px}
+.hl{display:none}
+.hst{display:flex;flex-wrap:wrap;gap:5px}.hst .tag{white-space:nowrap}
+.hacc{display:flex;gap:6px;justify-content:flex-end;align-items:center}
+.hacc .btn-wa{min-height:34px;padding:4px 12px;font-size:13px}
+.hmenu>summary{width:34px;height:34px;border-radius:50%;border:1px solid var(--card-border);display:grid;place-items:center;font-weight:800}
+.hmostrar{width:100%;padding:14px;color:var(--navy);font-weight:800;font-size:14px}
+@media (max-width:820px){
+  .hres{grid-template-columns:1fr;gap:14px;padding:16px}
+  .hmini{grid-template-columns:1fr 1fr;text-align:left}
+  .hbusca{max-width:none}
+  .hhead{display:none}
+  .hrow{grid-template-columns:minmax(0,1fr) auto;gap:6px 8px;padding:12px}
+  .hwho{grid-column:1}.hst{grid-column:2;grid-row:1;justify-content:flex-end}
+  .htimes{grid-column:1;grid-row:2;display:flex;flex-wrap:wrap;gap:4px 12px;padding-left:44px;min-width:0;font-size:13px}
+  .ht{display:inline-flex;align-items:baseline;gap:3px}.ht small{display:none}.ht b{font-size:14px}
+  .hl{display:inline;color:var(--muted);font-size:12px;font-weight:600}
+  .hacc{grid-column:2;grid-row:2}
+  .hst .tag{font-size:11px;padding:3px 8px}
+  /* En el celular no se muestran los guiones: a quien falta le basta "debía 09:00" */
+  .ht.vacio{display:none}.ht.hent.vacio{display:inline-flex}.ht.hent.vacio small{display:inline;font-size:12px}
+}
 .toolbar .grow{flex:1}
 .sel{height:44px;padding:0 16px;border:2px solid var(--gray-400);border-radius:999px;background:#fff;font-size:15px;font-weight:600}
 input.sel{padding:0 16px}
@@ -5944,6 +6013,7 @@ function boot(){
    PANEL DE ADMINISTRACIÓN
    ============================================================ */
 let TAB='hoy';
+let HOY_GRUPO = '', HOY_BUSCA = '', HOY_ABIERTO = {};   // pestaña Hoy: filtro rápido, buscador y grupos abiertos
 
 /* ---------- ROLES ----------
    'admin' → administración: ve y edita todo
@@ -6458,11 +6528,11 @@ function avisoPermisosPendientes(){
     '</div>';
   };
 
-  return '<div class="alert alert-warn" style="margin-bottom:16px">'+
-    '<b>'+pend.length+' permiso'+(pend.length===1?'':'s')+' sin responder</b>'+
-    (soloVista() ? '' : ' — se resuelve desde aquí, no hace falta ir a otra pestaña.')+
+  return '<details class="alert alert-warn hperm">'+
+    '<summary>📝 <b>'+pend.length+' permiso'+(pend.length===1?'':'s')+' por responder</b>'+
+      '<span class="hbtnx">'+(soloVista()?'Ver':'Revisar')+' ▾</span></summary>'+
     pend.map(fila).join('')+
-  '</div>';
+  '</details>';
 }
 
 function tabHoy(b){
@@ -6493,101 +6563,142 @@ function tabHoy(b){
       '<button class="btn btn-sm" id="hVolver">Volver a hoy</button>'+
     '</div>';
 
-  b.innerHTML = avisoOtroDia + avisoPermisosPendientes() + avisoAlertas() + avisoDemo() + avisoAnomalias(f,f) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
+  // ---- Grupos por estado: lo urgente arriba ----
+  const GRUPOS = [
+    {k:'falta', t:'Faltan',                 c:'var(--danger)',   f:r=>r.clase==='SIN_MARCAR' || r.clase==='FALTA'},
+    {k:'tarde', t:'Llegaron tarde',         c:'var(--warn)',     f:r=>r.clase==='ASISTIO' && r.tard>0},
+    {k:'ok',    t:'A tiempo',               c:'var(--ok)',       f:r=>r.clase==='ASISTIO'},
+    {k:'pend',  t:'Por llegar',             c:'var(--gray-500)', f:r=>r.clase==='PENDIENTE'},
+    {k:'perm',  t:'Con permiso o comisión', c:'var(--accent)',   f:r=>r.clase==='JUSTIFICADA' || r.clase==='COMISION'},
+    {k:'otro',  t:'No laborable',           c:'var(--gray-400)', f:()=>true}
+  ];
+  const norm = t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  const q = norm(HOY_BUSCA);
+  const visibles = q ? filas.filter(r=>norm(r.e.nombre+' '+r.e.area+' '+r.e.cargo).indexOf(q)>=0) : filas;
+  GRUPOS.forEach(g=>g.rows=[]);
+  visibles.forEach(r=>{ const g = GRUPOS.find(g=>g.f(r)); g.rows.push(r); });
+  const cuentas = {}; GRUPOS.forEach(g=>cuentas[g.k]=0);
+  filas.forEach(r=>{ cuentas[GRUPOS.find(g=>g.f(r)).k]++; });
+  if(HOY_GRUPO && !cuentas[HOY_GRUPO]) HOY_GRUPO = '';
+
+  const nFil = [FLT.turno, FLT.area, FLT.sede, FLT.planilla, CFG.usaProyectos?FLT.proyecto:''].filter(Boolean).length;
+  const barra =
+    '<div class="hbar">'+
+      '<div class="hdia"><button id="hAnt" aria-label="Día anterior">‹</button>'+
+        '<span>'+(esHoy?'Hoy · ':'')+'<input type="date" id="hDia" value="'+f+'" max="'+hoy+'"></span>'+
+        '<button id="hSig" aria-label="Día siguiente"'+(esHoy?' disabled':'')+'>›</button></div>'+
+      (esHoy?'':'<button class="btn btn-sm btn-line" id="hHoy">Volver a hoy</button>')+
+      '<input class="hbusca" id="hBusca" type="search" placeholder="Buscar persona o área" value="'+esc(HOY_BUSCA)+'">'+
+      '<details class="hdrop"><summary class="btn btn-sm btn-line">Filtros'+(nFil?' ('+nFil+')':'')+' ▾</summary>'+
+        '<div class="hpop hfil">'+htmlFiltros('h')+'</div></details>'+
+      '<span class="grow"></span>'+
+      (esHoy ? '<button class="btn btn-sm btn-line" id="resHoy">Resumen del día</button>' : '')+
+      '<details class="hdrop"><summary class="btn btn-sm btn-line">⋯ Más</summary><div class="hpop hmas">'+
+        '<button class="btn btn-sm btn-line" id="xHoy">Descargar Excel</button>'+
+        '<button class="btn btn-sm btn-line" id="rHoy">Actualizar</button></div></details>'+
+      (soloVista()?'':'<button class="btn btn-sm" id="mHoy">Registrar marcaje</button>')+
+    '</div>';
+
+  const segs = GRUPOS.filter(g=>g.k!=='otro' && cuentas[g.k]);
+  const resumen =
+    '<div class="hres">'+
+      '<div class="hbig"><b style="color:'+(pct==null?'var(--muted)':pct>=90?'var(--ok-text)':pct>=75?'#8a4f00':'var(--danger-text)')+'">'+
+        (pct==null?'—':pct+'%')+'</b><span>asistencia<br><b>'+presentes+' de '+programados+'</b> presentes</span></div>'+
+      '<div class="hmid"><div class="hbarra">'+
+        (segs.length ? segs.map(g=>'<i style="flex:'+cuentas[g.k]+';background:'+g.c+'" title="'+esc(g.t)+': '+cuentas[g.k]+'"></i>').join('') : '<i style="flex:1;background:var(--gray-300)"></i>')+
+        '</div><div class="hleg">'+
+        segs.map(g=>'<button data-g="'+g.k+'" class="'+(HOY_GRUPO===g.k?'on':'')+'"><span class="hdot" style="background:'+g.c+'"></span>'+
+          esc(g.t)+' <b>'+cuentas[g.k]+'</b></button>').join('')+
+        (HOY_GRUPO ? '<button data-g="" class="hver">Ver todos ✕</button>' : '')+
+      '</div></div>'+
+      '<div class="hmini"><div><b>'+minTot+' min</b>perdidos por tardanza</div>'+
+        '<div><b>'+remotos.length+'</b>en teletrabajo</div></div>'+
+    '</div>';
+
+  const cabecera = '<div class="hrow hhead"><div>Colaborador</div><div>Entrada</div><div>Salida</div><div>Horas</div><div>Estado</div><div></div></div>';
+  const grupos = GRUPOS.filter(g=>g.rows.length && (!HOY_GRUPO || HOY_GRUPO===g.k)).map(g=>{
+    const plegado = (g.k==='ok' || g.k==='otro') && !HOY_ABIERTO[g.k] && !q && HOY_GRUPO!==g.k;
+    return '<section class="hgrp"><h3><span class="hdot" style="background:'+g.c+'"></span>'+esc(g.t)+' · '+g.rows.length+
+        (!plegado && (g.k==='ok'||g.k==='otro') && !q && HOY_GRUPO!==g.k ? ' <button class="hplegar" data-plegar="'+g.k+'">ocultar</button>' : '')+'</h3>'+
+      '<div class="hlist">'+(plegado
+        ? '<button class="hmostrar" data-abrir="'+g.k+'">Mostrar '+(g.rows.length===1?'a la persona':'las '+g.rows.length+' personas')+' ▾</button>'
+        : cabecera + g.rows.map(filaHoy).join(''))+
+      '</div></section>';
+  }).join('');
+
+  b.innerHTML = avisoOtroDia + avisoAlertas() + avisoDemo() + avisoAnomalias(f,f) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
-    '<div class="kpis">'+
-      kpi('Asistencia del día', pct==null?'—':pct+'%', pct==null?'':(pct>=90?'k-ok':pct>=75?'k-warn':'k-bad'))+
-      kpi('Presentes', presentes+' / '+programados, 'k-ok')+
-      kpi('Ausentes', ausentes, ausentes?'k-bad':'k-ok')+
-      kpi('Tardanzas del día', tardanzas, tardanzas?'k-warn':'k-ok')+
-      kpi('Minutos perdidos', minTot, minTot?'k-warn':'k-ok')+
-    '</div>'+
-    '<div class="toolbar">'+
-      '<div>'+lbl('Día')+'<input type="date" class="sel" id="hDia" value="'+f+'" max="'+hoy+'"></div>'+
-      '<div style="align-self:flex-end;display:flex;gap:8px">'+
-        '<button class="btn btn-sm btn-line" id="hAnt">‹ Anterior</button>'+
-        '<button class="btn btn-sm btn-line" id="hSig"'+(esHoy?' disabled':'')+'>Siguiente ›</button>'+
-        (esHoy?'':'<button class="btn btn-sm btn-line" id="hHoy">Hoy</button>')+
-      '</div>'+
-      htmlFiltros('h') +'<div class="grow"></div>'+
-      (soloVista()?'':'<button class="btn btn-sm" id="mHoy" style="align-self:flex-end">Registrar marcaje</button>')+
-      (esHoy ? '<button class="btn btn-sm btn-line" id="resHoy" style="align-self:flex-end">Resumen del día</button>' : '')+
-      '<button class="btn btn-sm btn-line" id="xHoy" style="align-self:flex-end">Descargar Excel</button>'+
-      '<button class="btn btn-sm btn-line" id="rHoy" style="align-self:flex-end">Actualizar</button></div>'+
-    bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy)+
-    bloqueAvisosWhatsApp(filas, f, esHoy)+
-    '<div class="tblwrap"><div class="tblscroll"><table class="tcards"><thead><tr>'+
-      '<th>Colaborador</th>'+(CFG.usaProyectos?'<th>Proyecto</th>':'')+'<th>Área</th>'+
-      '<th>Entrada</th><th>Salida</th><th>Horas trabajadas</th>'+
-      '<th>Estado</th><th>Tard.</th><th>Modalidad</th><th>Zona</th>'+(soloVista()?'':'<th></th>')+
-    '</tr></thead><tbody>'+
-    (filas.length ? bloquesPlanilla(filas) : '<tr><td colspan="'+((CFG.usaProyectos?10:9)+(soloVista()?0:1))+'"><div class="empty">Ningún colaborador coincide con los filtros.</div></td></tr>')+
-    '</tbody></table></div></div>'+
+    barra + resumen +
+    '<div class="hatn">'+bloqueAvisosWhatsApp(filas, f, esHoy)+avisoPermisosPendientes()+'</div>'+
+    (grupos || '<div class="empty">'+(q ? 'Nadie coincide con “'+esc(HOY_BUSCA)+'”.' : 'Ningún colaborador coincide con los filtros.')+'</div>')+
     notaExentos();
 
   // --- fin del innerHTML de tabHoy ---
+  function titulo(t){ return String(t||'').toLowerCase().replace(/(^|\s)\S/g, c=>c.toUpperCase()); }
   function filaHoy(r){
       const j=r.j;
       const t = jornadaTrabajada(r, f, ahora);
-      const perm = !t.hay ? '—'
-        : t.enCurso
-          ? '<span style="color:var(--muted)">'+min2hhmm(t.min)+'</span>'+
-            '<div style="font-size:10.5px;color:var(--muted);font-weight:400">va trabajando</div>'
-          : '<b>'+min2hhmm(t.min)+'</b>';
-      const zona = r.e.modalidad==='REMOTO' ? '<span class="tag tag-ok">REMOTO</span>'
-                 : j.entrada && !debiaEstarEnOficina(r.e, j.entrada.fecha, j.entrada.hora) ? '<span class="tag tag-ok">CASA</span>'
-                 : j.entrada ? (j.entrada.fueraZona ? '<span class="tag tag-bad">FUERA</span>'
-                   : j.entrada.gps==='dentro' ? '<span class="tag tag-ok">'+
-                       (j.entrada.sede && j.entrada.sede!=='PRINCIPAL' ? esc(nombreSede(j.entrada.sede)) : 'OK')+'</span>'
-                   : '<span class="tag tag-warn">S/GPS</span>') : '—';
-      const salTxt = r.sal.hora!=='—' ? '<b>'+r.sal.hora+'</b>'
-                   : r.sal.estado ? '<span class="tag '+r.sal.cls+'">'+r.sal.estado+'</span>' : '—';
-      return '<tr>'+
-        '<td class="name"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'+
-          '<div>'+esc(r.e.nombre)+'<div style="font-size:13px;color:var(--gray-700);font-weight:500">'+esc(r.e.cargo)+
-          '<span class="tc-only"> · '+esc(r.e.area)+'</span></div></div>'+
-          '<span class="tag '+r.cls+' tc-only">'+esc(r.etiqueta)+'</span></div></td>'+
-        (CFG.usaProyectos?'<td class="tc-hide">'+(r.e.proyecto?esc(nomProyecto(r.e.proyecto)):'<span style="color:var(--muted)">—</span>')+'</td>':'')+
-        '<td class="tc-hide">'+esc(r.e.area)+'</td>'+
-        '<td class="num" data-l="Entrada" style="font-weight:700">'+(j.entrada?j.entrada.hora:'—')+
-          (j.entrada&&j.entrada.origen&&j.entrada.origen!=='APP'?' <span class="tag tag-warn" style="font-size:9px">'+j.entrada.origen+'</span>':'')+
-          esperada(r.hor && r.hor.in)+'</td>'+
-        '<td class="num" data-l="Salida">'+salTxt+ esperada(r.hor && r.hor.out) +'</td>'+
-        '<td class="num" data-l="Horas">'+perm+'</td>'+
-        '<td class="tc-hide"><span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span>'+
-          (r.porValidar ? ' <span class="tag tag-warn" style="font-size:9px">POR VALIDAR</span>' : '')+
-          (r.prog && r.prog.estado==='VALIDADO' ? ' <span class="tag tag-ok" style="font-size:9px">VALIDADO</span>' : '')+
-          (r.permiso ? ' <span class="tag tag-ok" style="font-size:9px" title="'+
-            esc(tipoReal(r.permiso).nombre+' · '+motivoSinMarca(r.permiso)+
-                (r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">'+
-            esc(etiquetaPermiso(r.permiso.tipo))+'</span>' : '')+'</td>'+
-        '<td class="num" data-l="Tard." style="'+(r.tard?'font-weight:800;color:'+(r.tard>(CFG.umbralGrave||30)?'var(--danger-text)':'#8a4f00'):'')+'">'+(r.tard? r.tard+"'":'—')+'</td>'+
-        '<td data-l="Modalidad">'+(r.e.modalidad==='REMOTO'?'Teletrabajo':'Presencial')+'</td>'+
-        '<td data-l="Zona">'+zona+'</td>'+
-        (soloVista()?'':'<td class="tc-wide"><div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center">'+
-          botonWhatsApp(r, f, esHoy)+
-          ((j.entrada||j.salida)
-          ? '<button class="btn btn-sm btn-line" data-corr="'+esc(r.e.id)+'">Corregir</button>'
-          : '')+'</div></td>')+'</tr>';
+      const horas = !t.hay ? '—' : min2hhmm(t.min);
+      const remoto = r.e.modalidad==='REMOTO';
+      const iniciales = String(r.e.nombre||'').trim().split(/\s+/).slice(0,2).map(w=>w.charAt(0)).join('');
+      // Estado en una sola etiqueta
+      let est;
+      if(r.clase==='SIN_MARCAR' || r.clase==='FALTA') est = '<span class="tag tag-bad">'+(r.clase==='FALTA'?'FALTA':'SIN MARCAR')+'</span>';
+      else if(r.clase==='PENDIENTE') est = '<span class="tag tag-neutral">POR LLEGAR</span>';
+      else if(r.clase==='ASISTIO' && r.tard>0) est = '<span class="tag '+(r.tard>(CFG.umbralGrave||30)?'tag-bad':'tag-warn')+'">TARDE '+r.tard+'′</span>';
+      else est = '<span class="tag '+r.cls+'">'+esc(r.etiqueta)+'</span>';
+      // Lo demás solo aparece cuando dice algo
+      const extra =
+        (r.porValidar ? '<span class="tag tag-warn">POR VALIDAR</span>' : '')+
+        (r.prog && r.prog.estado==='VALIDADO' ? '<span class="tag tag-ok">VALIDADO</span>' : '')+
+        (r.permiso && r.clase!=='JUSTIFICADA' ? '<span class="tag tag-ok" title="'+
+          esc(tipoReal(r.permiso).nombre+' · '+motivoSinMarca(r.permiso)+(r.permiso.resueltoPor?' · autorizó '+r.permiso.resueltoPor:''))+'">'+
+          esc(etiquetaPermiso(r.permiso.tipo))+'</span>' : '')+
+        (!remoto && j.entrada && !debiaEstarEnOficina(r.e, j.entrada.fecha, j.entrada.hora) ? '<span class="tag tag-ok">CASA</span>'
+          : !remoto && j.entrada && j.entrada.fueraZona ? '<span class="tag tag-bad">FUERA</span>'
+          : !remoto && j.entrada && j.entrada.gps && j.entrada.gps!=='dentro' && j.entrada.gps!=='off' ? '<span class="tag tag-warn">S/GPS</span>'
+          : j.entrada && j.entrada.sede && j.entrada.sede!=='PRINCIPAL' ? '<span class="tag tag-ok">'+esc(nombreSede(j.entrada.sede))+'</span>' : '');
+      const salHora = r.sal.hora!=='—' ? '<b>'+r.sal.hora+'</b>'
+                    : (r.sal.estado && r.sal.estado!=='EN JORNADA') ? '<span class="tag '+r.sal.cls+'">'+esc(r.sal.estado)+'</span>' : '<b>—</b>';
+      const a = r.aus || {};
+      const sub = esc(r.e.cargo||'')+' · '+esc(titulo(r.e.area))+
+        (CFG.usaProyectos && r.e.proyecto ? ' · '+esc(nomProyecto(r.e.proyecto)) : '')+
+        (r.clase==='COMISION' && (a.lugar||a.actividad) ? ' · 📍 '+esc(a.lugar||a.actividad) : '');
+      const menu = (!soloVista() && (j.entrada||j.salida))
+        ? '<details class="hdrop hmenu"><summary aria-label="Más acciones">⋯</summary><div class="hpop">'+
+            '<button class="btn btn-sm btn-line" data-corr="'+esc(r.e.id)+'">Corregir marcajes</button></div></details>' : '';
+      return '<div class="hrow">'+
+        '<div class="hwho"><span class="hav">'+esc(iniciales)+'</span><div class="hwt">'+
+          '<b>'+esc(titulo(r.e.nombre))+(remoto?' <span class="hrem">🏠 remoto</span>':'')+'</b><small>'+sub+'</small></div></div>'+
+        '<div class="htimes">'+
+          '<div class="ht hent'+(j.entrada?'':' vacio')+'"><span class="hl">Entrada</span><b>'+(j.entrada?j.entrada.hora:'—')+'</b>'+
+            (j.entrada&&j.entrada.origen&&j.entrada.origen!=='APP'?' <span class="tag tag-warn" style="font-size:9px">'+esc(j.entrada.origen)+'</span>':'')+
+            '<small>'+(r.hor&&r.hor.in?'debía '+esc(r.hor.in):'')+'</small></div>'+
+          '<div class="ht'+(salHora==='<b>—</b>'?' vacio':'')+'"><span class="hl">Salida</span>'+salHora+'<small>'+(r.hor&&r.hor.out?'sale '+esc(r.hor.out):'')+'</small></div>'+
+          '<div class="ht'+(horas==='—'?' vacio':'')+'"><span class="hl">Horas</span><b>'+horas+'</b><small>'+(t.hay&&t.enCurso?'en curso':'')+'</small></div>'+
+        '</div>'+
+        '<div class="hst">'+est+extra+'</div>'+
+        '<div class="hacc">'+(soloVista()?'':botonWhatsApp(r, f, esHoy))+menu+'</div>'+
+      '</div>';
   }
 
-  /* Dos grupos: en planilla y fuera. Si todos están en el mismo, no se parte la
-     tabla — una cabecera de grupo sobre una lista homogénea solo estorba. */
-  function bloquesPlanilla(lista){
-    const dentro = lista.filter(r=>enPlanilla(r.e));
-    const fuera  = lista.filter(r=>!enPlanilla(r.e));
-    if(!dentro.length || !fuera.length) return lista.map(filaHoy).join('');
-
-    const cols = (CFG.usaProyectos?10:9)+(soloVista()?0:1);
-    const cabecera = (txt, n, cls)=>
-      '<tr><td colspan="'+cols+'" style="background:var(--surface-2);font-weight:750;'+
-      'font-size:12px;letter-spacing:.04em;color:var(--muted);padding:9px 12px">'+
-      esc(txt)+' · '+n+'</td></tr>';
-
-    return cabecera('EN PLANILLA', dentro.length)+ dentro.map(filaHoy).join('')+
-           cabecera('FUERA DE PLANILLA', fuera.length)+ fuera.map(filaHoy).join('');
+  // Filtros rápidos, grupos plegados y buscador
+  b.querySelectorAll('[data-g]').forEach(x=>x.onclick=()=>{ HOY_GRUPO = (HOY_GRUPO===x.dataset.g ? '' : x.dataset.g); renderTab(); });
+  b.querySelectorAll('[data-abrir]').forEach(x=>x.onclick=()=>{ HOY_ABIERTO[x.dataset.abrir]=true; renderTab(); });
+  b.querySelectorAll('[data-plegar]').forEach(x=>x.onclick=()=>{ HOY_ABIERTO[x.dataset.plegar]=false; renderTab(); });
+  const bus = $('#hBusca');
+  if(bus){
+    bus.oninput = ()=>{ HOY_BUSCA = bus.value; renderTab();
+      const n = $('#hBusca'); if(n){ n.focus(); const L=n.value.length; try{ n.setSelectionRange(L,L); }catch(e){} } };
   }
-
+  // Un menú abierto a la vez; se cierra al tocar fuera
+  b.querySelectorAll('details.hdrop').forEach(d=>d.addEventListener('toggle', ()=>{
+    if(d.open) b.querySelectorAll('details.hdrop[open]').forEach(o=>{ if(o!==d) o.open=false; });
+  }));
+  if(!window.__hdropCierre){
+    window.__hdropCierre = true;
+    document.addEventListener('click', e=>{ if(!e.target.closest('details.hdrop')) document.querySelectorAll('details.hdrop[open]').forEach(o=>o.open=false); });
+  }
   const resB = $('#resHoy');
   if(resB) resB.onclick = ()=>verResumenDia();
   const waUno = $('#waUno');
@@ -6637,47 +6748,6 @@ function tabHoy(b){
   if(bSig && !bSig.disabled) bSig.onclick = ()=>{ const d = new Date(f+'T12:00:00'); d.setDate(d.getDate()+1); irA(d); };
   const bHoy = $('#hHoy');   if(bHoy)   bHoy.onclick   = ()=>{ HOY_VER=''; renderTab(); };
   const bVol = $('#hVolver'); if(bVol)  bVol.onclick   = ()=>{ HOY_VER=''; renderTab(); };
-}
-
-/* Estado de la plantilla: quién está en teletrabajo y quién en comisión de servicio */
-function bloqueEstadoPlantilla(remotos, comisiones, justif, pendientes, esHoy){
-  const cuando = esHoy === false ? 'ese día' : 'hoy';
-  if(!remotos.length && !comisiones.length && !justif.length && !pendientes) return '';
-  const card = (titulo, items, vacio)=>
-    '<div class="cfg" style="padding:16px 18px">'+
-      '<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:10px">'+titulo+'</h3>'+
-      (items.length ? items : '<p style="font-size:13px;color:var(--muted);margin:0">'+vacio+'</p>')+
-    '</div>';
-
-  const remHtml = remotos.map(r=>
-    '<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:13.5px">'+
-      '<span><b>'+esc(r.e.nombre)+'</b></span>'+
-      '<span>'+(r.j.entrada ? r.j.entrada.hora+' <span class="tag '+r.cls+'" style="font-size:9px">'+esc(r.etiqueta)+'</span>'
-                            : '<span class="tag '+r.cls+'" style="font-size:9px">'+esc(r.etiqueta)+'</span>')+'</span>'+
-    '</div>').join('');
-
-  const comHtml = comisiones.map(r=>{
-    const a=r.aus||{};
-    return '<div style="padding:8px 0;border-top:1px solid var(--line);font-size:13.5px">'+
-      '<b>'+esc(r.e.nombre)+'</b>'+
-      '<div style="font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:2px">'+
-        (a.lugar?'📍 '+esc(a.lugar)+'<br>':'')+
-        (a.actividad?esc(a.actividad)+'<br>':'')+
-        (a.motivo&&!a.actividad?esc(a.motivo)+'<br>':'')+
-        (a.autorizadoPor?'Autorizado por '+esc(a.autorizadoPor):'<span class="tag tag-warn" style="font-size:9px">SIN AUTORIZACIÓN REGISTRADA</span>')+
-      '</div></div>';
-  }).join('');
-
-  const jusHtml = justif.map(r=>
-    '<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:13.5px">'+
-      '<span><b>'+esc(r.e.nombre)+'</b></span><span class="tag tag-warn" style="font-size:9px">'+esc(r.etiqueta)+'</span>'+
-    '</div>').join('');
-
-  return '<div class="cfgrid" style="margin-bottom:18px">'+
-    card('Teletrabajo · '+remotos.length, remHtml, 'Nadie en teletrabajo.')+
-    card('Comisión de servicio · '+comisiones.length, comHtml, 'Nadie en comisión '+cuando+'.')+
-    card('Ausencias justificadas · '+justif.length, jusHtml, 'Ninguna registrada para '+cuando+'.')+
-  '</div>';
 }
 
 function notaExentos(){
