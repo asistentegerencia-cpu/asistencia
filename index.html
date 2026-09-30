@@ -3721,15 +3721,15 @@ function numeroWhatsApp(t){
    que avisar a esa persona ese día. */
 /* ¿Hay que avisarle que marque su salida?
 
-   Hoy: UNA sola vez, en la hora que sigue a su salida (de +5 a +65 minutos). La
-   tarea programada corre cada hora en punto y cinco, así que a cada persona le
-   toca exactamente una pasada, la más cercana a su hora. Quien se queda
-   trabajando recibe un solo mensaje, que le dice que lo ignore y marque al
-   terminar; no se le vuelve a escribir cada hora. Si igual se olvida, al día
-   siguiente la app le pide la corrección.
+   Hoy: UNA sola vez, justo a su hora de salida (desde 2 minutos antes hasta 58
+   después). La tarea programada corre a la hora en punto (18:00, 19:00…), así que
+   a cada persona le toca exactamente una pasada: la de su hora. El mensaje es un
+   recordatorio general ("no olvides marcar tu salida") y le llega solo a quien
+   tiene entrada y todavía no marcó la salida. Quien se queda trabajando no recibe
+   otro; si igual se olvida, al día siguiente la app le pide la corrección.
 
    Días anteriores (mirando el tablero de otro día): los que quedaron sin salida. */
-const AVISO_SALIDA_DESDE = 5, AVISO_SALIDA_HASTA = 65;
+const AVISO_SALIDA_DESDE = -2, AVISO_SALIDA_HASTA = 58;
 function salidaParaAviso(r, esHoy, manual){
   if(!r.sal || r.sal.reg || r.sal.hora !== '—') return false;
   if(!esHoy) return r.sal.estado==='NO REGISTRADA';
@@ -3749,10 +3749,9 @@ function mensajeWhatsApp(r, f, esHoy){
       '. Si ya llegaste, márcala en la app de asistencia. Si hoy no vienes o llegas tarde, pide el permiso desde la app. Gracias.';
   if(salidaParaAviso(r, esHoy, true)){
     if(esHoy)
-      return 'Hola '+nombre+', tu jornada de hoy terminaba'+
-        (r.hor && r.hor.out ? ' a las '+r.hor.out : '')+
-        ' y no has marcado tu SALIDA. Si ya te fuiste, márcala ahora en la app de asistencia (desde donde estés, igual queda registrada). '+
-        'Si todavía sigues trabajando, ignora este mensaje y márcala al terminar. Gracias.';
+      return '⏰ Hola '+nombre+', es hora de salida'+(r.hor && r.hor.out ? ' ('+r.hor.out+')' : '')+
+        '. No olvides marcar tu SALIDA en la app de asistencia antes de irte. '+
+        'Si te quedas un rato más, márcala al terminar. ¡Gracias y buen descanso!';
     return 'Hola '+nombre+', no marcaste tu SALIDA del '+fechaLarga(new Date(f+'T12:00:00'))+
       '. Entra a la app de asistencia y toca "Solicitar corrección" con la hora a la que saliste. Gracias.';
   }
