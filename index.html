@@ -4008,7 +4008,8 @@ function listaIndividualesWhatsApp(pend, f, esHoy){
     return '<li><a data-nombre="'+esc(r.e.nombre)+'" href="https://web.whatsapp.com/send?phone='+num+
            '&text='+encodeURIComponent(txt)+'">'+esc(r.e.nombre)+'</a></li>';
   }).join('');
-  return '<ul id="waIndividuales" hidden>'+filas+'</ul>';
+  const n = (filas.match(/<li>/g)||[]).length;
+  return '<ul id="waIndividuales" data-total="'+n+'" hidden>'+filas+'</ul>';
 }
 
 /* Lista con un botón por persona. Cada envío la marca como hecha, así se avanza
@@ -6721,7 +6722,9 @@ function tabHoy(b){
   b.innerHTML = avisoOtroDia + avisoAlertas() + avisoDemo() + avisoAnomalias(f,f) + avisoPadronHuerfano() + avisoServidor() + avisoCorreoAlertas() + avisoInicioOperacion(null) + avisoUbicacion() + avisoSinIdentificador() + avisoRecepcionRemotos() + avisoProyectos() +
     (fer ? '<div class="alert alert-ok" style="margin-bottom:16px">📅 <b>'+esc(fer.nombre)+'</b> — feriado. Hoy no se exige asistencia a nadie.</div>' : '')+
     barra + resumen +
-    '<div class="hatn">'+bloqueAvisosWhatsApp(filas, f, esHoy)+avisoPermisosPendientes()+'</div>'+
+    // #waIndividuales está siempre: vacía (data-total="0") si no hay a quién avisar.
+    // Así la tarea de Cowork distingue "nadie pendiente" de "el panel cambió".
+    '<div class="hatn">'+(bloqueAvisosWhatsApp(filas, f, esHoy) || '<ul id="waIndividuales" data-total="0" hidden></ul>')+avisoPermisosPendientes()+'</div>'+
     (grupos || '<div class="empty">'+(q ? 'Nadie coincide con “'+esc(HOY_BUSCA)+'”.' : 'Ningún colaborador coincide con los filtros.')+'</div>')+
     notaExentos();
 
