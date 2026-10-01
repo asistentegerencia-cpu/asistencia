@@ -4905,9 +4905,12 @@ async function fotoComprimida(file){
    en memoria: al cerrar la app hay que volver a escribirlo. */
 let JEFE_PIN = '';
 
+let JF_VISTA = 'perm';     // pestaña del panel del jefe: permisos o programación
+let JF_SEM = '', JF_DIA = '';
+
 function panelJefe(emp){
   const m = document.createElement('div'); m.className = 'modal';
-  m.innerHTML = '<div class="box" style="max-height:88vh;overflow:auto"><h2>Permisos de mi equipo</h2><div id="jfCuerpo"></div>'+
+  m.innerHTML = '<div class="box" style="max-height:88vh;overflow:auto"><h2>Mi equipo</h2><div id="jfCuerpo"></div>'+
     '<button class="btn btn-line" id="jfX" style="width:100%;margin-top:14px">Cerrar</button></div>';
   document.body.appendChild(m);
   m.querySelector('#jfX').onclick = ()=>m.remove();
@@ -4941,7 +4944,16 @@ function panelJefe(emp){
     pintar();
   };
 
+  const pestanas = (n)=>'<div class="rsub" id="jfTabs" style="margin-bottom:12px">'+
+    '<button data-jt="perm" class="'+(JF_VISTA==='perm'?'on':'')+'">Permisos'+(n?' <i>'+n+'</i>':'')+'</button>'+
+    '<button data-jt="prog" class="'+(JF_VISTA==='prog'?'on':'')+'">Programación</button></div>';
+  const cablearPestanas = ()=>cuerpo.querySelectorAll('[data-jt]').forEach(bt=>bt.onclick = ()=>{
+    if(JF_VISTA === bt.dataset.jt) return;
+    JF_VISTA = bt.dataset.jt; cargar();
+  });
+
   const cargar = async ()=>{
+    if(JF_VISTA==='prog') return cargarProg();
     cuerpo.innerHTML = '<p style="color:var(--muted)">Cargando…</p>';
     let r;
     try{ r = await api('jefepermisos', cred(), {timeout:30000}); }
@@ -4954,7 +4966,7 @@ function panelJefe(emp){
     const grupos = agruparPermisos(r.pendientes || []).sort((a,b)=>a.desde.localeCompare(b.desde));
     const rec = agruparPermisos(r.recientes || []).sort((a,b)=>b.desde.localeCompare(a.desde)).slice(0,15);
     const rango = g => g.ps.length===1 ? fechaCorta(g.desde) : fechaCorta(g.desde)+' → '+fechaCorta(g.hasta)+' ('+g.ps.length+' días)';
-    cuerpo.innerHTML =
+    cuerpo.innerHTML = pestanas(grupos.length)+
       '<p style="font-size:12.5px;color:var(--muted);margin:0 0 12px">Áreas: <b>'+esc((r.jefe.areas||[]).join(', '))+'</b>. '+
         'Tu visto bueno pasa a Administración, que da la aprobación final. Si rechazas, la persona recibe tu motivo.</p>'+
       (grupos.length ? grupos.map((g,i)=>{
@@ -4973,6 +4985,7 @@ function panelJefe(emp){
         rec.map(g=>'<div style="font-size:12.5px;padding:6px 0;border-top:1px solid var(--line)">'+
           esc(g.p.nombre)+' · '+esc(tipoReal(g.p).nombre)+' · '+esc(rango(g))+' — <b>'+
           esc(g.p.estado==='PENDIENTE' ? 'Con tu visto, falta Administración' : g.p.estado)+'</b></div>').join('') : '');
+    cablearPestanas();
 
     const resolver = async (g, decision, comentario, bt)=>{
       bt.disabled = true; bt.textContent = 'Guardando…';
@@ -4992,6 +5005,129 @@ function panelJefe(emp){
       ok.onclick = ()=>{ if(inp.value.trim().length < 4){ toast('Escribe el motivo'); return; }
                          resolver(grupos[i], 'RECHAZADO', inp.value.trim(), ok); };
     });
+  };
+
+  /* ---- Programación de su equipo ----
+     Lo mismo que arma Administración en el panel, pero solo con su gente y pensado
+     para el celular: se elige el día y se ve a todo el equipo en una lista. El
+     servidor vuelve a comprobar que cada tramo sea de alguien de sus áreas. */
+  let equipo = [];
+  const diasSem = ()=>{
+    const out = [];
+    for(let i=0;i<7;i++){ const d = new Date(JF_SEM+'T12:00:00'); d.setDate(d.getDate()+i); out.push(hoyISO(d)); }
+    return out;
+  };
+  const cargarProg = async ()=>{
+    if(!JF_SEM) JF_SEM = lunesDe(hoyISO());
+    const dias = diasSem();
+    if(dias.indexOf(JF_DIA) < 0) JF_DIA = dias.indexOf(hoyISO()) >= 0 ? hoyISO() : dias[0];
+    cuerpo.innerHTML = pestanas(0)+'<p style="color:var(--muted)">Cargando…</p>';
+    cablearPestanas();
+    let r;
+    try{ r = await api('jefeprog', Object.assign(cred(), {desde:dias[0], hasta:dias[6]}), {timeout:30000}); }
+    catch(e){ cuerpo.innerHTML = pestanas(0)+'<div class="alert alert-bad">Sin conexión. Inténtalo de nuevo.</div>'; cablearPestanas(); return; }
+    if(!r || !r.ok){ JEFE_PIN = ''; return pedirPin((r && r.error) || 'No se pudo entrar'); }
+    equipo = (r.equipo || []).sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    const ids = equipo.map(e=>e.id);
+    // Se reemplaza solo lo de su gente en esa semana; lo propio del jefe no se toca
+    PROGRAMACION = PROGRAMACION.filter(x=>!(ids.indexOf(x.empId)>=0 && x.fecha>=dias[0] && x.fecha<=dias[6]))
+                               .concat(r.programacion || []);
+    pintarProg(r.jefe);
+  };
+
+  const enviarProg = async (datos, okMsg)=>{
+    try{
+      const r = await api('jefeprogramar', Object.assign(cred(), {datos}), {timeout:40000});
+      if(r && r.ok){ toast(okMsg); return true; }
+      toast((r && r.error) || 'No se pudo guardar');
+    }catch(e){ toast('Sin conexión: no se guardó'); }
+    cargarProg();             // lo que no llegó no se queda en pantalla como si estuviera guardado
+    return false;
+  };
+  const guardarTramoJefe = (reg, alTerminar)=>{
+    const quitar = !reg.entrada || !reg.salida;
+    if(quitar) PROGRAMACION = PROGRAMACION.filter(x=>x.id !== reg.id);
+    else{
+      if(!reg.id) reg.id = 'G' + Date.now() + Math.floor(Math.random()*900+100);
+      PROGRAMACION = PROGRAMACION.filter(x=>x.id !== reg.id).concat([reg]);
+    }
+    if(alTerminar) alTerminar();
+    enviarProg([reg], quitar ? 'Tramo quitado' : 'Tramo agregado');
+  };
+
+  const pintarProg = (jefe)=>{
+    const hoy = hoyISO(), dias = diasSem(), ids = equipo.map(e=>e.id);
+    const dentro = a => ids.indexOf(a.empId)>=0 && dias.indexOf(a.fecha)>=0;
+    const borradores = PROGRAMACION.filter(a=>dentro(a) && a.estado==='BORRADOR');
+    const porValidar = PROGRAMACION.filter(a=>dentro(a) && a.estado==='PUBLICADO' && a.fecha<hoy);
+    const variasAreas = new Set(equipo.map(e=>e.area)).size > 1;
+    const d0 = new Date(dias[0]+'T12:00:00'), d6 = new Date(dias[6]+'T12:00:00');
+    const fila = e=>{
+      const tramos = segmentosDe(e.id, JF_DIA), base = horarioFijo(e, JF_DIA);
+      const txt = tramos.length
+        ? tramos.map(a=>{
+            const est = estadoProg(a.estado);
+            return '<div><b style="color:'+est.color+'">'+esc(a.entrada)+'–'+esc(a.salida)+'</b>'+
+              (a.modalidad==='REMOTO' ? ' <span class="tag tag-warn" style="font-size:10px">casa</span>' : '')+
+              (a.estado!=='PUBLICADO' ? ' <span style="font-size:11px;color:'+est.color+'">'+est.nombre+'</span>' : '')+'</div>';
+          }).join('')
+        : '<span style="color:var(--muted)">'+(base ? esc(base.in)+'–'+esc(base.out)+' <span style="font-size:11px">(turno)</span>'
+                                                   : (esFeriado(JF_DIA)?'feriado':'libre'))+'</span>';
+      return '<button type="button" class="jfp" data-jfe="'+esc(e.id)+'" style="display:flex;width:100%;gap:10px;align-items:center;'+
+          'justify-content:space-between;text-align:left;padding:11px 4px;border-top:1px solid var(--line)">'+
+        '<span style="font-weight:700;font-size:14px;min-width:0">'+esc(e.nombre)+
+          (variasAreas ? '<div style="font-size:11px;color:var(--muted);font-weight:500">'+esc(e.area)+'</div>' : '')+'</span>'+
+        '<span style="text-align:right;font-size:13.5px;white-space:nowrap">'+txt+'</span></button>';
+    };
+    cuerpo.innerHTML = pestanas(0)+
+      '<p style="font-size:12.5px;color:var(--muted);margin:0 0 10px;line-height:1.5">Áreas: <b>'+esc((jefe.areas||[]).join(', '))+'</b>. '+
+        'Toca a una persona para ponerle su horario del día. En <b>borrador</b> no le cambia nada; '+
+        'al <b>publicar</b> cuenta para su asistencia y se avisa a Administración.</p>'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">'+
+        '<button class="btn btn-sm btn-line" id="jfAnt">‹</button>'+
+        '<b style="font-size:14px;text-align:center">'+d0.getDate()+' '+MESES[d0.getMonth()].slice(0,3)+' – '+
+          d6.getDate()+' '+MESES[d6.getMonth()].slice(0,3)+'</b>'+
+        '<button class="btn btn-sm btn-line" id="jfSig">›</button></div>'+
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">'+
+        dias.map(f=>{
+          const d = new Date(f+'T12:00:00'), on = f===JF_DIA;
+          const hay = PROGRAMACION.some(a=>a.fecha===f && ids.indexOf(a.empId)>=0);
+          return '<button type="button" data-jd="'+f+'" style="padding:6px 0;border-radius:10px;font-size:12px;font-weight:700;'+
+            (on ? 'background:var(--navy);color:#fff' : 'background:var(--surface-2);color:var(--gray-700)')+
+            (f===hoy && !on ? ';outline:2px solid var(--navy)' : '')+'">'+DIAS[d.getDay()].slice(0,2).toUpperCase()+
+            '<div style="font-size:15px">'+d.getDate()+'</div>'+
+            '<div style="height:5px;line-height:5px;font-size:14px">'+(hay?'·':'')+'</div></button>';
+        }).join('')+'</div>'+
+      (equipo.length ? equipo.map(fila).join('')
+                     : '<div class="alert alert-info">No hay colaboradores activos en tus áreas.</div>')+
+      '<div style="display:grid;gap:8px;margin-top:12px">'+
+        (borradores.length ? '<button class="btn" id="jfPub">Publicar la semana ('+borradores.length+')</button>' : '')+
+        (porValidar.length ? '<button class="btn btn-line" id="jfVal">Validar turnos cumplidos ('+porValidar.length+')</button>' : '')+
+      '</div>';
+    cablearPestanas();
+    cuerpo.querySelector('#jfAnt').onclick = ()=>{ const d = new Date(JF_SEM+'T12:00:00'); d.setDate(d.getDate()-7); JF_SEM = hoyISO(d); JF_DIA=''; cargarProg(); };
+    cuerpo.querySelector('#jfSig').onclick = ()=>{ const d = new Date(JF_SEM+'T12:00:00'); d.setDate(d.getDate()+7); JF_SEM = hoyISO(d); JF_DIA=''; cargarProg(); };
+    cuerpo.querySelectorAll('[data-jd]').forEach(bt=>bt.onclick = ()=>{ JF_DIA = bt.dataset.jd; pintarProg(jefe); });
+    cuerpo.querySelectorAll('[data-jfe]').forEach(bt=>bt.onclick = ()=>{
+      const e = equipo.find(x=>x.id===bt.dataset.jfe);
+      editarProgramacion(e.id, JF_DIA, {emp:e, guardar:guardarTramoJefe, alCerrar:()=>pintarProg(jefe)});
+    });
+    const pub = cuerpo.querySelector('#jfPub');
+    if(pub) pub.onclick = async ()=>{
+      if(!confirm('Se publicarán '+borradores.length+' turno'+(borradores.length===1?'':'s')+' de esta semana.\n\n'+
+                  'Desde ahí cuentan para la asistencia de tu equipo. ¿Continuar?')) return;
+      borradores.forEach(a=>a.estado='PUBLICADO');
+      pintarProg(jefe);
+      enviarProg(borradores, 'Semana publicada');
+    };
+    const val = cuerpo.querySelector('#jfVal');
+    if(val) val.onclick = async ()=>{
+      if(!confirm('Se validarán '+porValidar.length+' turno'+(porValidar.length===1?'':'s')+' ya cumplidos.\n\n'+
+                  'Es tu confirmación de que esas franjas sí se cubrieron. ¿Continuar?')) return;
+      porValidar.forEach(a=>{ a.estado='VALIDADO'; a.validadoPor=emp.nombre+' (jefe de área)'; a.validadoEl=hoy; });
+      pintarProg(jefe);
+      enviarProg(porValidar, 'Turnos validados');
+    };
   };
 
   if(JEFE_PIN) cargar(); else pedirPin();
@@ -5131,7 +5267,7 @@ function pintarPermiso(emp){
       '</div>';
     }).join('')+
     '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>'+
-    (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">'+ico('users')+' Permisos de mi equipo</button>' : '');
+    (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">'+ico('users')+' Mi equipo: permisos y programación</button>' : '');
 
   const b = $('#btnPermiso');
   if(b) b.onclick = ()=>solicitarPermiso(emp);
@@ -8257,9 +8393,12 @@ async function validarTurnos(idsArea){
   }catch(e){ toast('⚠ Validado aquí, pero NO llegó al servidor'); }
 }
 
-function editarProgramacion(empId, fecha){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
-  const e = EMP.find(x=>x.id===empId);
+/* opc (opcional) la usa el panel del jefe: trae a la persona, cómo guardar y qué
+   repintar al cerrar, porque ahí no hay EMP completo ni pestañas de administración. */
+function editarProgramacion(empId, fecha, opc){
+  if(!opc && soloVista()){ toast('Esa opción no está disponible'); return; }
+  const e = opc ? opc.emp : EMP.find(x=>x.id===empId);
+  const guardar = opc ? opc.guardar : guardarTramo;
   if(!e) return;
   const d = new Date(fecha+'T12:00:00');
   const m = document.createElement('div'); m.className='modal';
@@ -8273,7 +8412,17 @@ function editarProgramacion(empId, fecha){
         '<b>'+esc(e.nombre)+'</b><br>'+esc(DIAS[d.getDay()])+', '+d.getDate()+' de '+MESES[d.getMonth()]+'<br>'+
         'Puedes poner <b>varios tramos</b> el mismo día — por ejemplo de 6 a 9 desde casa y de 9 a 3 en la oficina.</p>'+
 
-      (tramos.length
+      // En el celular del jefe la tabla no entra: cada tramo va en una línea
+      (tramos.length && opc
+        ? '<div style="margin-bottom:14px">'+tramos.map((a,i)=>{
+            const est = estadoProg(a.estado);
+            return '<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line)">'+
+              '<div style="flex:1;min-width:0;font-size:14px"><b>'+esc(a.entrada)+'–'+esc(a.salida)+'</b> '+
+                (a.modalidad==='REMOTO' ? '<span class="tag tag-warn">desde casa</span>' : '<span class="tag tag-ok">en oficina</span>')+
+                '<div style="font-size:11.5px;color:'+est.color+'">'+est.nombre+(a.nota?' · '+esc(a.nota):'')+'</div></div>'+
+              '<button class="btn btn-sm btn-line" data-quitar="'+i+'" style="color:var(--danger);border-color:var(--danger)">Quitar</button></div>';
+          }).join('')+'</div>'
+      : tramos.length
         ? '<div class="tblwrap" style="margin-bottom:14px"><table><thead><tr>'+
             '<th>Desde</th><th>Hasta</th><th>Dónde</th><th>Nota</th><th>Estado</th><th></th>'+
           '</tr></thead><tbody>'+
@@ -8309,7 +8458,7 @@ function editarProgramacion(empId, fecha){
         '<button class="btn btn-line" id="pgX">Cerrar</button>'+
         '<button class="btn" id="pgAdd">Agregar tramo</button></div></div>';
 
-    m.querySelector('#pgX').onclick = ()=>{ m.remove(); renderTab(); };
+    m.querySelector('#pgX').onclick = ()=>{ m.remove(); if(opc) opc.alCerrar(); else renderTab(); };
     m.querySelector('#pgAdd').onclick = ()=>{
       const en = m.querySelector('#pgE').value, sa = m.querySelector('#pgS').value;
       if(!en || !sa){ toast('Pon desde y hasta'); return; }
@@ -8319,7 +8468,7 @@ function editarProgramacion(empId, fecha){
       const choque = segmentosDe(empId, fecha).find(a=>
         toMin(en) < toMin(a.salida) && toMin(sa) > toMin(a.entrada));
       if(choque){ toast('Se cruza con el tramo de '+choque.entrada+'–'+choque.salida); return; }
-      guardarTramo({
+      guardar({
         empId, nombre:e.nombre, fecha, entrada:en, salida:sa,
         modalidad: m.querySelector('#pgM').value,
         nota: m.querySelector('#pgN').value.trim(),
@@ -8329,7 +8478,7 @@ function editarProgramacion(empId, fecha){
     Array.from(m.querySelectorAll('[data-quitar]')).forEach(b=>{
       b.onclick = ()=>{
         const a = tramos[Number(b.dataset.quitar)];
-        guardarTramo(Object.assign({}, a, {entrada:'', salida:''}), pintar);
+        guardar(Object.assign({}, a, {entrada:'', salida:''}), pintar);
       };
     });
   };
@@ -8995,7 +9144,7 @@ function editarJefe(empId){
     '<div class="frow"><div><label>PIN de 4 a 6 números'+(j?' (déjalo vacío para no cambiarlo)':'')+'</label>'+
       '<input id="jP" inputmode="numeric" maxlength="6" autocomplete="off"></div></div>'+
     '<p style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.5">Dáselo en persona. El jefe entra desde la app, en su propio celular, '+
-      'con el botón "Permisos de mi equipo".</p>'+
+      'con el botón "Mi equipo". Ahí revisa los permisos y programa los horarios de su gente.</p>'+
     '<div style="display:flex;gap:10px;margin-top:10px"><button class="btn btn-line" id="jX">Cancelar</button>'+
     '<button class="btn" id="jG">Guardar</button></div></div>';
   document.body.appendChild(m);
