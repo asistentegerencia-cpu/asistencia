@@ -201,6 +201,8 @@ function enrutar(p) {
     // Jefes de área: se identifican con su DNI y su PIN en cada pedido
     case 'jefepermisos': return jefePermisos(p);
     case 'jeferesolver': return jefeResolver(p);
+    case 'jefeprog':     return jefeProgramacion(p);
+    case 'jefeprogramar': return jefeProgramar(p);
 
     // ---- Con clave ----
     case 'entrar':      rol = rolDe(p);
@@ -1703,6 +1705,80 @@ function jefePermisos(p) {
       return (x.vistoJefe || x.estado !== 'PENDIENTE') && x.fecha >= hace30;
     }).slice(-60)
   };
+}
+
+/* La gente que un jefe puede programar: la activa de sus áreas, sin él mismo
+   (igual que con los permisos, nadie se arma su propio horario) y sin exentos. */
+function equipoDeJefe(a) {
+  return a.emps.filter(function (e) {
+    return e.activo && e.id !== a.emp.id && a.jefe.areas.indexOf(e.area) >= 0 &&
+           String(e.modalidad || '') !== 'EXENTO';
+  });
+}
+
+/* La programación de su equipo en un rango de fechas (una semana, un mes). */
+function jefeProgramacion(p) {
+  var a = autenticarJefe(p);
+  if (a.error) return { ok: false, error: a.error };
+  var hoy = ahoraISO().fecha;
+  var desde = fechaTexto(p.desde || '') || diaDespues(hoy, -7);
+  var hasta = fechaTexto(p.hasta || '') || diaDespues(hoy, 21);
+  var equipo = equipoDeJefe(a);
+  var ids = equipo.map(function (e) { return e.id; });
+  return {
+    ok: true, jefe: { nombre: a.emp.nombre, areas: a.jefe.areas },
+    equipo: equipo.map(function (e) {
+      return { id: e.id, nombre: e.nombre, area: e.area, turno: e.turno,
+               modalidad: e.modalidad, dias: e.dias, activo: true };
+    }),
+    programacion: leerProgramacion().filter(function (x) {
+      return ids.indexOf(String(x.empId)) >= 0 && x.fecha >= desde && x.fecha <= hasta;
+    })
+  };
+}
+
+/* El jefe guarda tramos de su gente. Solo de su gente: cada tramo que llega, y el
+   que ya estaba en la hoja con ese id, tienen que ser de alguien de sus áreas.
+   Lo que valida queda firmado con su nombre. Si publica, se avisa a Administración. */
+function jefeProgramar(p) {
+  var a = autenticarJefe(p);
+  if (a.error) return { ok: false, error: a.error };
+  var lista = p.datos ? (typeof p.datos === 'string' ? JSON.parse(p.datos) : p.datos) : [];
+  if (!lista.length) return { ok: true, guardados: 0, borrados: 0 };
+
+  var equipo = equipoDeJefe(a), nombres = {};
+  equipo.forEach(function (e) { nombres[e.id] = e.nombre; });
+  var dueno = {};
+  leerProgramacion().forEach(function (x) { dueno[x.id] = String(x.empId); });
+  var hoy = ahoraISO().fecha, publicados = 0;
+
+  for (var i = 0; i < lista.length; i++) {
+    var t = lista[i];
+    var empId = String(t.empId || '');
+    if (!nombres[empId]) return { ok: false, error: 'Solo puedes programar a la gente de tu equipo.' };
+    if (t.id && dueno[t.id] && !nombres[dueno[t.id]]) {
+      return { ok: false, error: 'Solo puedes programar a la gente de tu equipo.' };
+    }
+    t.nombre = nombres[empId];
+    var est = String(t.estado || 'BORRADOR').toUpperCase();
+    if (['BORRADOR', 'PUBLICADO', 'VALIDADO'].indexOf(est) < 0) est = 'BORRADOR';
+    t.estado = est;
+    if (est === 'VALIDADO') {
+      t.validadoPor = a.emp.nombre + ' (jefe de área)';
+      t.validadoEl = t.validadoEl || hoy;
+    } else {
+      t.validadoPor = ''; t.validadoEl = '';
+    }
+    if (est === 'PUBLICADO' && t.entrada && t.salida) publicados++;
+  }
+
+  var r = guardarProgramacion({ datos: lista });
+  if (r.ok && publicados && String(p.sinCorreo) !== 'true') {
+    avisarPorCorreo(leerConfig(), 'Programación publicada por ' + a.emp.nombre,
+      a.emp.nombre + ' (jefe de ' + a.jefe.areas.join(', ') + ') publicó ' + publicados +
+      ' turno(s) de su equipo.\n\nPuedes verlos en el panel, pestaña Programación.');
+  }
+  return r;
 }
 
 /* El jefe da el visto bueno (queda para Administración) o rechaza (y ahí termina). */
