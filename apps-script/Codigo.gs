@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 8,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 9,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -1112,7 +1112,8 @@ function guardarProgramacion(p) {
    que quede escrito quién lo autorizó.
    ══════════════════════════════════════════════════════════════ */
 
-var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA', 'SALIDA_OLVIDO', 'ENTRADA_FALLIDA'];
+var TIPOS_PERMISO = ['TARDANZA', 'SALIDA_ANTES', 'DIA', 'CASA', 'JORNADA', 'SALIDA_OLVIDO', 'ENTRADA_FALLIDA',
+                     'ENTRADA_OLVIDO'];
 
 function leerPermisosDeHoja() {
   var out;
@@ -1172,7 +1173,8 @@ function pedirPermiso(p) {
                error: 'El descanso médico se puede registrar hasta 3 días después. Habla con Administración.' };
     }
   }
-  var haciaAtras = (tipo === 'JORNADA' || tipo === 'SALIDA_OLVIDO' || tipo === 'ENTRADA_FALLIDA');
+  var haciaAtras = (tipo === 'JORNADA' || tipo === 'SALIDA_OLVIDO' || tipo === 'ENTRADA_FALLIDA' ||
+                    tipo === 'ENTRADA_OLVIDO');
   if (!haciaAtras && !esMedico && fecha < hoy) {
     return { ok: false, motivo: 'fecha_pasada',
              error: 'No se puede pedir un permiso para un día que ya pasó. Habla con Administración.' };
@@ -1186,6 +1188,12 @@ function pedirPermiso(p) {
                error: 'Solo se pueden corregir salidas de los últimos 7 días. Habla con Administración.' };
     }
     if (!p.hora) return { ok: false, error: 'Indica a qué hora saliste.' };
+  }
+  /* La entrada que no se marcó a tiempo: llegó a las 9:00 y marcó a las 11:00, o
+     todavía no marca. Se PIDE con la hora real de llegada y se corrige al aprobarse. */
+  if (tipo === 'ENTRADA_OLVIDO') {
+    var e = validarEntradaOlvido(emp, fecha, horaTexto(p.hora || ''), hoy);
+    if (e) return { ok: false, motivo: e.motivo || '', error: e.error };
   }
   /* "No pude marcar mi entrada": la persona está en el trabajo y la app no la deja
      marcar (GPS, celular cambiado…) y nadie le responde. Deja constancia de la
@@ -1267,12 +1275,13 @@ function pedirPermiso(p) {
     if (String(p.sinCorreo) !== 'true') avisarJefes(emp, tipo, fecha, motivo);
 
     // Olvidos de salida: desde el tercero del mes se avisa al jefe y a Administración
-    if (tipo === 'SALIDA_OLVIDO') {
+    // y lo mismo con los de entrada, contados aparte.
+    if (tipo === 'SALIDA_OLVIDO' || tipo === 'ENTRADA_OLVIDO') {
       var mes = fecha.slice(0, 7);
       var olvidos = leerPermisos().filter(function (x) {
-        return String(x.empId) === emp.id && x.tipo === 'SALIDA_OLVIDO' && x.fecha.slice(0, 7) === mes;
+        return String(x.empId) === emp.id && x.tipo === tipo && x.fecha.slice(0, 7) === mes;
       }).length + 1;
-      if (olvidos >= 3) avisarOlvidos(emp, olvidos, mes);
+      if (olvidos >= 3) avisarOlvidos(emp, olvidos, mes, tipo === 'ENTRADA_OLVIDO' ? 'entrada' : 'salida');
     }
 
     return { ok: true, permiso: { id: id, empId: emp.id, nombre: emp.nombre, tipo: tipo,
@@ -1289,7 +1298,7 @@ function pedirPermiso(p) {
  * distinga de un marcaje hecho por la persona en el momento. No se pisa lo que
  * ya exista: si ese día ya tenía entrada, se respeta la que hay.
  */
-function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
+function registrarJornada(empId, fecha, entrada, salida, motivo, quien, notaFija) {
   if (!empId || !fecha || (!entrada && !salida)) return 0;
   var emps = leerPersonal();
   var emp = null;
@@ -1310,6 +1319,7 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
   var nota = (entrada && salida ? 'Jornada declarada y aprobada'
               : entrada ? 'Llegada registrada sin poder marcar, aprobada'
               : 'Salida olvidada, corrección aprobada') + (motivo ? ': ' + motivo : '');
+  if (notaFija) nota = notaFija;
   var creados = 0;
   var poner = function (tipo, hora) {
     if (tiene(tipo)) return;
@@ -1330,6 +1340,82 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien) {
   if (entrada) poner('ENTRADA', entrada);
   if (salida) poner('SALIDA', salida);
   return creados;
+}
+
+/* Las entradas de esa persona en ese día, con su fila en la hoja (sin las de la
+   noche que abren el turno de madrugada del día siguiente). */
+function entradasDelDia(empId, fecha) {
+  var h = hoja(HOJA.mar, COLS.mar);
+  var total = h.getLastRow();
+  if (total < 2) return { h: h, cab: cabDe(HOJA.mar, COLS.mar), filas: [] };
+  var ancho = Math.max(h.getLastColumn(), COLS.mar.length);
+  var cab = h.getRange(1, 1, 1, ancho).getValues()[0];
+  var desde = Math.max(2, total - 2000 + 1);
+  var datos = h.getRange(desde, 1, total - desde + 1, ancho).getValues();
+  var c = { emp: cab.indexOf('emp_id'), fecha: cab.indexOf('fecha'), tipo: cab.indexOf('tipo'), hora: cab.indexOf('hora') };
+  var out = [], salidas = [];
+  for (var i = 0; i < datos.length; i++) {
+    if (String(datos[i][c.emp]) !== String(empId) || fechaTexto(datos[i][c.fecha]) !== fecha) continue;
+    var t = String(datos[i][c.tipo]), hr = horaTexto(datos[i][c.hora]);
+    if (t === 'ENTRADA') out.push({ fila: desde + i, hora: hr, motivo: String(datos[i][cab.indexOf('motivo')] || '') });
+    if (t === 'SALIDA') salidas.push(hr);
+  }
+  return { h: h, cab: cab, filas: out, salidas: salidas };
+}
+
+/* ¿Se puede pedir corregir la entrada de ese día a esa hora? null si sí. */
+function validarEntradaOlvido(emp, fecha, hora, hoy) {
+  if (fecha > hoy) return { error: 'Solo se puede corregir un día que ya pasó o el de hoy.' };
+  var tope = new Date(new Date(hoy + 'T12:00:00').getTime() - 7 * 86400000);
+  if (fecha < Utilities.formatDate(tope, TZ, 'yyyy-MM-dd')) {
+    return { motivo: 'muy_viejo', error: 'Solo se pueden corregir entradas de los últimos 7 días. Habla con Administración.' };
+  }
+  if (!hora) return { error: 'Indica a qué hora llegaste.' };
+  if (fecha === hoy && aMin(hora) > aMin(ahoraISO().hora)) {
+    return { error: 'La hora de llegada no puede ser posterior a la hora actual.' };
+  }
+  var d = entradasDelDia(emp.id, fecha);
+  if (d.filas.length && aMin(hora) >= aMin(d.filas[0].hora)) {
+    return { error: 'La hora debe ser antes de tu entrada marcada (' + d.filas[0].hora + ').' };
+  }
+  if (!d.filas.length && fecha < hoy && !d.salidas.length) {
+    return { motivo: 'usar_jornada', error: 'Ese día no tiene ningún marcaje. Pide «Trabajé y no marqué» con tu hora de entrada y de salida.' };
+  }
+  for (var k = 0; k < d.salidas.length; k++) {
+    if (aMin(hora) >= aMin(d.salidas[k])) return { error: 'La hora debe ser antes de tu salida (' + d.salidas[k] + ').' };
+  }
+  return null;
+}
+
+/**
+ * Corrige la entrada de un día con la hora de llegada aprobada.
+ *
+ * Si ese día ya hay entrada (la que se marcó tarde), se cambia su hora y se vuelve
+ * a medir la tardanza; la hora que se marcó queda escrita en el motivo, para que
+ * se sepa qué se corrigió. Si no hay, se escribe una entrada nueva. El origen
+ * queda CORREGIDO, así el reporte la distingue de una marcada en el momento.
+ */
+function corregirEntrada(empId, fecha, hora, motivo, quien) {
+  if (!empId || !fecha || !hora) return 0;
+  var d = entradasDelDia(empId, fecha);
+  var obs = motivo ? ': ' + motivo : '';
+  if (!d.filas.length) {
+    return registrarJornada(empId, fecha, hora, '', motivo, quien,
+                            'Entrada olvidada, corrección aprobada' + obs);
+  }
+  var emp = null, emps = leerPersonal();
+  for (var i = 0; i < emps.length; i++) if (emps[i].id === String(empId)) emp = emps[i];
+  if (!emp) return 0;
+  var ev = evaluarEntrada(emp, fecha, hora, leerConfig(), leerProgramacion());
+  var f = d.filas[0], col = function (n) { return d.cab.indexOf(n) + 1; };
+  var poner = function (n, v) { if (col(n) > 0) d.h.getRange(f.fila, col(n)).setValue(v); };
+  poner('hora', "'" + hora);
+  poner('estado', ev.estado);
+  poner('tardanza', ev.tardanza || 0);
+  poner('origen', 'CORREGIDO');
+  poner('motivo', 'Entrada olvidada (marcó ' + f.hora + '), corrección aprobada' + obs);
+  poner('registrado_por', quien);
+  return 1;
 }
 
 /**
@@ -1422,6 +1508,12 @@ function resolverPermiso(p) {
             horaTexto(datos[i][cHora]), '',
             String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
         }
+        // La entrada olvidada: al aprobarla se corrige la hora de la entrada de ese día
+        if (decision === 'APROBADO' && String(datos[i][cTipo]) === 'ENTRADA_OLVIDO') {
+          creados = corregirEntrada(
+            String(datos[i][cEmp]), fechaTexto(datos[i][cFecha]), horaTexto(datos[i][cHora]),
+            String(datos[i][cMot] || ''), String(p.resueltoPor || 'Administración'));
+        }
         // La salida olvidada: al aprobarla se escribe solo la salida de ese día
         if (decision === 'APROBADO' && String(datos[i][cTipo]) === 'SALIDA_OLVIDO') {
           creados = registrarJornada(
@@ -1451,7 +1543,8 @@ function avisarAlColaborador(empId, decision, tipo, fecha, motivo, comentario, q
   if (!emp || !emp.email || emp.email.indexOf('@') < 0) return 'sin correo';
   var NOMBRES = { TARDANZA: 'Llegar tarde', SALIDA_ANTES: 'Salir antes', DIA: 'Día de permiso',
                   CASA: 'Trabajar desde casa', JORNADA: 'Trabajé y no marqué',
-                  SALIDA_OLVIDO: 'Olvidé marcar mi salida', ENTRADA_FALLIDA: 'No pude marcar mi entrada' };
+                  SALIDA_OLVIDO: 'Olvidé marcar mi salida', ENTRADA_FALLIDA: 'No pude marcar mi entrada',
+                  ENTRADA_OLVIDO: 'Olvidé marcar mi entrada' };
   var que = NOMBRES[tipo] || tipo;
   if (motivo.indexOf('[Vacaciones]') === 0) que = 'Vacaciones';
   if (motivo.indexOf('[Descanso médico]') === 0) que = 'Descanso médico';
@@ -1667,17 +1760,18 @@ function jefeResolver(p) {
   } finally { lock.releaseLock(); }
 }
 
-/* Desde el tercer olvido de salida del mes: correo al jefe de área y a Administración. */
-function avisarOlvidos(emp, n, mes) {
-  var cuerpo = emp.nombre + ' (' + emp.area + ') ya lleva ' + n + ' olvidos de marcar su salida en ' + mes + '.\n\n' +
+/* Desde el tercer olvido del mes (de salida o de entrada): correo al jefe de área y a Administración. */
+function avisarOlvidos(emp, n, mes, que) {
+  que = que || 'salida';
+  var cuerpo = emp.nombre + ' (' + emp.area + ') ya lleva ' + n + ' olvidos de marcar su ' + que + ' en ' + mes + '.\n\n' +
                'Cada olvido queda como solicitud de corrección para aprobar. Conviene conversarlo con esa persona.';
-  avisarPorCorreo(leerConfig(), emp.nombre + ': ' + n + ' olvidos de salida este mes', cuerpo);
+  avisarPorCorreo(leerConfig(), emp.nombre + ': ' + n + ' olvidos de ' + que + ' este mes', cuerpo);
   var emps = leerPersonal();
   leerJefes().forEach(function (j) {
     if (j.empId === emp.id || j.areas.indexOf(emp.area) < 0) return;
     for (var i = 0; i < emps.length; i++) {
       if (emps[i].id === j.empId && emps[i].email) {
-        try { MailApp.sendEmail({ to: emps[i].email, subject: '[Asistencia] ' + emp.nombre + ': ' + n + ' olvidos de salida',
+        try { MailApp.sendEmail({ to: emps[i].email, subject: '[Asistencia] ' + emp.nombre + ': ' + n + ' olvidos de ' + que,
                                   body: cuerpo }); } catch (e) { }
       }
     }
@@ -2003,7 +2097,8 @@ function marcar(p) {
       // Quien registró su llegada porque no pudo marcarla puede marcar la salida
       // aunque todavía nadie la haya aprobado.
       if (!tieneEntrada) tieneEntrada = leerPermisos().some(function (x) {
-        return String(x.empId) === emp.id && x.tipo === 'ENTRADA_FALLIDA' && x.fecha === fecha && x.estado !== 'RECHAZADO';
+        return String(x.empId) === emp.id && (x.tipo === 'ENTRADA_FALLIDA' || x.tipo === 'ENTRADA_OLVIDO') &&
+               x.fecha === fecha && x.estado !== 'RECHAZADO';
       });
       if (!tieneEntrada) return { ok: false, error: 'No hay una entrada registrada hoy.', motivo: 'sin_entrada' };
     }

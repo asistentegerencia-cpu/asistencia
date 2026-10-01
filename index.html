@@ -3091,6 +3091,10 @@ const TIPOS_PERMISO = [
   // no se marcó. Al aprobarlo se escribe la asistencia de ese día.
   {id:'JORNADA',      nombre:'Trabajé y no marqué', pideHora:true, pideHoraFin:true, pasado:true,
    efecto:'Se registra tu entrada y tu salida de ese día, con el visto de Administración.'},
+  // La entrada que no se marcó a tiempo (llegó 9:00, marcó 11:00, o aún no marca):
+  // se PIDE con la hora real de llegada y se corrige cuando la aprueban.
+  {id:'ENTRADA_OLVIDO', nombre:'Olvidé marcar mi entrada', pideHora:true, pasado:true,
+   efecto:'Se corrige tu entrada de ese día a la hora en que llegaste, cuando tu jefe o Administración lo aprueben.'},
   // La salida que no se marcó ya no se declara directamente: se PIDE, y se registra
   // solo cuando el jefe de área o Administración la aprueba.
   {id:'SALIDA_OLVIDO', nombre:'Olvidé marcar mi salida', pideHora:true, pasado:true,
@@ -3123,12 +3127,18 @@ function motivoSinMarca(p){
 const ETIQUETA_PERMISO = {
   TARDANZA:'TARDANZA OK', SALIDA_ANTES:'SALE ANTES', DIA:'PERMISO DEL DÍA',
   CASA:'DESDE CASA', JORNADA:'JORNADA', VACACIONES:'VACACIONES', MEDICO:'DESCANSO MÉDICO',
-  SALIDA_OLVIDO:'SALIDA OLVIDADA', ENTRADA_FALLIDA:'LLEGADA REGISTRADA'
+  SALIDA_OLVIDO:'SALIDA OLVIDADA', ENTRADA_FALLIDA:'LLEGADA REGISTRADA', ENTRADA_OLVIDO:'ENTRADA CORREGIDA'
 };
 
-/* La llegada que se registró sin poder marcar (pendiente o aprobada). */
+/* La llegada que se registró sin poder marcar, o la entrada olvidada que se pidió
+   corregir sin haber marcado (pendiente o aprobada). */
 function llegadaRegistrada(empId, fechaISO){
-  return PERMISOS.find(x=>x.empId===empId && x.tipo==='ENTRADA_FALLIDA' && x.fecha===fechaISO && x.estado!=='RECHAZADO') || null;
+  return PERMISOS.find(x=>x.empId===empId && (x.tipo==='ENTRADA_FALLIDA' || x.tipo==='ENTRADA_OLVIDO') &&
+                          x.fecha===fechaISO && x.estado!=='RECHAZADO') || null;
+}
+/* La corrección de entrada pedida y todavía sin resolver. */
+function entradaPorCorregir(empId, fechaISO){
+  return PERMISOS.find(x=>x.empId===empId && x.tipo==='ENTRADA_OLVIDO' && x.fecha===fechaISO && x.estado==='PENDIENTE') || null;
 }
 const etiquetaPermiso = tipo => ETIQUETA_PERMISO[tipo] || 'PERMISO';
 
@@ -4366,6 +4376,11 @@ function estadoDia(emp, fechaISO, ahora){
       return Object.assign(base, {clase:'ASISTIO', etiqueta:'TARDANZA JUSTIFICADA',
                                   cls:'tag-ok', tard:0, ev, permiso:permTar});
     }
+    const porCorregir = ev.tardanza > 0 ? entradaPorCorregir(emp.id, fechaISO) : null;
+    if(porCorregir){
+      return Object.assign(base, {clase:'ASISTIO', etiqueta:'ENTRADA '+(porCorregir.hora||'')+' POR APROBAR',
+                                  cls:'tag-warn', tard:ev.tardanza, ev, permiso:porCorregir});
+    }
     const permCasa = permisoAprobado(emp.id, fechaISO, 'CASA');
     const tramos = segmentosDe(emp.id, fechaISO);
     const prog = tramos[0] || null;
@@ -4825,6 +4840,7 @@ function renderMark(){
   pintarDia(emp);
   pintarPermiso(emp);
   pedirSalidaPendiente(emp);
+  pedirEntradaOlvidada(emp);
   if(!CFG.modoRecepcion){
     const jh = jornadaDe(emp.id, hoyISO());
     insigniaSalida(!!(jh.entrada && !jh.salida));
@@ -4841,6 +4857,7 @@ function renderMark(){
     pintarDia(emp);
     pintarPermiso(emp);
     pedirSalidaPendiente(emp);
+    pedirEntradaOlvidada(emp);
   });
 }
 
@@ -5170,7 +5187,8 @@ function solicitarPermiso(emp, tipoInicial, pre){
       // El descanso médico se suele avisar cuando ya empezó: hasta 3 días atrás
       const tope = hoyISO(new Date(Date.now()-(t.pasado?7:3)*86400000));
       fe.min = tope; fe.max = t.pasado ? hoy : '';
-      m.querySelector('#pkHora').querySelector('label').textContent = t.id==='SALIDA_OLVIDO' ? '¿A qué hora saliste?' : '¿Desde qué hora?';
+      m.querySelector('#pkHora').querySelector('label').textContent = t.id==='SALIDA_OLVIDO' ? '¿A qué hora saliste?' :
+                                                                       t.id==='ENTRADA_OLVIDO' ? '¿A qué hora llegaste?' : '¿Desde qué hora?';
     }else{
       fe.min = hoy; fe.max = '';
       m.querySelector('#pkHora').querySelector('label').textContent = '¿A qué hora?';
@@ -5191,6 +5209,11 @@ function solicitarPermiso(emp, tipoInicial, pre){
   pintarEfecto();
   if(pre && pre.fecha) m.querySelector('#pkF').value = pre.fecha;
   if(tipoInicial==='SALIDA_OLVIDO' && !m.querySelector('#pkM').value) m.querySelector('#pkM').value = 'Olvidé marcar mi salida';
+  if(tipoInicial==='ENTRADA_OLVIDO' && !m.querySelector('#pkM').value){
+    m.querySelector('#pkM').value = 'Olvidé marcar mi entrada';
+    const h = horarioDe(emp, (pre && pre.fecha) || hoy);
+    if(h) m.querySelector('#pkH').value = h.in;
+  }
 
   m.querySelector('#pkX').onclick = ()=>m.remove();
   m.querySelector('#pkG').onclick = async ()=>{
@@ -5213,6 +5236,14 @@ function solicitarPermiso(emp, tipoInicial, pre){
       if(!jj.entrada){ toast('Ese día no tienes entrada registrada'); return; }
       if(jj.salida){ toast('Ese día ya tiene salida registrada'); return; }
       if(toMin(h1) <= minEntrada(jj, fecha)){ toast('La salida debe ser después de tu entrada ('+jj.entrada.hora+')'); return; }
+    }
+    if(tipo==='ENTRADA_OLVIDO'){
+      const jj = jornadaDe(emp.id, fecha), h1 = m.querySelector('#pkH').value;
+      if(!h1){ toast('Indica a qué hora llegaste'); return; }
+      if(fecha===hoy && toMin(h1) > toMin(hhmm())){ toast('La hora de llegada no puede ser después de ahora'); return; }
+      if(jj.entrada && toMin(h1) >= minEntrada(jj, fecha)){ toast('La hora debe ser antes de tu entrada marcada ('+jj.entrada.hora+')'); return; }
+      if(jj.salida && toMin(h1) >= toMin(jj.salida.hora)){ toast('La hora debe ser antes de tu salida ('+jj.salida.hora+')'); return; }
+      if(!jj.entrada && !jj.salida && fecha < hoy){ toast('Ese día no tiene marcajes: usa "Trabajé y no marqué"'); return; }
     }
 
     const b = m.querySelector('#pkG');
@@ -5338,6 +5369,27 @@ function pedirSalidaPendiente(emp){
     '</div>';
   $('#spNo').onclick = ()=>{ box.innerHTML=''; };
   $('#spPedir').onclick = ()=>solicitarPermiso(emp, 'SALIDA_OLVIDO', {fecha:p.fecha});
+}
+
+/* --- Entrada marcada tarde de hoy ---
+   Quien llegó a su hora y se olvidó de marcar ve su tardanza al marcar. Se le
+   ofrece pedir la corrección con la hora en que llegó; la aprueban su jefe o
+   Administración. Se añade debajo de lo que haya puesto pedirSalidaPendiente. */
+function pedirEntradaOlvidada(emp){
+  const box = $('#mkPend');
+  if(!box || !hayServidor() || CFG.modoRecepcion) return;
+  const v = box.querySelector('#eoBox'); if(v) v.remove();
+  const hoy = hoyISO(), j = jornadaDe(emp.id, hoy);
+  if(!j.entrada || j.salida) return;
+  const ev = evaluarEntrada(emp, hoy, j.entrada.hora, j.entrada.fecha < hoy);
+  if(!(ev.tardanza > 0)) return;
+  if(PERMISOS.some(x=>x.empId===emp.id && x.fecha===hoy && x.estado!=='RECHAZADO' &&
+                      (x.tipo==='ENTRADA_OLVIDO' || x.tipo==='TARDANZA'))) return;
+  box.insertAdjacentHTML('beforeend',
+    '<div id="eoBox" style="font-size:13px;margin:6px 0 10px;line-height:1.45;text-align:center">'+
+      '¿Llegaste antes y olvidaste marcar tu entrada? '+
+      '<a href="#" id="eoPedir" style="font-weight:700">Solicitar corrección</a></div>');
+  $('#eoPedir').onclick = e=>{ e.preventDefault(); solicitarPermiso(emp, 'ENTRADA_OLVIDO', {fecha:hoy}); };
 }
 
 /* Olvidos de salida del mes: correcciones pedidas, más las salidas que se
