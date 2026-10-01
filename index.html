@@ -3647,7 +3647,10 @@ const MIOS_ESPERA = 45000;
 
 async function sincronizarMios(emp, desde, hasta, forzar){
   if(!hayServidor() || !emp || !emp.dni) return false;
-  desde = desde || hoyISO();
+  // Por defecto, la última semana: es lo que revisa el aviso de salida pendiente.
+  // Con solo hoy, una salida corregida y aprobada días después nunca llegaba al
+  // celular, y el aviso "No marcaste tu salida" seguía saliendo.
+  desde = desde || hoyISO(new Date(Date.now() - 7*86400000));
   hasta = hasta || hoyISO();
 
   const ahora = Date.now();
@@ -4952,13 +4955,34 @@ function panelJefe(emp){
     JF_VISTA = bt.dataset.jt; cargar();
   });
 
+  /* Volver a pedir el PIN solo cuando el problema ES el PIN (o quién es). Cualquier
+     otro error —un servidor sin actualizar, una falla— se muestra tal cual: si no,
+     la persona escribe su PIN una y otra vez sin saber por qué no entra. */
+  const esErrorDeAcceso = msg => /PIN|intentos|jefe de área|propio celular|registro de personal|activo/i.test(msg||'');
+  const mostrarError = (msg)=>{
+    const viejo = /Acción desconocida/i.test(msg||'');
+    cuerpo.innerHTML = pestanas(0)+
+      '<div class="alert alert-bad" style="text-align:left">'+
+        (viejo ? '<b>El servidor todavía no tiene esta función.</b><br>Administración debe actualizar el archivo '+
+                 'Codigo.gs en Apps Script y publicar una <b>nueva versión</b> de la implementación.'
+               : '<b>No se pudo cargar.</b><br>'+esc(msg||'Error desconocido'))+
+      '</div><button class="btn btn-line" id="jfRe" style="width:100%;margin-top:10px">Reintentar</button>';
+    cablearPestanas();
+    cuerpo.querySelector('#jfRe').onclick = cargar;
+  };
+  const fallo = r=>{
+    const msg = (r && r.error) || 'No se pudo entrar';
+    if(esErrorDeAcceso(msg)){ JEFE_PIN = ''; return pedirPin(msg); }
+    mostrarError(msg);
+  };
+
   const cargar = async ()=>{
     if(JF_VISTA==='prog') return cargarProg();
     cuerpo.innerHTML = '<p style="color:var(--muted)">Cargando…</p>';
     let r;
     try{ r = await api('jefepermisos', cred(), {timeout:30000}); }
     catch(e){ cuerpo.innerHTML = '<div class="alert alert-bad">Sin conexión. Inténtalo de nuevo.</div>'; return; }
-    if(!r || !r.ok){ JEFE_PIN = ''; return pedirPin((r && r.error) || 'No se pudo entrar'); }
+    if(!r || !r.ok) return fallo(r);
     pintar(r);
   };
 
@@ -5026,7 +5050,7 @@ function panelJefe(emp){
     let r;
     try{ r = await api('jefeprog', Object.assign(cred(), {desde:dias[0], hasta:dias[6]}), {timeout:30000}); }
     catch(e){ cuerpo.innerHTML = pestanas(0)+'<div class="alert alert-bad">Sin conexión. Inténtalo de nuevo.</div>'; cablearPestanas(); return; }
-    if(!r || !r.ok){ JEFE_PIN = ''; return pedirPin((r && r.error) || 'No se pudo entrar'); }
+    if(!r || !r.ok) return fallo(r);
     equipo = (r.equipo || []).sort((a,b)=>a.nombre.localeCompare(b.nombre));
     const ids = equipo.map(e=>e.id);
     // Se reemplaza solo lo de su gente en esa semana; lo propio del jefe no se toca
@@ -5465,7 +5489,10 @@ function salidaPendiente(emp){
     const f = hoyISO(new Date(Date.now() - i*86400000));
     if(f >= hoy) continue;
     const j = jornadaDe(emp.id, f);
-    if(j.entrada && !j.salida) return {fecha:f, entrada:j.entrada, hor:horarioDe(emp,f)};
+    // Con la corrección ya aprobada el día está resuelto, aunque este celular
+    // todavía no haya traído la salida que escribió el servidor.
+    if(j.entrada && !j.salida && !permisoAprobado(emp.id, f, 'SALIDA_OLVIDO'))
+      return {fecha:f, entrada:j.entrada, hor:horarioDe(emp,f)};
   }
   return null;
 }
