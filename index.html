@@ -3604,6 +3604,13 @@ function rangoSync(){
   return {desde, hasta: hoy};
 }
 
+/* La última semana: lo que cambia (marcas de hoy, correcciones aprobadas, salidas
+   declaradas) cae ahí. Traer solo esto es lo que hace rápido el "Actualizar". */
+function rangoReciente(){
+  const hoy = hoyISO(), d = diaISO(hoy, -7), ini = CFG.inicioOperacion || '';
+  return {desde: ini && ini > d ? ini : d, hasta: hoy};
+}
+
 /* Trae los marcajes del rango y los deja como única verdad para ese periodo. */
 async function sincronizarMarcajes(desde, hasta){
   if(desde > hasta){ const r = rangoSync(); desde = r.desde; hasta = r.hasta; }
@@ -6509,12 +6516,19 @@ function abrirAdmin(){
   }
   renderTab();
 
-  // Al abrir el panel se trae lo del servidor: administración siempre ve lo último
+  // Al abrir el panel se trae lo del servidor: administración siempre ve lo último.
+  // Primero lo de la última semana —es lo que se mira y pesa poco— a la vez que el
+  // padrón; el resto del periodo llega después, sin hacer esperar. Antes se pedía
+  // todo desde el inicio de operación, uno detrás del otro: casi medio mega en
+  // septiembre, y cada mes más.
   if(hayServidor()){
     enviarCola();
-    const r = rangoSync();
-    sincronizarArranque()
-      .then(()=>sincronizarMarcajes(r.desde, r.hasta))
+    const sem = rangoReciente();
+    Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)])
+      .then(()=>renderTab())
+      // El inicio de operación llega con el arranque: recién ahí se sabe desde cuándo traer
+      .then(()=>{ const r = rangoSync();
+                  return r.desde < sem.desde ? sincronizarMarcajes(r.desde, diaISO(sem.desde, -1)) : false; })
       .then(ok=>{ if(ok) renderTab(); })
       .catch(()=>{ /* el panel sigue con lo local */ });
   }
@@ -7114,7 +7128,8 @@ function tabHoy(b){
     b.disabled = true; b.textContent = 'Actualizando…';
     try{
       await enviarCola();
-      const rg = rangoSync();
+      // Lo del día y la semana: correcciones y salidas declaradas caen dentro de 7 días
+      const rg = rangoReciente();
       await sincronizarMarcajes(rg.desde, rg.hasta);
       toast('Actualizado desde el servidor');
     }catch(e){ toast('Sin conexión con el servidor'); }
