@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 11,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 12,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -630,16 +630,18 @@ function instalar(p) {
    está en el tamaño de una lectura: está en la cantidad de lecturas.
 
    Estas tres hojas son chicas y cambian poco —el padrón, el horario, los permisos—,
-   así que se guardan un minuto. En la hora punta de la mañana, cuando veinticinco
+   así que se guardan unos minutos. En la hora punta de la mañana, cuando veinticinco
    personas abren la app casi a la vez, la primera paga la lectura y las demás no.
 
-   Un minuto es a propósito, y además se borra la memoria en cuanto algo se escribe.
+   Eran un minuto; desde el 2 de octubre son cinco, porque en la llegada de la mañana
+   la memoria vencía a cada rato. Igual se borra en cuanto algo se escribe.
    Importa: si la jefatura publica un horario y alguien marca enseguida, tiene que
    ver el horario nuevo o el sistema le exigirá ubicación estando en su casa. Con el
-   borrado al escribir, ese caso no existe; el minuto solo aplica a una edición
-   hecha a mano directamente en la hoja. */
-var MEMO_SEG = 60;
+   borrado al escribir, ese caso no existe; los cinco minutos solo aplican a una
+   edición hecha a mano directamente en la hoja. */
+var MEMO_SEG = 300;   // cinco minutos: lo escrito desde la app la borra al instante
 var MEMO_ = {};                  // dentro de una misma ejecución, para no repetir
+var MEMO_ESCRIBE_ = false;       // esta ejecución escribe: no deja nada en la memoria compartida
 var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per', 'memo_jef'];
 
 function memo(clave, calcular) {
@@ -659,13 +661,16 @@ function memo(clave, calcular) {
   MEMO_[clave] = valor;
   // Si no entra (100 KB por clave) se sigue sin memoria: esto es una mejora de
   // velocidad, no puede ser el motivo de que algo falle.
-  if (cache) { try { cache.put(clave, JSON.stringify(valor), MEMO_SEG); } catch (e) { } }
+  // Quien escribe lee ANTES de escribir: si dejara eso en la memoria compartida,
+  // los demás verían durante cinco minutos la hoja sin lo que acaba de escribir.
+  if (cache && !MEMO_ESCRIBE_) { try { cache.put(clave, JSON.stringify(valor), MEMO_SEG); } catch (e) { } }
   return valor;
 }
 
 /** Se llama al escribir cualquier cosa: la próxima lectura vuelve a la hoja. */
 function olvidar() {
   MEMO_ = {};
+  MEMO_ESCRIBE_ = true;
   try { CacheService.getScriptCache().removeAll(MEMO_CLAVES); } catch (e) { }
 }
 
@@ -1237,6 +1242,9 @@ function pedirPermiso(p) {
     return { ok: false, motivo: 'sin_certificado', error: 'Adjunta la foto del certificado médico.' };
   }
 
+  // Los correos se mandan DESPUÉS de soltar el candado: cada uno tarda alrededor de
+  // un segundo, y mientras el candado está tomado nadie puede marcar.
+  var correos = [];
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -1267,14 +1275,14 @@ function pedirPermiso(p) {
     });
 
     // Un pedido de varios días llega como una solicitud por día: se avisa solo con la primera.
-    if (String(p.sinCorreo) !== 'true') avisarPorCorreo(leerConfig(), 'Nueva solicitud de permiso',
+    if (String(p.sinCorreo) !== 'true') correos.push(avisarPorCorreo.bind(null, leerConfig(), 'Nueva solicitud de permiso',
       emp.nombre + ' solicitó un permiso.\n\n' +
       'Tipo: ' + tipo + '\nFecha: ' + fecha + (p.hora ? '\nHora: ' + p.hora : '') + '\n' +
       'Motivo: ' + motivo + '\n\n' +
-      'Apruébalo o recházalo en el panel, pestaña Permisos.');
+      'Apruébalo o recházalo en el panel, pestaña Permisos.'));
 
     // Y a su jefe de área, que es quien da el primer visto bueno.
-    if (String(p.sinCorreo) !== 'true') avisarJefes(emp, tipo, fecha, motivo);
+    if (String(p.sinCorreo) !== 'true') correos.push(avisarJefes.bind(null, emp, tipo, fecha, motivo));
 
     // Olvidos de salida: desde el tercero del mes se avisa al jefe y a Administración
     // y lo mismo con los de entrada, contados aparte.
@@ -1283,14 +1291,17 @@ function pedirPermiso(p) {
       var olvidos = leerPermisos().filter(function (x) {
         return String(x.empId) === emp.id && x.tipo === tipo && x.fecha.slice(0, 7) === mes;
       }).length + 1;
-      if (olvidos >= 3) avisarOlvidos(emp, olvidos, mes, tipo === 'ENTRADA_OLVIDO' ? 'entrada' : 'salida');
+      if (olvidos >= 3) correos.push(avisarOlvidos.bind(null, emp, olvidos, mes, tipo === 'ENTRADA_OLVIDO' ? 'entrada' : 'salida'));
     }
 
     return { ok: true, permiso: { id: id, empId: emp.id, nombre: emp.nombre, tipo: tipo,
                                   fecha: fecha, motivo: motivo, estado: 'PENDIENTE',
                                   hora: horaTexto(p.hora || ''), horaFin: horaTexto(p.horaFin || ''),
                                   adjunto: adjuntoUrl } };
-  } finally { lock.releaseLock(); }
+  } finally {
+    lock.releaseLock();
+    correos.forEach(function (enviar) { try { enviar(); } catch (e) { } });
+  }
 }
 
 /**
