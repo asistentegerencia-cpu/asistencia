@@ -619,6 +619,7 @@ function ico(n, extra){
     <div class="tab" data-tab="cfg">Configuración</div>
   </div>
   </div>
+  <div id="srvAviso" class="hidden" style="max-width:1200px;margin:14px auto 0;padding:0 16px"></div>
   <div class="apanel"><h1 class="ptitle" id="adPageTitle">Hoy</h1><div id="adBody"></div></div>
 </div>
 
@@ -3617,6 +3618,89 @@ function rangoSync(){
    entera, que es lo más lento que hay. Ahora, mientras está a la vista, pide la
    última semana cada dos minutos y al volver a la pestaña. No repinta si hay una
    ventana abierta o se está escribiendo, ni en Configuración: no se pierde nada. */
+/* ---- Versiones: app y servidor ----
+   APP_VERSION cambia con cada publicación de la app. SERVIDOR_MINIMO es la versión
+   de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
+   no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
+   fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
+const APP_VERSION = '2026-10-02.2';
+const SERVIDOR_MINIMO = 12;
+const VERSIONES = {servidor:null, revisado:0};
+
+async function revisarServidor(){
+  if(!hayServidor()) return;
+  VERSIONES.revisado = Date.now();
+  let r = null;
+  try{ r = await api('ping', {}, {timeout:20000}); }catch(e){ return; }   // sin conexión lo avisa el botón ⟳
+  if(!r || !r.ok) return;
+  VERSIONES.servidor = Number(r.version) || 0;
+  pintarAvisoServidor();
+}
+function pintarAvisoServidor(){
+  const box = $('#srvAviso'); if(!box) return;
+  const v = VERSIONES.servidor;
+  if(v === null || v >= SERVIDOR_MINIMO){ box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="alert alert-bad" style="text-align:left;margin:0"><b>El servidor está desactualizado.</b> '+
+    'Tiene la versión '+v+' y esta app necesita la '+SERVIDOR_MINIMO+'. Pega el último Codigo.gs en Apps Script y publica '+
+    'una <b>Nueva versión</b> en Implementar → Administrar implementaciones. Hasta entonces algunas funciones fallarán.</div>';
+}
+
+/* La app se actualiza sola. Un celular puede tener la app abierta días enteros
+   y seguir con la versión vieja aunque ya se haya publicado otra. Al volver a la
+   app (y cada media hora) se mira si hay una versión nueva y, si la hay, se
+   recarga en un momento seguro: sin ventanas abiertas, sin estar marcando ni
+   escribiendo. Lo que esté en la cola sin enviar vive en el celular y no se pierde. */
+let APP_NUEVA = '';
+async function hayVersionNueva(){
+  if(location.protocol !== 'https:' && location.protocol !== 'http:') return '';
+  try{
+    const r = await fetch(location.pathname + '?v=' + Date.now(), {cache:'no-store'});
+    if(!r.ok) return '';
+    const m = (await r.text()).match(/const APP_VERSION = '([^']+)'/);
+    if(!m || m[1] === APP_VERSION) return '';
+    // Ya se recargó una vez para esa versión y el navegador sigue entregando la
+    // vieja (la publicación tarda unos minutos en llegar a todos lados): no se
+    // insiste, para no quedar recargando en bucle.
+    let ya = '';
+    try{ ya = sessionStorage.getItem('ca_recargaPara') || ''; }catch(e){}
+    return ya === m[1] ? '' : m[1];
+  }catch(e){ return ''; }
+}
+function momentoSeguroParaRecargar(){
+  if(document.querySelector('.modal')) return false;
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return false;
+  const lab = $('#mkBtnLabel');
+  if(lab && /REGISTRANDO/.test(lab.textContent)) return false;
+  const done = $('#viewDone');
+  if(done && !done.classList.contains('hidden')) return false;     // está viendo la confirmación
+  if(typeof TAB !== 'undefined' && TAB === 'cfg' && !$('#appAdmin').classList.contains('hidden')) return false;
+  return true;
+}
+let ULT_REVISION_APP = Date.now();
+async function revisarApp(){
+  ULT_REVISION_APP = Date.now();
+  if(!APP_NUEVA) APP_NUEVA = await hayVersionNueva();
+  if(APP_NUEVA && momentoSeguroParaRecargar()){
+    try{ sessionStorage.setItem('ca_recargaPara', APP_NUEVA); }catch(e){}
+    toast('Hay una versión nueva de la app: actualizando…');
+    // Con la versión en la dirección, el navegador no puede servir la copia vieja
+    const destino = location.pathname + '?v=' + encodeURIComponent(APP_NUEVA) + location.hash;
+    setTimeout(()=>location.replace(destino), 1200);
+  }
+}
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState !== 'visible') return;
+  if(APP_NUEVA || Date.now() - ULT_REVISION_APP > 5*60000) revisarApp();
+  if(!$('#appAdmin').classList.contains('hidden') && Date.now() - VERSIONES.revisado > 30*60000) revisarServidor();
+});
+setInterval(()=>{
+  if(document.visibilityState === 'hidden') return;
+  if(APP_NUEVA || Date.now() - ULT_REVISION_APP > 30*60000) revisarApp();
+  if(!$('#appAdmin').classList.contains('hidden') && Date.now() - VERSIONES.revisado > 30*60000) revisarServidor();
+}, 60000);
+
 const PANEL_SYNC = {ult:0, corriendo:false, error:''};
 function panelVisible(){
   const a = $('#appAdmin');
@@ -6583,6 +6667,7 @@ function abrirAdmin(){
   if(hayServidor()){
     enviarCola();
     const sem = rangoReciente();
+    revisarServidor();
     PANEL_SYNC.corriendo = true;
     Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)])
       .then(res=>{ PANEL_SYNC.ult = Date.now(); PANEL_SYNC.error = res[0]||res[1] ? '' : 'el servidor no devolvió datos'; },
