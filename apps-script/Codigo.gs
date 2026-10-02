@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 10,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 11,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -1317,6 +1317,13 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien, notaFija
     for (var k = 0; k < yaHay.length; k++) if (String(yaHay[k].tipo) === tipo) return true;
     return false;
   };
+  // Una jornada completa (entrada y salida) es otro tramo del día si ninguno de
+  // los marcajes que ya hay cae dentro de ella: Dolly marca de 6 a 9 y declara
+  // el tramo de 19 a 23:59 que no pudo marcar. Ese no es un duplicado.
+  var tramoAparte = !!(entrada && salida) && yaHay.every(function (m) {
+    var x = aMin(horaTexto(m.hora));
+    return x < aMin(entrada) || x > aMin(salida);
+  });
 
   var nota = (entrada && salida ? 'Jornada declarada y aprobada'
               : entrada ? 'Llegada registrada sin poder marcar, aprobada'
@@ -1324,7 +1331,7 @@ function registrarJornada(empId, fecha, entrada, salida, motivo, quien, notaFija
   if (notaFija) nota = notaFija;
   var creados = 0;
   var poner = function (tipo, hora) {
-    if (tiene(tipo)) return;
+    if (tiene(tipo) && !tramoAparte) return;
     var ev = tipo === 'ENTRADA' ? evaluarEntrada(emp, fecha, hora, cfg, prog)
                                 : evaluarSalida(emp, fecha, hora, cfg, prog);
     anexar(h, HOJA.mar, COLS.mar, {
@@ -2148,18 +2155,46 @@ function marcar(p) {
     // madrugada del día siguiente no choca con la entrada normal de ese día.
     var nocturna = tipo === 'ENTRADA' && esEntradaNocturna(emp, fecha, hora, cfg, prog);
     var cid = String(p.cid || '');
+    var repetido = null, delDia = [];
     for (var i = 0; i < todos.length; i++) {
       var m = todos[i];
       var mismaFecha = fechaTexto(m.fecha) === fecha;
       if (cid && String(m.cid) === cid) {
         return { ok: true, duplicado: true, marcaje: filaAObjeto(m) };
       }
-      if (String(m.emp_id) === emp.id && String(m.tipo) === tipo && mismaFecha) {
-        var mNoche = aMin(horaTexto(m.hora)) >= 21 * 60;
-        if (tipo === 'ENTRADA' && nocturna !== mNoche) continue;
-        return { ok: true, duplicado: true, marcaje: filaAObjeto(m),
+      if (String(m.emp_id) !== emp.id || !mismaFecha) continue;
+      var mNoche = aMin(horaTexto(m.hora)) >= 21 * 60;
+      // La entrada de la noche que abre el turno de mañana no es de este día
+      if (String(m.tipo) === 'ENTRADA' && mNoche && esEntradaNocturna(emp, fecha, horaTexto(m.hora), cfg, prog)) {
+        if (tipo === 'ENTRADA' && nocturna) repetido = m;
+        continue;
+      }
+      delDia.push(m);
+      if (String(m.tipo) === tipo && !(tipo === 'ENTRADA' && nocturna)) repetido = m;
+    }
+    /* Jornada partida: de 6 a 9 desde casa y de 19 a 23:59, o de 6 a 9 y de 10:30
+       a 18 en la oficina. Cada tramo tiene su entrada y su salida. Una segunda
+       entrada se admite si lo último del día fue una salida y lo que toca a esta
+       hora es un tramo que empieza después de esa salida; una segunda salida, si
+       lo último fue una entrada. Lo demás sigue siendo un doble toque. */
+    if (repetido && !nocturna) {
+      delDia.sort(function (a, b) { return aMin(horaTexto(a.hora)) - aMin(horaTexto(b.hora)); });
+      var ult = delDia[delDia.length - 1];
+      var permitido = false;
+      if (ult && aMin(hora) > aMin(horaTexto(ult.hora))) {
+        if (tipo === 'ENTRADA' && String(ult.tipo) === 'SALIDA') {
+          var tramoSig = segmentoEn(prog, emp.id, fecha, hora, true);
+          // Administración, que carga con su clave, puede registrar el otro tramo aunque no esté programado
+          permitido = manualAdmin || !!(tramoSig && aMin(tramoSig.entrada) >= aMin(horaTexto(ult.hora)) - 60);
+        }
+        if (tipo === 'SALIDA' && String(ult.tipo) === 'ENTRADA') permitido = true;
+      }
+      if (!permitido) {
+        return { ok: true, duplicado: true, marcaje: filaAObjeto(repetido),
                  aviso: tipo === 'ENTRADA' ? 'Ya registraste tu entrada hoy.' : 'Ya registraste tu salida hoy.' };
       }
+    } else if (repetido) {
+      return { ok: true, duplicado: true, marcaje: filaAObjeto(repetido), aviso: 'Ya registraste tu entrada hoy.' };
     }
 
     if (tipo === 'SALIDA') {
@@ -2471,6 +2506,17 @@ function inicioParaEntrada(h, m) {
   return h.tramos[h.tramos.length - 1].entrada;
 }
 
+/* Con la jornada partida, cada salida se mide contra el fin de SU tramo: el
+   último que ya empezó a esa hora. Salir a las 9:08 del tramo de 6 a 9 es una
+   salida completa, no una anticipada de 14 horas contra el fin del día. */
+function finParaSalida(h, m) {
+  if (!h.tramos || h.tramos.length < 2) return h.out;
+  var orden = h.tramos.slice().sort(function (a, b) { return aMin(a.entrada) - aMin(b.entrada); });
+  var t = orden[0];
+  for (var i = 0; i < orden.length; i++) if (aMin(orden[i].entrada) <= m) t = orden[i];
+  return t.salida;
+}
+
 /* ¿Es una entrada de la noche (desde las 21:00) para un turno que empieza entre
    las 00:00 y las 02:00 del día siguiente? */
 function esEntradaNocturna(emp, fechaISO, hora, cfg, prog) {
@@ -2546,7 +2592,7 @@ function ubicacionEnSedes(emp, cfg, lat, lng) {
 function evaluarSalida(emp, fechaISO, hora, cfg, prog) {
   var h = horarioDe(emp, fechaISO, cfg, prog);
   if (!h) return { estado: '—', anticipada: 0 };
-  var diff = aMin(h.out) - aMin(hora);
+  var diff = aMin(finParaSalida(h, aMin(hora))) - aMin(hora);
   if (diff <= 0) return { estado: 'COMPLETA', anticipada: 0 };
   return { estado: 'SALIDA ANTICIPADA', anticipada: diff };
 }
