@@ -3375,6 +3375,7 @@ async function api(accion, datos, opts){
 
   // 1) POST sin cabeceras propias: así el navegador no dispara preflight,
   //    que es lo que rompe las peticiones a Apps Script.
+  let motivoPost = '';
   try{
     const ctrl = new AbortController();
     const corte = setTimeout(()=>ctrl.abort(), ms);
@@ -3383,15 +3384,20 @@ async function api(accion, datos, opts){
     });
     clearTimeout(corte);
     if(r.ok){
-      const j = await r.json();
-      SRV_ESTADO = {ok:true, msg:'', ultimo:Date.now()};
-      return j;
-    }
-  }catch(e){ /* al plan B */ }
+      let j = null;
+      try{ j = await r.json(); }
+      catch(e){ motivoPost = 'el servidor respondió algo que no es la app (¿acceso de la implementación restringido?)'; }
+      if(j){ SRV_ESTADO = {ok:true, msg:'', ultimo:Date.now()}; return j; }
+    } else motivoPost = 'el servidor respondió con error '+r.status;
+  }catch(e){
+    // al plan B; se anota por qué, para poder decírselo a quien lo vea
+    motivoPost = e && e.name==='AbortError' ? 'no respondió en '+Math.round(ms/1000)+' s'
+               : (navigator.onLine===false ? 'este equipo no tiene internet' : 'la conexión fue rechazada');
+  }
 
   if(opts.soloPost){
-    SRV_ESTADO = {ok:false, msg:'Sin conexión con el servidor', ultimo:Date.now()};
-    throw new Error('No se pudo contactar al servidor');
+    SRV_ESTADO = {ok:false, msg:'Sin conexión con el servidor: '+motivoPost, ultimo:Date.now()};
+    throw new Error('No se pudo contactar al servidor: '+motivoPost);
   }
 
   // 2) JSONP
@@ -3404,8 +3410,9 @@ async function api(accion, datos, opts){
     SRV_ESTADO = {ok:true, msg:'', ultimo:Date.now()};
     return j;
   }catch(e){
-    SRV_ESTADO = {ok:false, msg:e.message, ultimo:Date.now()};
-    throw e;
+    const msg = (motivoPost ? motivoPost+'; ' : '') + (e && e.message ? e.message.toLowerCase() : 'sin respuesta');
+    SRV_ESTADO = {ok:false, msg:'Sin conexión con el servidor: '+msg, ultimo:Date.now()};
+    throw new Error(msg);
   }
 }
 
@@ -3603,6 +3610,58 @@ function rangoSync(){
   if(desde > hoy) desde = hoy;        // salvaguarda final
   return {desde, hasta: hoy};
 }
+
+/* ---- El panel se mantiene al día solo ----
+   Antes el panel traía los datos del servidor solo al abrirse: dejado abierto se
+   quedaba con lo de esa hora, y para ver lo nuevo había que recargar la página
+   entera, que es lo más lento que hay. Ahora, mientras está a la vista, pide la
+   última semana cada dos minutos y al volver a la pestaña. No repinta si hay una
+   ventana abierta o se está escribiendo, ni en Configuración: no se pierde nada. */
+const PANEL_SYNC = {ult:0, corriendo:false, error:''};
+function panelVisible(){
+  const a = $('#appAdmin');
+  return !!a && !a.classList.contains('hidden') && document.visibilityState !== 'hidden';
+}
+function sePuedeRepintar(){
+  if(document.querySelector('.modal')) return false;
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && ae.id !== 'hDia') return false;
+  if(document.querySelector('details.hdrop[open]')) return false;
+  return TAB !== 'cfg';
+}
+async function refrescarPanel(forzar){
+  if(!hayServidor() || PANEL_SYNC.corriendo) return false;
+  PANEL_SYNC.corriendo = true;
+  pintarEstadoSync();
+  try{
+    await enviarCola();
+    const sem = rangoReciente();
+    const res = await Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)]);
+    PANEL_SYNC.ult = Date.now();
+    PANEL_SYNC.error = res[0] || res[1] ? '' : 'el servidor no devolvió datos';
+  }catch(e){
+    PANEL_SYNC.error = (e && e.message) || 'sin respuesta';
+  }finally{
+    PANEL_SYNC.corriendo = false;
+  }
+  if(forzar || sePuedeRepintar()) renderTab(); else pintarEstadoSync();
+  return !PANEL_SYNC.error;
+}
+function textoEstadoSync(){
+  if(PANEL_SYNC.corriendo) return 'Actualizando…';
+  if(PANEL_SYNC.error) return '⚠ Sin conexión';
+  return PANEL_SYNC.ult ? 'Actualizado '+hhmm(new Date(PANEL_SYNC.ult)) : 'Actualizar';
+}
+function pintarEstadoSync(){
+  const t = $('#rHoyT'); if(t) t.textContent = textoEstadoSync();
+  const b = $('#rHoy');  if(b) b.title = PANEL_SYNC.error ? 'No se pudo actualizar: '+PANEL_SYNC.error : 'Traer lo último del servidor';
+}
+setInterval(()=>{
+  if(panelVisible() && Date.now() - PANEL_SYNC.ult >= 120000) refrescarPanel(false);
+}, 20000);
+document.addEventListener('visibilitychange', ()=>{
+  if(panelVisible() && Date.now() - PANEL_SYNC.ult >= 45000) refrescarPanel(false);
+});
 
 /* La última semana: lo que cambia (marcas de hoy, correcciones aprobadas, salidas
    declaradas) cae ahí. Traer solo esto es lo que hace rápido el "Actualizar". */
@@ -6524,8 +6583,11 @@ function abrirAdmin(){
   if(hayServidor()){
     enviarCola();
     const sem = rangoReciente();
+    PANEL_SYNC.corriendo = true;
     Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)])
-      .then(()=>renderTab())
+      .then(res=>{ PANEL_SYNC.ult = Date.now(); PANEL_SYNC.error = res[0]||res[1] ? '' : 'el servidor no devolvió datos'; },
+            e=>{ PANEL_SYNC.error = (e && e.message) || 'sin respuesta'; })
+      .then(()=>{ PANEL_SYNC.corriendo = false; renderTab(); })
       // El inicio de operación llega con el arranque: recién ahí se sabe desde cuándo traer
       .then(()=>{ const r = rangoSync();
                   return r.desde < sem.desde ? sincronizarMarcajes(r.desde, diaISO(sem.desde, -1)) : false; })
@@ -6993,10 +7055,11 @@ function tabHoy(b){
       '<details class="hdrop"><summary class="btn btn-sm btn-line">Filtros'+(nFil?' ('+nFil+')':'')+' ▾</summary>'+
         '<div class="hpop hfil">'+htmlFiltros('h')+'</div></details>'+
       '<span class="grow"></span>'+
+      // Siempre a la vista, con la hora de la última vez: así se sabe si lo que se ve es de ahora
+      '<button class="btn btn-sm btn-line" id="rHoy" aria-label="Actualizar">⟳ <span id="rHoyT">'+esc(textoEstadoSync())+'</span></button>'+
       (esHoy ? '<button class="btn btn-sm btn-line" id="resHoy">Resumen del día</button>' : '')+
       '<details class="hdrop"><summary class="btn btn-sm btn-line">⋯ Más</summary><div class="hpop hmas">'+
-        '<button class="btn btn-sm btn-line" id="xHoy">Descargar Excel</button>'+
-        '<button class="btn btn-sm btn-line" id="rHoy">Actualizar</button></div></details>'+
+        '<button class="btn btn-sm btn-line" id="xHoy">Descargar Excel</button></div></details>'+
       (soloVista()?'':'<button class="btn btn-sm" id="mHoy">Registrar marcaje</button>')+
     '</div>';
 
@@ -7122,18 +7185,13 @@ function tabHoy(b){
     btn.onclick = ()=>corregirMarcajes(btn.dataset.corr, f);
   });
   // "Actualizar" tiene que traer lo del servidor: es lo que uno espera al tocarlo
+  pintarEstadoSync();
   $('#rHoy').onclick = async ()=>{
-    const b = $('#rHoy');
     if(!hayServidor()) return renderTab();
-    b.disabled = true; b.textContent = 'Actualizando…';
-    try{
-      await enviarCola();
-      // Lo del día y la semana: correcciones y salidas declaradas caen dentro de 7 días
-      const rg = rangoReciente();
-      await sincronizarMarcajes(rg.desde, rg.hasta);
-      toast('Actualizado desde el servidor');
-    }catch(e){ toast('Sin conexión con el servidor'); }
-    renderTab();
+    $('#rHoy').disabled = true;
+    // Lo del día y la semana: correcciones y salidas declaradas caen dentro de 7 días
+    const ok = await refrescarPanel(true);
+    toast(ok ? 'Actualizado desde el servidor' : 'Sin conexión con el servidor: '+PANEL_SYNC.error);
   };
   $('#xHoy').onclick = ()=>exportar(f,f,'Asistencia_'+f);
   const bMan = $('#mHoy'); if(bMan) bMan.onclick = ()=>registroManual(f);
