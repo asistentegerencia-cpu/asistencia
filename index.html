@@ -3651,7 +3651,8 @@ async function sincronizarMios(emp, desde, hasta, forzar){
   // Con solo hoy, una salida corregida y aprobada días después nunca llegaba al
   // celular, y el aviso "No marcaste tu salida" seguía saliendo.
   desde = desde || hoyISO(new Date(Date.now() - 7*86400000));
-  hasta = hasta || hoyISO();
+  // Y la semana que viene: así la programación de mañana ya queda guardada en el celular
+  hasta = hasta || hoyISO(new Date(Date.now() + 7*86400000));
 
   const ahora = Date.now();
   if(!forzar && MIOS_ULT[emp.id] && (ahora - MIOS_ULT[emp.id]) < MIOS_ESPERA) return false;
@@ -3672,6 +3673,7 @@ async function sincronizarMios(emp, desde, hasta, forzar){
     const previo = JSON.stringify(PROGRAMACION.filter(x=>x.empId===emp.id));
     PROGRAMACION = PROGRAMACION.filter(x=>x.empId!==emp.id).concat(r.programacion);
     if(previo !== JSON.stringify(r.programacion)) cambioAlgo = true;
+    try{ localStorage.setItem('ca_progMia_'+emp.id, JSON.stringify(r.programacion)); }catch(e){}
   }
   if(Array.isArray(r.permisos)){
     const previo = JSON.stringify(PERMISOS.filter(x=>x.empId===emp.id));
@@ -4262,10 +4264,20 @@ function evaluarEntrada(emp, fechaISO, horaHHMM, diaAnterior){
   return                              {estado:'TARDANZA GRAVE',  tardanza:diff, clase:'tag-bad'};
 }
 
+/* Con la jornada partida cada salida se mide contra el fin de SU tramo: el último
+   que ya empezó a esa hora. */
+function finParaSalida(h, horaHHMM){
+  if(!h.tramos || h.tramos.length < 2) return h.out;
+  const m = toMin(horaHHMM);
+  const orden = h.tramos.slice().sort((a,b)=>toMin(a.entrada)-toMin(b.entrada));
+  let t = orden[0];
+  orden.forEach(x=>{ if(toMin(x.entrada) <= m) t = x; });
+  return t.salida;
+}
 function evaluarSalida(emp, fechaISO, horaHHMM){
   const h = horarioDe(emp, fechaISO);
   if(!h) return {estado:'—', anticipada:0, clase:'tag-ok'};
-  const diff = toMin(h.out) - toMin(horaHHMM);
+  const diff = toMin(finParaSalida(h, horaHHMM)) - toMin(horaHHMM);
   if(diff <= 0) return {estado:'COMPLETA', anticipada:0, clase:'tag-ok'};
   return {estado:'SALIDA ANTICIPADA', anticipada:diff, clase:'tag-warn'};
 }
@@ -4281,10 +4293,34 @@ function jornadaDe(empId, fechaISO){
   const propias = sig ? ms.filter(m=>m !== sig) : ms;
   let entrada = propias.find(m=>m.tipo==='ENTRADA') || null;
   if(!entrada) entrada = entradaNocturna(empId, marcajesDe(empId, diaISO(fechaISO, -1)), fechaISO);
+
+  /* Jornada partida: cada tramo tiene su entrada y su salida (de 6 a 9 y de 19 a
+     23:59). Se ordenan por hora —una corrección aprobada se escribe después pero
+     con la hora real— y se arman los pares. La salida del día es la última solo
+     si no hay una entrada posterior: si la hay, el día está abierto otra vez. */
+  const orden = propias.slice().sort((a,b)=>toMin(a.hora)-toMin(b.hora) || (a.ts||0)-(b.ts||0));
+  const pares = [];
+  if(entrada && propias.indexOf(entrada) < 0) pares.push({entrada, salida:null});   // la de anoche
+  orden.forEach(m=>{
+    const ult = pares[pares.length-1];
+    if(m.tipo==='ENTRADA'){ if(!ult || ult.salida) pares.push({entrada:m, salida:null}); }
+    else if(ult && !ult.salida) ult.salida = m;
+    else if(ult) ult.salida = m;                    // una salida repetida: vale la última
+    else pares.push({entrada:null, salida:m});
+  });
+  const ultimo = pares[pares.length-1];
   return {
     entrada,
-    salida: propias.filter(m=>m.tipo==='SALIDA').pop() || null
+    salida: (ultimo && ultimo.salida) || null,
+    pares
   };
+}
+
+/* El siguiente tramo programado de una jornada partida: el que empieza después de
+   la última salida (con una hora de margen, por si salió un poco tarde). */
+function siguienteTramo(emp, fechaISO, despuesDe){
+  return segmentosDe(emp.id, fechaISO).filter(a=>a.estado!=='BORRADOR')
+    .find(a=>toMin(a.entrada) >= toMin(despuesDe) - 60 && toMin(a.salida) > toMin(despuesDe)) || null;
 }
 
 /* Minuto de la entrada medido desde la medianoche de fechaISO. Si se marcó la
@@ -4446,6 +4482,20 @@ function salidaDe(emp, fechaISO, ahora){
 function jornadaTrabajada(d, fechaISO, ahora){
   const j = d && d.j;
   if(!j || !j.entrada) return {min:0, enCurso:false, hay:false};
+  // Jornada partida: se suma cada tramo; el hueco entre uno y otro no es trabajo
+  if(j.pares && j.pares.length > 1){
+    ahora = ahora || new Date();
+    let min = 0, enCurso = false;
+    j.pares.forEach((p,i)=>{
+      if(!p.entrada) return;
+      const ini = i===0 ? minEntrada(j, fechaISO) : toMin(p.entrada.hora);
+      if(p.salida){ min += Math.max(0, toMin(p.salida.hora) - ini); return; }
+      if(fechaISO === hoyISO(ahora) && i === j.pares.length-1){
+        min += Math.max(0, ahora.getHours()*60 + ahora.getMinutes() - ini); enCurso = true;
+      }
+    });
+    return {min, enCurso, hay: min > 0};
+  }
   const ent = minEntrada(j, fechaISO);
   if(j.salida){
     const m = toMin(j.salida.hora) - ent;
@@ -4823,6 +4873,15 @@ function renderMark(){
   const emp = EMP.find(e=>e.id===DEV.empId);
   if(!emp){ DEV=null; localStorage.removeItem(K.dev); return renderId(); }
   show('viewMark');
+  // Su programación guardada en el celular: así, al abrir, ya sabe si a esta hora
+  // le toca casa, aunque el servidor tarde o no haya señal. Sin esto el botón se
+  // bloqueaba "fuera de zona" en el tramo desde casa hasta que respondía el servidor.
+  if(!PROGRAMACION.some(x=>x.empId===emp.id)){
+    try{
+      const g = JSON.parse(localStorage.getItem('ca_progMia_'+emp.id) || '[]');
+      if(Array.isArray(g)) PROGRAMACION = PROGRAMACION.concat(g.filter(x=>x && x.empId===emp.id));
+    }catch(e){}
+  }
 
   const h = new Date().getHours();
   $('#mkHello').textContent = h<12 ? 'Buenos días,' : h<19 ? 'Buenas tardes,' : 'Buenas noches,';
@@ -5583,16 +5642,29 @@ function pintarBoton(emp){
   al.innerHTML='';
   const llegada = !j.entrada ? llegadaRegistrada(emp.id, hoyISO()) : null;
 
+  // Jornada partida: terminado un tramo, si queda otro se marca su entrada
+  let sig = null;
   if((j.entrada || llegada) && j.salida){
-    btn.disabled = true; btn.className='markbtn mb-done';
-    if(icn) icn.innerHTML = ico('check');
-    lab.textContent='JORNADA COMPLETA';
-    const nom = String(emp.nombre||'').split(' ')[0].toLowerCase();
-    hint.textContent='Hasta mañana, '+nom.charAt(0).toUpperCase()+nom.slice(1);
-    return;
+    sig = siguienteTramo(emp, hoyISO(), j.salida.hora);
+    if(!sig){
+      btn.disabled = true; btn.className='markbtn mb-done';
+      if(icn) icn.innerHTML = ico('check');
+      lab.textContent='JORNADA COMPLETA';
+      const nom = String(emp.nombre||'').split(' ')[0].toLowerCase();
+      hint.textContent='Hasta mañana, '+nom.charAt(0).toUpperCase()+nom.slice(1);
+      return;
+    }
+    if(toMin(hhmm()) < toMin(sig.entrada) - 60){
+      btn.disabled = true; btn.className='markbtn mb-done';
+      if(icn) icn.innerHTML = ico('check');
+      lab.textContent='TRAMO TERMINADO';
+      hint.textContent='Tu siguiente tramo es de '+sig.entrada+' a '+sig.salida+(sig.modalidad==='REMOTO'?' (desde casa)':'')+
+                       '. Vuelve a marcar tu entrada a esa hora.';
+      return;
+    }
   }
 
-  const esSalida = !!j.entrada || !!llegada;
+  const esSalida = !sig && (!!j.entrada || !!llegada);
   btn.className = 'markbtn ' + (esSalida ? 'mb-out' : 'mb-in');
   if(icn) icn.innerHTML = ico(esSalida ? 'logout' : 'login');
   lab.textContent = esSalida ? 'MARCAR SALIDA' : 'MARCAR ENTRADA';
@@ -5651,7 +5723,10 @@ function pintarBoton(emp){
     hint.textContent = 'Se registrará como marcaje fuera de zona';
     al.innerHTML = '<div class="alert alert-warn">'+esc(GEO.msg)+'. Tu marcaje quedará señalado para revisión.</div>';
   } else if(horario){
-    hint.textContent = esSalida ? 'Tu horario de salida es '+horario.out : 'Tu horario de entrada es '+horario.in;
+    const tramoAhora = segmentoEn(emp.id, hoyISO(), hhmm(), true);
+    hint.textContent = sig ? 'Entrada de tu tramo de '+sig.entrada+' a '+sig.salida
+                     : esSalida ? 'Tu horario de salida es '+(tramoAhora && horario.tramos ? finParaSalida(horario, hhmm()) : horario.out)
+                     : 'Tu horario de entrada es '+(horario.tramos ? inicioParaEntrada(horario, hhmm()) : horario.in);
     const falta = toMin(horario.out) - toMin(hhmm());
     if(esSalida && toMin(horario.out) > toMin(horario.in) && falta <= 15){
       al.innerHTML = '<div class="alert alert-warn"><b>'+
@@ -5937,7 +6012,9 @@ async function marcar(){
   const tipo = $('#btnMark').dataset.tipo || 'ENTRADA';
 
   const j = jornadaDe(emp.id, fecha);
-  if(tipo==='ENTRADA' && j.entrada){ toast('Ya registraste tu entrada'); return renderMark(); }
+  if(tipo==='ENTRADA' && j.entrada && !(j.salida && siguienteTramo(emp, fecha, j.salida.hora))){
+    toast('Ya registraste tu entrada'); return renderMark();
+  }
 
   // Una "entrada" a media tarde casi siempre es alguien que olvidó marcar en la
   // mañana y marca al irse. Registrada así, su día queda como 8 horas de tardanza
@@ -9013,7 +9090,10 @@ function registroManual(fechaDef){
     try{ localStorage.setItem('ca_registrador', registradoPor); }catch(e){}
 
     const j = jornadaDe(emp.id, fecha);
-    if(tipo==='ENTRADA' && j.entrada){ toast('Ya tiene una entrada registrada ese día'); return; }
+    // Con jornada partida se admite otra entrada después de la última salida
+    if(tipo==='ENTRADA' && j.entrada && !(j.salida && toMin(hora) > toMin(j.salida.hora))){
+      toast('Ya tiene una entrada registrada ese día'+(j.salida?' (una segunda entrada debe ser después de las '+j.salida.hora+')':'')); return;
+    }
     if(tipo==='SALIDA'){
       if(!j.entrada){ toast('No tiene entrada registrada ese día'); return; }
       if(toMin(hora) <= minEntrada(j, fecha)){ toast('La salida debe ser posterior a la entrada'); return; }
