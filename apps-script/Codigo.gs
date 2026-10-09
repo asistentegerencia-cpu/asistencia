@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 12,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 13,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -2075,14 +2075,17 @@ function marcar(p) {
     // enviarse en el momento por falta de red. La hora buena es la de entonces, no
     // la de ahora: si se la pusiéramos ahora, alguien que marcó a las 9 y recuperó
     // señal a mediodía aparecería con tres horas de tardanza que no cometió.
-    // Se acepta acotada —nunca al futuro, nunca más de tres días atrás— porque es
+    // Se acepta acotada —nunca al futuro, nunca más de quince días atrás— porque es
     // la única vía por la que el celular puede influir en la hora de un marcaje.
+    // Fueron tres días hasta octubre de 2026: el servidor estuvo caído del 3 al 7,
+    // la gente abrió la app recién el 9 y las entradas del lunes 5 quedaron
+    // registradas con la fecha y la hora del viernes.
     var diferido = (String(p.diferido) === 'true' || p.diferido === true) && !!p.fecha && !!p.hora;
     var conFechaPropia = (p.origen === 'MANUAL' || p.origen === 'DECLARADO' || diferido);
     if (!conFechaPropia) { fecha = t.fecha; hora = t.hora; }
     if (conFechaPropia && fecha > t.fecha) { fecha = t.fecha; hora = t.hora; }   // nunca al futuro
     if (diferido) {
-      var limite = new Date(new Date(t.fecha + 'T12:00:00').getTime() - 3 * 86400000);
+      var limite = new Date(new Date(t.fecha + 'T12:00:00').getTime() - 15 * 86400000);
       if (fecha < Utilities.formatDate(limite, TZ, 'yyyy-MM-dd')) { fecha = t.fecha; hora = t.hora; }
     }
 
