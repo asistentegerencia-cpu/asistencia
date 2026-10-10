@@ -3625,7 +3625,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-09.1';
+const APP_VERSION = '2026-10-10.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6936,8 +6936,14 @@ function anomalias(desde, hasta){
   const out = [];
 
   // 1) Un mismo celular usado por dos personas distintas. Es LA señal de suplantación.
+  //    Los marcajes MANUALES no cuentan, ni aquí ni en la regla 2: guardan el equipo
+  //    de quien los cargó en el panel, no el celular de la persona. Al corregir la
+  //    caída del 3 al 7 de octubre, la computadora de administración apareció
+  //    "marcando" por siete personas. Esos registros ya se ven aparte, en
+  //    «Marcajes cargados a mano», con su motivo y quién los hizo.
+  const regsCel = regs.filter(m=>m.origen!=='MANUAL');
   const porDisp = {};
-  regs.forEach(m=>{
+  regsCel.forEach(m=>{
     if(!m.dispositivo) return;
     (porDisp[m.dispositivo] = porDisp[m.dispositivo] || {})[m.empId] = m.nombre;
   });
@@ -6954,7 +6960,7 @@ function anomalias(desde, hasta){
   //    Es la otra cara de la suplantación: alguien marca por ti desde su teléfono,
   //    o tú marcas la entrada en uno y la salida en otro sin estar ahí.
   const porPersona = {};
-  regs.forEach(m=>{
+  regsCel.forEach(m=>{
     if(!m.dispositivo || !m.empId) return;
     (porPersona[m.empId] = porPersona[m.empId] || {nombre:m.nombre, devs:new Set()}).devs.add(m.dispositivo);
   });
