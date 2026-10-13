@@ -3333,16 +3333,26 @@ function limpiarApiUrl(u){
 
 const hayServidor = ()=> !!(CFG.apiUrl && /^https:\/\//.test(CFG.apiUrl));
 
-/* La URL del servidor puede llegar por la dirección: .../?api=https://...exec
-   Sirve para apuntar a otro servidor sin volver a publicar el archivo, y para que
-   el QR la lleve incorporada. Queda guardada en el navegador de quien la abre. */
+/* La URL del servidor podía llegar por la dirección: .../?api=https://...exec
+   Era para el QR de los primeros días, cuando la app no la traía incluida.
+
+   Desde que la dirección viaja dentro del archivo (DEF_CFG.apiUrl), el ?api= solo
+   hace daño: los enlaces viejos guardados en WhatsApp o en marcadores siguen
+   llevando la dirección del servidor anterior, y quien abre la app por ahí manda
+   sus marcas a la hoja vieja. Pasó en octubre de 2026 tras la mudanza a la cuenta
+   nueva: Maday y Oswaldo marcaban en la hoja que ya nadie miraba. Ahora, si la app
+   trae su dirección, el ?api= se ignora y se borra de la barra. */
 (function apiDesdeUrl(){
   try{
-    const u = limpiarApiUrl(new URLSearchParams(location.search).get('api'));
-    if(u && /^https:\/\//.test(u) && u !== CFG.apiUrl){
+    const q = new URLSearchParams(location.search);
+    if(!q.has('api')) return;
+    const u = limpiarApiUrl(q.get('api'));
+    if(!DEF_CFG.apiUrl && u && /^https:\/\//.test(u) && u !== CFG.apiUrl){
       CFG.apiUrl = u; saveCfg();
-      history.replaceState(null, '', location.pathname + location.hash);
     }
+    q.delete('api');
+    const resto = q.toString();
+    history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
   }catch(e){ /* navegador antiguo: se usa la URL incrustada */ }
 })();
 
@@ -3625,7 +3635,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-10.1';
+const APP_VERSION = '2026-10-13.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -10543,12 +10553,19 @@ function tabQr(b){
   // escanee abre una app sin configurar: no vería el padrón ni podría marcar.
   // Basta una vez: al abrirlo, el celular guarda la dirección y ya no la necesita.
   const base = location.origin + location.pathname;
-  const sugerida = hayServidor() ? base + '?api=' + encodeURIComponent(CFG.apiUrl) : base;
-  const url = load('ca_url', sugerida);
+  // La app ya trae la dirección del servidor: el enlace va limpio. Un ?api= en el
+  // enlace solo serviría para fijar un servidor que mañana puede cambiar.
+  const sugerida = (hayServidor() && !DEF_CFG.apiUrl) ? base + '?api=' + encodeURIComponent(CFG.apiUrl) : base;
+  let url = load('ca_url', sugerida);
+  if(DEF_CFG.apiUrl && /[?&]api=/.test(url)){
+    try{ const U = new URL(url); U.searchParams.delete('api'); url = U.toString(); }catch(e){}
+  }
   b.innerHTML =
   '<div class="cfgrid">'+
     '<div class="cfg"><h3>Dirección de la aplicación</h3>'+
-    '<p class="hint">'+(hayServidor()
+    '<p class="hint">'+(hayServidor() && DEF_CFG.apiUrl
+      ? 'La app ya trae incluida la dirección del servidor: comparte este enlace tal cual, <b>sin ?api=</b>. Si alguien tiene guardado un enlace viejo con ?api=, la app lo ignora. '
+      : hayServidor()
       ? 'Ya viene con la dirección de tu servidor incrustada (la parte <b>?api=</b>). <b>No se la quites:</b> es lo que deja configurado cada celular la primera vez que abre el enlace. Después basta la dirección corta. '
       : '')+
     'Es la dirección que abrirán los celulares al escanear el QR. '+
