@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 13,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 14,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -210,6 +210,9 @@ function enrutar(p) {
                                    : { ok: false, error: 'Clave incorrecta' };
     case 'reporte':     rol = rolDe(p);
                         return rol ? reporte(p) : NO_AUTORIZADO;
+    // El resumen de la semana para n8n: basta la clave de solo vista
+    case 'resumen':     rol = rolDe(p);
+                        return rol ? resumenSemana(p) : NO_AUTORIZADO;
 
     // ---- Solo administración ----
     case 'instalar':    return rolDe(p) === 'admin' ? instalar(p)            : NO_AUTORIZADO;
@@ -2666,4 +2669,257 @@ function probar() {
   Logger.log('ping     → ' + JSON.stringify(enrutar({ accion: 'ping' })));
   Logger.log('arranque → ' + JSON.stringify(enrutar({ accion: 'arranque' })).slice(0, 400));
   Logger.log('reporte  → ' + JSON.stringify(enrutar({ accion: 'reporte' })).slice(0, 400));
+}
+
+/* ══════════════════════════════════════════════════════════════
+   RESUMEN SEMANAL
+   Lo pide n8n cada lunes (con la clave de solo vista) y lo reparte por correo
+   o WhatsApp. Se calcula aquí, con las mismas reglas que el panel —mismo horario,
+   mismos permisos, mismas ausencias—, para que el número del correo y el de la
+   pestaña Reportes sean el mismo. Sin fechas, toma la semana pasada (lunes a
+   domingo) y la compara con la anterior.
+   ══════════════════════════════════════════════════════════════ */
+function resumenSemana(p) {
+  var cfg = leerConfig(), prog = leerProgramacion();
+  var hoy = ahoraISO().fecha;
+  var desde = fechaTexto(p.desde || ''), hasta = fechaTexto(p.hasta || '');
+  var dow = (new Date(hoy + 'T12:00:00').getDay() + 6) % 7;          // 0 = lunes
+  var lunesEsta = diaDespues(hoy, -dow);
+  if (!desde || !hasta) { desde = diaDespues(lunesEsta, -7); hasta = diaDespues(lunesEsta, -1); }
+  if (hasta >= hoy) hasta = diaDespues(hoy, -1);                     // hoy todavía no cerró
+  var largo = Math.round((new Date(hasta + 'T12:00:00') - new Date(desde + 'T12:00:00')) / 86400000) + 1;
+  var antDesde = diaDespues(desde, -largo), antHasta = diaDespues(desde, -1);
+
+  var emps = leerPersonal().filter(function (e) {
+    return e.activo && String(e.modalidad || '') !== 'EXENTO';
+  });
+  var porDia = {};
+  filasDesde(HOJA.mar, COLS.mar, diaDespues(antDesde, -1)).map(filaAObjeto).forEach(function (m) {
+    var k = m.empId + '|' + m.fecha;
+    (porDia[k] = porDia[k] || []).push(m);
+  });
+  var permisos = leerPermisos(), aprob = {}, llegada = {}, pendientes = [];
+  permisos.forEach(function (x) {
+    if (x.estado === 'APROBADO') aprob[x.empId + '|' + x.fecha + '|' + x.tipo] = x;
+    if ((x.tipo === 'ENTRADA_FALLIDA' || x.tipo === 'ENTRADA_OLVIDO') && x.estado !== 'RECHAZADO') llegada[x.empId + '|' + x.fecha] = x;
+    if (x.estado === 'PENDIENTE') pendientes.push(x);
+  });
+  var aus = leerAusencias();
+  var ausDe = function (id, f) {
+    for (var i = 0; i < aus.length; i++) if (aus[i].empId === id && aus[i].desde <= f && aus[i].hasta >= f) return aus[i];
+    return null;
+  };
+
+  // La jornada de un día, como la arma el panel: la entrada de la noche anterior
+  // que abre un turno de madrugada es de este día; la de esta noche, del siguiente.
+  var jornada = function (emp, f) {
+    var ms = (porDia[emp.id + '|' + f] || []).filter(function (m) {
+      return !(m.tipo === 'ENTRADA' && esEntradaNocturna(emp, f, m.hora, cfg, prog));
+    }).sort(function (a, b) { return aMin(a.hora) - aMin(b.hora) || a.ts - b.ts; });
+    var pares = [], previa = null;
+    if (!ms.some(function (m) { return m.tipo === 'ENTRADA'; })) {
+      var ayer = diaDespues(f, -1);
+      (porDia[emp.id + '|' + ayer] || []).forEach(function (m) {
+        if (m.tipo === 'ENTRADA' && esEntradaNocturna(emp, ayer, m.hora, cfg, prog)) previa = m;
+      });
+      if (previa) pares.push({ entrada: previa, salida: null, ini: aMin(previa.hora) - 1440 });
+    }
+    ms.forEach(function (m) {
+      var u = pares[pares.length - 1];
+      if (m.tipo === 'ENTRADA') { if (!u || u.salida) pares.push({ entrada: m, salida: null, ini: aMin(m.hora) }); }
+      else if (u) u.salida = m;
+      else pares.push({ entrada: null, salida: m, ini: null });
+    });
+    var ent = null;
+    for (var i = 0; i < pares.length; i++) if (pares[i].entrada) { ent = pares[i]; break; }
+    var ult = pares[pares.length - 1];
+    var min = 0;
+    pares.forEach(function (x) { if (x.entrada && x.salida) min += Math.max(0, aMin(x.salida.hora) - x.ini); });
+    return { entrada: ent ? ent.entrada : null, salida: ult ? ult.salida : null, min: min };
+  };
+
+  var acumular = function (d1, d2) {
+    var tot = { programados: 0, asistidos: 0, faltas: 0, justificadas: 0, tardanzas: 0, minutos: 0,
+                puntuales: 0, olvidos: 0, trabajados: 0, diasConJornada: 0 };
+    var personas = emps.map(function (emp) {
+      var a = { id: emp.id, nombre: emp.nombre, area: emp.area, programados: 0, asistidos: 0, faltas: 0,
+                justificadas: 0, tardanzas: 0, minutos: 0, puntuales: 0, olvidos: 0, trabajados: 0,
+                diasConJornada: 0, diasFalta: [] };
+      for (var f = d1; f <= d2; f = diaDespues(f, 1)) {
+        var hor = horarioDe(emp, f, cfg, prog);
+        if (!hor) continue;                                           // no laborable o feriado
+        var j = jornada(emp, f);
+        if (cfg.inicioOperacion && f < fechaTexto(cfg.inicioOperacion) && !j.entrada) continue;
+        if (aprob[emp.id + '|' + f + '|DIA'] && !j.entrada) { a.justificadas++; continue; }
+        var au = ausDe(emp.id, f);
+        if (au && !j.entrada) {
+          if (au.tipo === 'COMISION') { a.programados++; a.asistidos++; } else a.justificadas++;
+          continue;
+        }
+        a.programados++;
+        if (!j.entrada) {
+          if (llegada[emp.id + '|' + f]) { a.asistidos++; a.puntuales++; continue; }
+          a.faltas++; a.diasFalta.push(f); continue;
+        }
+        a.asistidos++;
+        var ev = evaluarEntrada(emp, j.entrada.fecha, j.entrada.hora, cfg, prog);
+        var tard = ev.tardanza > 0 && !aprob[emp.id + '|' + f + '|TARDANZA'] ? ev.tardanza : 0;
+        if (tard > 0) { a.tardanzas++; a.minutos += tard; } else a.puntuales++;
+        if (!j.salida || j.salida.origen === 'DECLARADO' || aprob[emp.id + '|' + f + '|SALIDA_OLVIDO']) a.olvidos++;
+        if (j.salida && j.min > 0) { a.trabajados += j.min; a.diasConJornada++; }
+      }
+      for (var k in tot) tot[k] += a[k];
+      return a;
+    });
+    return { tot: tot, personas: personas };
+  };
+  var pct = function (n, d) { return d ? Math.round(1000 * n / d) / 10 : null; };
+  var indicadores = function (t) {
+    return { asistencia: pct(t.asistidos, t.programados),
+             puntualidad: pct(t.puntuales, t.puntuales + t.tardanzas),
+             faltas: t.faltas, tardanzas: t.tardanzas, minutosTardanza: t.minutos,
+             olvidosSalida: t.olvidos, justificadas: t.justificadas,
+             horasPromedio: t.diasConJornada ? Math.round(t.trabajados / t.diasConJornada / 6) / 10 : null };
+  };
+
+  var actual = acumular(desde, hasta), anterior = acumular(antDesde, antHasta);
+  var areas = {};
+  actual.personas.forEach(function (x) {
+    var g = areas[x.area] = areas[x.area] || { area: x.area, programados: 0, asistidos: 0, puntuales: 0, tardanzas: 0 };
+    g.programados += x.programados; g.asistidos += x.asistidos; g.puntuales += x.puntuales; g.tardanzas += x.tardanzas;
+  });
+  var listaAreas = Object.keys(areas).sort().map(function (k) {
+    var g = areas[k];
+    return { area: k, asistencia: pct(g.asistidos, g.programados), puntualidad: pct(g.puntuales, g.puntuales + g.tardanzas) };
+  }).filter(function (g) { return g.asistencia !== null; });
+  var conDias = actual.personas.filter(function (x) { return x.programados > 0; });
+  var perfectos = conDias.filter(function (x) { return x.asistidos >= 3 && x.faltas === 0 && x.tardanzas === 0; })
+                         .map(function (x) { return x.nombre; });
+  var tardes = conDias.filter(function (x) { return x.minutos > 0; })
+                      .sort(function (a, b) { return b.minutos - a.minutos; }).slice(0, 5)
+                      .map(function (x) { return { nombre: x.nombre, tardanzas: x.tardanzas, minutos: x.minutos }; });
+  var faltan = conDias.filter(function (x) { return x.faltas > 0; })
+                      .sort(function (a, b) { return b.faltas - a.faltas; })
+                      .map(function (x) { return { nombre: x.nombre, faltas: x.faltas, dias: x.diasFalta }; });
+  var olvidadizos = conDias.filter(function (x) { return x.olvidos >= 2; })
+                           .sort(function (a, b) { return b.olvidos - a.olvidos; })
+                           .map(function (x) { return { nombre: x.nombre, olvidos: x.olvidos }; });
+
+  // ¿Está programada la semana que empieza? Quien tuvo tramos la semana pasada y
+  // no tiene ninguno en esta, probablemente quedó sin programar.
+  var tenia = {}, tiene = {};
+  prog.forEach(function (x) {
+    if (x.estado === 'BORRADOR') return;
+    if (x.fecha >= diaDespues(lunesEsta, -7) && x.fecha < lunesEsta) tenia[x.empId] = x.nombre || x.empId;
+    if (x.fecha >= lunesEsta && x.fecha <= diaDespues(lunesEsta, 6)) tiene[x.empId] = true;
+  });
+  var sinProgramar = Object.keys(tenia).filter(function (id) {
+    return !tiene[id] && emps.some(function (e) { return e.id === id; });
+  }).map(function (id) { return tenia[id]; });
+  var nombreDe = {}; emps.forEach(function (e) { nombreDe[e.id] = e.nombre; });
+  var pend = pendientes.filter(function (x) { return nombreDe[x.empId]; }).map(function (x) {
+    return { nombre: x.nombre || nombreDe[x.empId], tipo: NOMBRE_PERMISO[x.tipo] || x.tipo, fecha: x.fecha };
+  });
+
+  var r = { ok: true, periodo: { desde: desde, hasta: hasta }, anterior: { desde: antDesde, hasta: antHasta },
+            indicadores: indicadores(actual.tot), indicadoresAnterior: indicadores(anterior.tot),
+            areas: listaAreas, puntualesPerfectos: perfectos, masTardanzas: tardes, faltas: faltan,
+            olvidosSalida: olvidadizos, permisosPendientes: pend, semanaSinProgramar: sinProgramar,
+            personas: actual.personas };
+  r.texto = textoResumenSemana(r, cfg);
+  r.html = htmlResumenSemana(r, cfg);
+  r.asunto = 'Resumen semanal de asistencia · ' + fechaCortaSrv(desde) + ' al ' + fechaCortaSrv(hasta);
+  return r;
+}
+
+function fechaCortaSrv(f) { return f.slice(8, 10) + '/' + f.slice(5, 7); }
+var NOMBRE_PERMISO = { TARDANZA: 'llegar tarde', SALIDA_ANTES: 'salir antes', DIA: 'día de permiso',
+  CASA: 'desde casa', JORNADA: 'trabajé y no marqué', SALIDA_OLVIDO: 'olvidó la salida',
+  ENTRADA_FALLIDA: 'no pudo marcar', ENTRADA_OLVIDO: 'olvidó la entrada' };
+function nombreCorto(n) {
+  return String(n || '').toLowerCase().split(' ').slice(0, 2)
+    .map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ');
+}
+function textoResumenSemana(r, cfg) {
+  var i = r.indicadores, a = r.indicadoresAnterior, L = [];
+  L.push('📊 *Resumen semanal de asistencia*');
+  L.push((cfg.empresa || 'Grupo Robles') + ' · ' + fechaCortaSrv(r.periodo.desde) + ' al ' + fechaCortaSrv(r.periodo.hasta));
+  L.push('');
+  L.push('✅ Asistencia: *' + i.asistencia + '%*' + (a.asistencia !== null ? ' (semana anterior ' + a.asistencia + '%)' : ''));
+  L.push('⏰ Puntualidad: *' + i.puntualidad + '%*' + (a.puntualidad !== null ? ' (antes ' + a.puntualidad + '%)' : ''));
+  L.push('❌ Faltas: ' + i.faltas + ' · Tardanzas: ' + i.tardanzas + ' (' + i.minutosTardanza + ' min)');
+  L.push('🚪 Salidas sin marcar: ' + i.olvidosSalida + (i.horasPromedio ? ' · Promedio ' + i.horasPromedio + ' h/día' : ''));
+  if (r.areas.length) {
+    L.push(''); L.push('*Por área* (asistencia · puntualidad)');
+    r.areas.forEach(function (g) { L.push('• ' + g.area + ': ' + g.asistencia + '% · ' + (g.puntualidad === null ? '—' : g.puntualidad + '%')); });
+  }
+  if (r.puntualesPerfectos.length) { L.push(''); L.push('🏅 *Sin faltas ni tardanzas:* ' + r.puntualesPerfectos.map(nombreCorto).join(', ')); }
+  if (r.masTardanzas.length) {
+    L.push(''); L.push('🐢 *Más minutos de tardanza*');
+    r.masTardanzas.forEach(function (x) { L.push('• ' + nombreCorto(x.nombre) + ': ' + x.minutos + ' min en ' + x.tardanzas + ' día(s)'); });
+  }
+  if (r.faltas.length) {
+    L.push(''); L.push('❌ *Faltas*');
+    r.faltas.forEach(function (x) { L.push('• ' + nombreCorto(x.nombre) + ': ' + x.faltas + ' (' + x.dias.map(fechaCortaSrv).join(', ') + ')'); });
+  }
+  if (r.olvidosSalida.length) { L.push(''); L.push('🚪 *Olvidan la salida:* ' + r.olvidosSalida.map(function (x) { return nombreCorto(x.nombre) + ' (' + x.olvidos + ')'; }).join(', ')); }
+  var hay = r.permisosPendientes.length || r.semanaSinProgramar.length;
+  if (hay) {
+    L.push(''); L.push('⚠️ *Para atender esta semana*');
+    if (r.permisosPendientes.length) L.push('• Permisos sin resolver: ' + r.permisosPendientes.map(function (x) {
+      return nombreCorto(x.nombre) + ' (' + x.tipo + ', ' + fechaCortaSrv(x.fecha) + ')'; }).join('; '));
+    if (r.semanaSinProgramar.length) L.push('• Sin programación esta semana: ' + r.semanaSinProgramar.map(nombreCorto).join(', '));
+  }
+  return L.join('\n');
+}
+
+function htmlResumenSemana(r, cfg) {
+  var e = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+  var i = r.indicadores, a = r.indicadoresAnterior;
+  var tarjeta = function (t, v, ant, malo) {
+    var dif = (v !== null && ant !== null) ? Math.round((v - ant) * 10) / 10 : null;
+    var bien = dif === null ? null : (malo ? dif < 0 : dif > 0);
+    return '<td style="padding:10px 12px;border:1px solid #e3e8e6;border-radius:10px;width:25%">' +
+      '<div style="font-size:12px;color:#5b6b66">' + t + '</div>' +
+      '<div style="font-size:24px;font-weight:800;color:#1b2b4a">' + (v === null ? '—' : v) + '</div>' +
+      (dif === null || dif === 0 ? '<div style="font-size:11px;color:#8a9692">igual que la semana anterior</div>'
+        : '<div style="font-size:11px;color:' + (bien ? '#1f7a4d' : '#b3261e') + '">' + (dif > 0 ? '▲ +' : '▼ ') + dif + ' vs. semana anterior</div>') +
+      '</td>';
+  };
+  var lista = function (titulo, items) {
+    if (!items.length) return '';
+    return '<h3 style="font-size:15px;margin:18px 0 6px;color:#1b2b4a">' + titulo + '</h3><ul style="margin:0;padding-left:18px">' +
+      items.map(function (x) { return '<li style="margin:2px 0">' + x + '</li>'; }).join('') + '</ul>';
+  };
+  var h = '<div style="font-family:Arial,Helvetica,sans-serif;color:#22302c;max-width:640px">' +
+    '<h2 style="margin:0;color:#1b2b4a">Resumen semanal de asistencia</h2>' +
+    '<div style="color:#5b6b66;margin:4px 0 14px">' + e(cfg.empresa || 'Grupo Robles') + ' · del ' +
+      fechaCortaSrv(r.periodo.desde) + ' al ' + fechaCortaSrv(r.periodo.hasta) + '</div>' +
+    '<table cellspacing="6" style="width:100%;border-collapse:separate"><tr>' +
+      tarjeta('Asistencia %', i.asistencia, a.asistencia) + tarjeta('Puntualidad %', i.puntualidad, a.puntualidad) +
+      tarjeta('Faltas', i.faltas, a.faltas, true) + tarjeta('Salidas sin marcar', i.olvidosSalida, a.olvidosSalida, true) +
+    '</tr></table>' +
+    '<div style="font-size:13px;color:#5b6b66;margin:4px 6px">Tardanzas: ' + i.tardanzas + ' (' + i.minutosTardanza + ' min)' +
+      (i.horasPromedio ? ' · Promedio trabajado: ' + i.horasPromedio + ' h por día' : '') + ' · Días justificados: ' + i.justificadas + '</div>';
+  if (r.areas.length) {
+    h += '<h3 style="font-size:15px;margin:18px 0 6px;color:#1b2b4a">Por área</h3><table style="border-collapse:collapse;font-size:13px;width:100%">' +
+      '<tr style="background:#f2f5f4"><th style="text-align:left;padding:6px">Área</th><th style="text-align:right;padding:6px">Asistencia</th><th style="text-align:right;padding:6px">Puntualidad</th></tr>' +
+      r.areas.map(function (g) {
+        return '<tr><td style="padding:6px;border-top:1px solid #e3e8e6">' + e(g.area) + '</td>' +
+               '<td style="padding:6px;border-top:1px solid #e3e8e6;text-align:right">' + g.asistencia + '%</td>' +
+               '<td style="padding:6px;border-top:1px solid #e3e8e6;text-align:right">' + (g.puntualidad === null ? '—' : g.puntualidad + '%') + '</td></tr>';
+      }).join('') + '</table>';
+  }
+  h += lista('🏅 Sin faltas ni tardanzas', r.puntualesPerfectos.length ? [r.puntualesPerfectos.map(function (n) { return e(nombreCorto(n)); }).join(', ')] : []);
+  h += lista('Más minutos de tardanza', r.masTardanzas.map(function (x) { return e(nombreCorto(x.nombre)) + ': <b>' + x.minutos + ' min</b> en ' + x.tardanzas + ' día(s)'; }));
+  h += lista('Faltas', r.faltas.map(function (x) { return e(nombreCorto(x.nombre)) + ': <b>' + x.faltas + '</b> (' + x.dias.map(fechaCortaSrv).join(', ') + ')'; }));
+  h += lista('Olvidan marcar la salida', r.olvidosSalida.map(function (x) { return e(nombreCorto(x.nombre)) + ': ' + x.olvidos + ' día(s)'; }));
+  var at = [];
+  if (r.permisosPendientes.length) at.push('<b>' + r.permisosPendientes.length + ' permiso(s) sin resolver</b>: ' +
+    r.permisosPendientes.map(function (x) { return e(nombreCorto(x.nombre)) + ' (' + e(x.tipo) + ', ' + fechaCortaSrv(x.fecha) + ')'; }).join('; '));
+  if (r.semanaSinProgramar.length) at.push('<b>Sin programación esta semana</b> (la tenían la pasada): ' + r.semanaSinProgramar.map(function (n) { return e(nombreCorto(n)); }).join(', '));
+  if (at.length) h += '<div style="background:#fff6e5;border:1px solid #f0d9a8;border-radius:10px;padding:10px 12px;margin-top:18px">' +
+    '<b>⚠️ Para atender esta semana</b><ul style="margin:6px 0 0;padding-left:18px">' + at.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></div>';
+  h += '<p style="font-size:11px;color:#8a9692;margin-top:18px">Calculado con las mismas reglas del panel (pestaña Reportes). Aviso automático del control de asistencia.</p></div>';
+  return h;
 }
