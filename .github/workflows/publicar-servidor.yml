@@ -65,16 +65,32 @@ jobs:
 
       - name: Reemplazar con los archivos del repositorio
         run: |
+          # Los nombres se comparan sin tildes ni mayúsculas: en Apps Script el
+          # archivo se llama «Código» y en el repositorio «Codigo». Se escribe con
+          # el nombre que ya tiene allá, para no crear un archivo duplicado.
+          norm() { python3 -c "import sys,unicodedata; print(''.join(c for c in unicodedata.normalize('NFKD', sys.argv[1]) if c.isalnum()).lower())" "$1"; }
+          actualizados=0
           for f in apps-script/*.gs; do
             base=$(basename "$f" .gs)
-            if [ -f "vivo/$base.js" ] || [ -f "vivo/$base.gs" ]; then
-              rm -f "vivo/$base.gs"
-              cp "$f" "vivo/$base.js"
-              echo "Actualizado: $base"
+            destino=""
+            for v in vivo/*.js vivo/*.gs; do
+              [ -f "$v" ] || continue
+              vb=$(basename "$v"); vb="${vb%.*}"
+              if [ "$(norm "$vb")" = "$(norm "$base")" ]; then destino="$vb"; fi
+            done
+            if [ -n "$destino" ]; then
+              cp "$f" "vivo/$destino.js"
+              [ -f "vivo/$destino.gs" ] && mv "vivo/$destino.gs" "/tmp/$destino.gs.anterior"
+              echo "Actualizado: $base -> $destino"
+              actualizados=$((actualizados+1))
             else
               echo "::warning::$base no existe en el proyecto de Apps Script: no se agrega."
             fi
           done
+          if [ "$actualizados" -eq 0 ]; then
+            echo "::error::Ningún archivo del repositorio coincide con los del proyecto."
+            exit 1
+          fi
 
       - name: Subir el código
         run: cd vivo && clasp push --force
