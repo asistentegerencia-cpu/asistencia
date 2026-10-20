@@ -56,7 +56,7 @@ var COLS = {
      posición. Ya pasó dos veces: con 'equipo' en Marcajes y con 'hora_fin' aquí. */
   per: ['ts_servidor','id','emp_id','nombre','tipo','fecha','hora','motivo',
         'estado','resuelto_por','resuelto_el','comentario','hora_fin',
-        'adjunto','visto_jefe','visto_jefe_por','visto_jefe_el'],
+        'adjunto','visto_jefe','visto_jefe_por','visto_jefe_el','resuelto_usuario'],
   /* Horario asignado a una persona para un día concreto. Manda sobre su turno:
      el equipo de ventas se reparte la jornada y cada quien cubre una franja
      distinta, así que el turno fijo no alcanza. */
@@ -174,7 +174,7 @@ function rolDe(p) {
   // Con usuario, manda su propio rol (y solo su clave): las claves compartidas
   // no sirven con un nombre de usuario delante.
   var u = normUsuario(p.usuario);
-  if (u) { var x = usuarioValido(u, c); return x ? x.rol : ''; }
+  if (u) { var x = usuarioValido(u, c); return x ? (x.rol === 'admin' ? 'admin' : 'vista') : ''; }
   var cfg = leerConfig();
   if (c === String(cfg.adminPass || '')) return 'admin';
   if (cfg.vistaPass && c === String(cfg.vistaPass)) return 'vista';
@@ -198,7 +198,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 18,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 19,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -229,7 +229,7 @@ function enrutar(p) {
     case 'ausencia':    return rolDe(p) === 'admin' ? guardarAusencia(p)     : NO_AUTORIZADO;
     case 'borrar':      return rolDe(p) === 'admin' ? borrarMarcajes(p)      : NO_AUTORIZADO;
     case 'liberar':     return rolDe(p) === 'admin' ? liberarDispositivo(p)  : NO_AUTORIZADO;
-    case 'resolver':    return rolDe(p) === 'admin' ? resolverPermiso(p)      : NO_AUTORIZADO;
+    case 'resolver':    return puedeResolver(p) ? resolverPermiso(p)          : NO_AUTORIZADO;
     case 'programar':   return rolDe(p) === 'admin' ? guardarProgramacion(p)  : NO_AUTORIZADO;
     case 'notasprog':   return rolDe(p) === 'admin' ? guardarNotasProg(p)     : NO_AUTORIZADO;
     case 'reparar':     return rolDe(p) === 'admin' ? repararTodo()           : NO_AUTORIZADO;
@@ -1150,7 +1150,8 @@ function leerPermisosDeHoja() {
       comentario: String(f.comentario || ''),
       adjunto: String(f.adjunto || ''),
       vistoJefe: String(f.visto_jefe || '').toUpperCase() === 'SI',
-      vistoJefePor: String(f.visto_jefe_por || ''), vistoJefeEl: fechaTexto(f.visto_jefe_el)
+      vistoJefePor: String(f.visto_jefe_por || ''), vistoJefeEl: fechaTexto(f.visto_jefe_el),
+      resueltoUsuario: String(f.resuelto_usuario || '')
     };
   });
 }
@@ -1504,6 +1505,11 @@ function resolverPermiso(p) {
     return { ok: false, error: 'La decisión debe ser APROBADO o RECHAZADO.' };
   }
 
+  // Quien entra con su usuario firma con su nombre (no con lo que se escriba) y
+  // queda su usuario, para el historial de lo que resolvió cada uno.
+  var quien = usuarioDe(p);
+  if (quien) p.resueltoPor = quien.nombre;
+
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
@@ -1511,6 +1517,7 @@ function resolverPermiso(p) {
     var datos = h.getDataRange().getValues();
     var cab = datos[0];
     var cId = cab.indexOf('id'), cEstado = cab.indexOf('estado');
+    var cUsu = cab.indexOf('resuelto_usuario');
     var cPor = cab.indexOf('resuelto_por'), cEl = cab.indexOf('resuelto_el');
     var cCom = cab.indexOf('comentario');
 
@@ -1525,6 +1532,7 @@ function resolverPermiso(p) {
         h.getRange(i + 1, cPor + 1).setValue(String(p.resueltoPor || 'Administración'));
         h.getRange(i + 1, cEl + 1).setValue("'" + ahoraISO().fecha);
         h.getRange(i + 1, cCom + 1).setValue(String(p.comentario || ''));
+        if (cUsu >= 0) h.getRange(i + 1, cUsu + 1).setValue(quien ? quien.usuario : '');
 
         // Aprobar una jornada declarada no es solo cambiar un estado: hay que dejar
         // registrada la asistencia de ese día. Si no, el permiso diría "aprobado" y
@@ -1696,6 +1704,22 @@ function guardarJefe(p) {
    ══════════════════════════════════════════════════════════════ */
 function normUsuario(u) { return String(u || '').trim().toLowerCase(); }
 
+/* admin: todo · permisos: ve todo y además aprueba o rechaza permisos · vista: solo mira */
+var ROLES_USUARIO = ['admin', 'permisos', 'vista'];
+
+/* El usuario con el que vino el pedido, si vino con uno válido. */
+function usuarioDe(p) {
+  var u = normUsuario(p.usuario);
+  return u ? usuarioValido(u, String(p.clave || '')) : null;
+}
+
+/* Aprobar o rechazar permisos: administración, o un usuario con rol permisos. */
+function puedeResolver(p) {
+  if (rolDe(p) === 'admin') return true;
+  var x = usuarioDe(p);
+  return !!(x && x.rol === 'permisos');
+}
+
 function huellaUsuario(usuario, clave) {
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'usuario|' + usuario + '|' + clave);
   return d.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
@@ -1708,7 +1732,7 @@ function leerUsuariosDeHoja() {
   try { out = filas(HOJA.usu, COLS.usu); } catch (e) { return []; }
   return out.filter(function (f) { return f.usuario; }).map(function (f) {
     return { usuario: normUsuario(f.usuario), nombre: String(f.nombre || ''),
-             rol: String(f.rol || '').toLowerCase() === 'admin' ? 'admin' : 'vista',
+             rol: ROLES_USUARIO.indexOf(String(f.rol || '').toLowerCase()) >= 0 ? String(f.rol).toLowerCase() : 'vista',
              passHash: String(f.pass_hash || ''), activo: String(f.activo).toUpperCase() !== 'NO' };
   });
 }
@@ -1738,7 +1762,8 @@ function entrarUsuario(p) {
     return { ok: false, error: 'Usuario o clave incorrectos' };
   }
   if (cache) { try { cache.remove(claveFallos); } catch (e) { } }
-  return { ok: true, rol: x.rol, usuario: x.usuario, nombre: x.nombre };
+  return { ok: true, rol: x.rol === 'admin' ? 'admin' : 'vista', usuario: x.usuario, nombre: x.nombre,
+           aprueba: x.rol === 'admin' || x.rol === 'permisos', rolUsuario: x.rol };
 }
 
 function listarUsuarios() {
@@ -1755,7 +1780,7 @@ function guardarUsuario(p) {
     return { ok: false, error: 'El usuario debe tener de 3 a 30 letras o números, sin espacios ni tildes.' };
   var borrar = String(p.borrar) === 'true' || p.borrar === true;
   var nombre = String(p.nombre || '').trim().replace(/\s+/g, ' ');
-  var rolNuevo = String(p.rol || '').toLowerCase() === 'admin' ? 'admin' : 'vista';
+  var rolNuevo = ROLES_USUARIO.indexOf(String(p.rol || '').toLowerCase()) >= 0 ? String(p.rol).toLowerCase() : 'vista';
   var clave = String(p.nuevaClave || '');
   var activo = !(String(p.activo) === 'false' || p.activo === false);
   if (!borrar && nombre.length < 3) return { ok: false, error: 'Escribe el nombre de quien usará este acceso.' };
