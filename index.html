@@ -3635,7 +3635,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-20.1';
+const APP_VERSION = '2026-10-20.2';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -4120,6 +4120,210 @@ function verResumenDia(){
       setTimeout(()=>{ bc.textContent = 'Copiar imagen'; }, 3000);
     }, 'image/png');
   };
+}
+
+/* ---------- REPORTE PERSONAL POR WHATSAPP ----------
+   Cómo le va a una persona en el mes (o el periodo que se elija), para mandárselo
+   a ella misma: como texto, que viaja en el enlace de WhatsApp, y como imagen,
+   para compartir o pegar en el chat. Sale del WhatsApp de quien lo envía: es
+   gratis y la persona reconoce el número. Mismas reglas que el panel
+   (acumuladosDe / estadoDia), así que los números son los de Reportes. */
+let REPWA = {id:'', periodo:'mes'};
+
+function datosReportePersona(emp, desde, hasta, ahora){
+  ahora = ahora || new Date();
+  const hoy = hoyISO(ahora);
+  const a = acumuladosDe(emp, desde, hasta, ahora);
+  const tardes = [], faltas = [], olvidos = [];
+  rangoFechas(desde, hasta).forEach(f=>{
+    if(f > hoy) return;
+    const d = estadoDia(emp, f, ahora);
+    if(d.clase==='FALTA') faltas.push(f);
+    if(d.clase==='ASISTIO'){
+      if(d.tard > 0) tardes.push({f, min:d.tard});
+      if(f < hoy && (!d.j.salida || d.j.salida.origen==='DECLARADO' || permisoAprobado(emp.id, f, 'SALIDA_OLVIDO'))) olvidos.push(f);
+    }
+  });
+  return {emp, desde, hasta: hasta > hoy ? hoy : hasta, a, tardes, faltas, olvidos,
+          pa: a.programados ? Math.round(a.asistidos/a.programados*100) : null,
+          pp: a.conEntrada ? Math.round(a.puntuales/a.conEntrada*100) : null};
+}
+
+function periodoReporte(k, ahora){
+  const r = rangoPreset(k === 'ant' ? 'ant' : 'mes', ahora);
+  const d = new Date(r.desde+'T12:00:00');
+  return Object.assign(r, {nombre: MESES[d.getMonth()]+' '+d.getFullYear()});
+}
+
+const ddmm = f=>f.slice(8,10)+'/'+f.slice(5,7);
+const durTexto = m=>{ const h = Math.floor(m/60), r = m%60; return h ? h+' h'+(r?' '+r+' min':'') : r+' min'; };
+
+function textoReportePersona(r, periodo){
+  const nom = nombrePropio(String(r.emp.nombre||'').trim().split(/\s+/)[0]);
+  const a = r.a, L = [];
+  L.push('📊 *Tu asistencia de '+periodo.nombre+'*');
+  L.push('Hola '+nom+', este es tu resumen del '+ddmm(r.desde)+' al '+ddmm(r.hasta)+':');
+  L.push('');
+  L.push('✅ Asistencia: *'+(r.pa==null?'—':r.pa+'%')+'* ('+a.asistidos+' de '+a.programados+' días)');
+  L.push('⏰ Puntualidad: *'+(r.pp==null?'—':r.pp+'%')+'*');
+  L.push('🐢 Tardanzas: *'+a.tardanzas+'*'+(a.minutos ? ' ('+durTexto(a.minutos)+' en total)' : ''));
+  L.push('❌ Faltas: *'+a.faltas+'*'+(r.faltas.length ? ' ('+r.faltas.map(ddmm).join(', ')+')' : ''));
+  L.push('🚪 Salidas sin marcar: *'+r.olvidos.length+'*'+(r.olvidos.length ? ' ('+r.olvidos.map(ddmm).join(', ')+')' : ''));
+  if(a.justificadas) L.push('📝 Días con permiso o justificados: '+a.justificadas);
+  if(a.horasDia) L.push('🕒 Promedio trabajado: '+durTexto(a.horasDia)+' por día');
+  if(r.tardes.length){
+    L.push(''); L.push('*Días con tardanza*');
+    r.tardes.forEach(t=>L.push('• '+ddmm(t.f)+' — '+t.min+' min'));
+  }
+  L.push('');
+  if(a.programados && !a.faltas && !a.tardanzas && !r.olvidos.length) L.push('🏅 ¡Mes impecable: sin faltas, sin tardanzas y sin olvidos! Gracias.');
+  else if(r.olvidos.length) L.push('Recuerda marcar tu salida todos los días en la app. Si algún dato no cuadra, pide la corrección desde la app. ¡Gracias!');
+  else L.push('Si algún dato no cuadra, pide la corrección desde la app. ¡Gracias!');
+  return L.join('\n');
+}
+
+function dibujarReportePersona(r, periodo){
+  const W = 1080, P = 56, F = 'Figtree, "Segoe UI", Roboto, Arial, sans-serif', a = r.a;
+  const filasT = Math.min(r.tardes.length, 16), colsT = filasT > 8 ? 2 : 1, altoT = filasT ? 64 + Math.ceil(filasT/colsT)*44 + 20 : 0;
+  const extras = [r.faltas.length ? 1 : 0, r.olvidos.length ? 1 : 0].reduce((x,y)=>x+y, 0);
+  const H = 230 + 190*2 + 40 + 120 + extras*70 + altoT + 90;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  const rr = (x,y,w,h,rad,fill)=>{ g.beginPath(); g.moveTo(x+rad,y); g.arcTo(x+w,y,x+w,y+h,rad); g.arcTo(x+w,y+h,x,y+h,rad);
+                                   g.arcTo(x,y+h,x,y,rad); g.arcTo(x,y,x+w,y,rad); g.closePath(); g.fillStyle=fill; g.fill(); };
+  const txt = (t,x,y,size,color,weight,align)=>{ g.font=(weight||500)+' '+size+'px '+F; g.fillStyle=color; g.textAlign=align||'left'; g.fillText(t,x,y); };
+  const corta = (t,max,size,weight)=>{ g.font=(weight||500)+' '+size+'px '+F; if(g.measureText(t).width<=max) return t;
+    while(t.length>1 && g.measureText(t+'…').width>max) t=t.slice(0,-1); return t+'…'; };
+  const colorPctC = v => v==null ? '#475467' : v>=90 ? '#067647' : v>=75 ? '#b25e09' : '#b42318';
+
+  g.fillStyle = '#f4f6fa'; g.fillRect(0,0,W,H);
+  g.fillStyle = '#17294A'; g.fillRect(0,0,W,200);
+  txt(corta(nombrePropio(r.emp.nombre), W-P*2, 50, 800), P, 86, 50, '#ffffff', 800);
+  txt('Asistencia de '+periodo.nombre+' · del '+ddmm(r.desde)+' al '+ddmm(r.hasta), P, 136, 28, '#c9d6ea', 600);
+  txt(corta(nombrePropio(r.emp.area||'')+(r.emp.cargo?' · '+r.emp.cargo:''), W-P*2-260, 22, 600), P, 174, 22, '#8fa6c9', 600);
+  txt(CFG.empresa||'Grupo Robles', W-P, 174, 22, '#8fa6c9', 600, 'right');
+
+  let y = 230;
+  const kw = (W - P*2 - 20)/2;
+  const kpis = [
+    {l:'Asistencia', v:r.pa==null?'—':r.pa+'%', c:colorPctC(r.pa), s:a.asistidos+' de '+a.programados+' días'},
+    {l:'Puntualidad', v:r.pp==null?'—':r.pp+'%', c:colorPctC(r.pp), s:a.puntuales+' llegadas a tiempo'},
+    {l:'Tardanzas', v:String(a.tardanzas), c:a.tardanzas?'#b25e09':'#067647', s:a.minutos?durTexto(a.minutos)+' en total':'ninguna'},
+    {l:'Faltas', v:String(a.faltas), c:a.faltas?'#b42318':'#067647', s:a.faltas?'sin justificar':a.justificadas?a.justificadas+' día(s) con permiso':'ninguna'}
+  ];
+  kpis.forEach((k,i)=>{
+    const x = P + (i%2)*(kw+20), yy = y + Math.floor(i/2)*190;
+    rr(x, yy, kw, 170, 24, '#ffffff');
+    txt(k.l, x+28, yy+46, 28, '#475467', 700);
+    txt(k.v, x+28, yy+118, 64, k.c, 800);
+    txt(k.s, x+28, yy+152, 23, '#667085', 600);
+  });
+  y += 190*2 + 20;
+
+  rr(P, y, W-P*2, 100, 20, '#ffffff');
+  txt('Salidas sin marcar: '+r.olvidos.length, P+28, y+44, 28, r.olvidos.length?'#b42318':'#067647', 800);
+  txt(a.horasDia ? 'Promedio trabajado: '+durTexto(a.horasDia)+' por día' : 'Promedio trabajado: —', P+28, y+80, 24, '#475467', 600);
+  y += 120;
+  if(r.faltas.length){ txt(corta('Faltas: '+r.faltas.map(ddmm).join(', '), W-P*2, 26, 700), P, y+40, 26, '#b42318', 700); y += 70; }
+  if(r.olvidos.length){ txt(corta('Sin salida: '+r.olvidos.map(ddmm).join(', '), W-P*2, 26, 700), P, y+40, 26, '#93370d', 700); y += 70; }
+
+  if(filasT){
+    g.beginPath(); g.arc(P+10, y+22, 10, 0, Math.PI*2); g.fillStyle = '#b25e09'; g.fill();
+    txt('Días con tardanza'+(r.tardes.length > filasT ? ' (los '+filasT+' de más minutos)' : ''), P+32, y+33, 30, '#101828', 800);
+    y += 64;
+    const lista = r.tardes.length > filasT ? r.tardes.slice().sort((x,z)=>z.min-x.min).slice(0,filasT).sort((x,z)=>x.f.localeCompare(z.f)) : r.tardes;
+    const porCol = Math.ceil(filasT/colsT), colW = (W-P*2)/colsT;
+    lista.forEach((t,i)=>{
+      const x = P + Math.floor(i/porCol)*colW, yy = y + (i%porCol)*44 + 30;
+      const d = new Date(t.f+'T12:00:00');
+      txt(DIAS[d.getDay()].slice(0,3)+' '+ddmm(t.f), x, yy, 28, '#101828', 700);
+      txt(t.min+' min', x+250, yy, 28, t.min>(CFG.umbralGrave||30)?'#b42318':'#667085', 700);
+    });
+    y += Math.ceil(filasT/colsT)*44 + 20;
+  }
+  txt('Control de Asistencia · '+(CFG.empresa||''), W/2, H-30, 22, '#98a2b3', 600, 'center');
+  return c;
+}
+
+async function reporteWhatsApp(empId){
+  const gente = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').sort((x,y)=>x.nombre.localeCompare(y.nombre));
+  if(!gente.length){ toast('No hay colaboradores activos'); return; }
+  if(empId) REPWA.id = empId;
+  if(!gente.some(e=>e.id===REPWA.id)) REPWA.id = gente[0].id;
+  const m = document.createElement('div'); m.className = 'modal';
+  document.body.appendChild(m);
+  const cerrar = ()=>m.remove();
+  let cargado = {};
+
+  const pintar = async ()=>{
+    const emp = gente.find(e=>e.id===REPWA.id), ahora = new Date();
+    const per = periodoReporte(REPWA.periodo, ahora);
+    // El panel trae el mes en curso; el anterior puede no estar entero en el celular
+    if(hayServidor() && !cargado[per.desde]){
+      m.innerHTML = '<div class="box"><p style="color:var(--muted)">Cargando '+esc(per.nombre)+'…</p></div>';
+      try{ await sincronizarMarcajes(per.desde, per.hasta); }catch(e){}
+      cargado[per.desde] = true;
+    }
+    const r = datosReportePersona(emp, per.desde, per.hasta, ahora);
+    const texto = textoReportePersona(r, per);
+    const c = dibujarReportePersona(r, per), url = c.toDataURL('image/png');
+    const num = numeroWhatsApp(emp.tel);
+    const i = gente.indexOf(emp);
+    m.innerHTML = '<div class="box" style="max-width:560px;max-height:92vh;overflow:auto"><h2>Reporte por WhatsApp</h2>'+
+      '<div class="frow"><div><label>Colaborador</label><select class="sel" id="rwE">'+
+        gente.map(e=>'<option value="'+esc(e.id)+'"'+(e.id===emp.id?' selected':'')+'>'+esc(nombrePropio(e.nombre))+(e.tel?'':' (sin celular)')+'</option>').join('')+
+      '</select></div>'+
+      '<div><label>Periodo</label><select class="sel" id="rwP">'+
+        '<option value="mes"'+(REPWA.periodo==='mes'?' selected':'')+'>Este mes</option>'+
+        '<option value="ant"'+(REPWA.periodo==='ant'?' selected':'')+'>Mes anterior</option></select></div></div>'+
+      '<img src="'+url+'" alt="Reporte de '+esc(emp.nombre)+'" style="width:100%;border-radius:14px;border:1px solid var(--gray-200);margin-top:6px">'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'+
+        (num ? '<a class="btn btn-sm btn-wa" id="rwWa" target="_blank" rel="noopener" href="https://wa.me/'+num+'?text='+encodeURIComponent(texto)+'">'+ico('chat')+' Enviar texto a '+esc(nombreCortoRes(emp.nombre))+'</a>'
+             : '<span style="font-size:12.5px;color:var(--danger-text);align-self:center">Sin celular en su ficha: usa Compartir o Copiar.</span>')+
+        '<button class="btn btn-sm btn-line" id="rwShare">Compartir imagen</button>'+
+        '<button class="btn btn-sm btn-line" id="rwCopy">Copiar imagen</button>'+
+        '<button class="btn btn-sm btn-line" id="rwTxt">Copiar texto</button>'+
+        '<button class="btn btn-sm btn-line" id="rwBajar">Descargar</button>'+
+      '</div>'+
+      '<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5">«Enviar texto» abre su chat con el resumen escrito. '+
+        'Para mandar la imagen: en el celular toca «Compartir imagen» y elige WhatsApp; en la computadora, «Copiar imagen» y pégala en el chat.</p>'+
+      '<div style="display:flex;gap:8px;margin-top:12px">'+
+        '<button class="btn btn-line" id="rwAnt" style="flex:1"'+(i<=0?' disabled':'')+'>‹ Anterior</button>'+
+        '<button class="btn btn-line" id="rwSig" style="flex:1"'+(i>=gente.length-1?' disabled':'')+'>Siguiente ›</button></div>'+
+      '<button class="btn btn-line" id="rwX" style="width:100%;margin-top:8px">Cerrar</button></div>';
+    m.querySelector('#rwX').onclick = cerrar;
+    m.querySelector('#rwE').onchange = ev=>{ REPWA.id = ev.target.value; pintar(); };
+    m.querySelector('#rwP').onchange = ev=>{ REPWA.periodo = ev.target.value; pintar(); };
+    m.querySelector('#rwAnt').onclick = ()=>{ REPWA.id = gente[i-1].id; pintar(); };
+    m.querySelector('#rwSig').onclick = ()=>{ REPWA.id = gente[i+1].id; pintar(); };
+    const nombreArchivo = 'asistencia-'+String(emp.nombre).toLowerCase().replace(/[^a-z0-9]+/g,'-')+'-'+per.desde.slice(0,7)+'.png';
+    m.querySelector('#rwBajar').onclick = ()=>{
+      const x = document.createElement('a'); x.href = url; x.download = nombreArchivo;
+      document.body.appendChild(x); x.click(); x.remove();
+    };
+    const bc = m.querySelector('#rwCopy');
+    bc.onclick = ()=>c.toBlob(async blob=>{
+      try{ await navigator.clipboard.write([new ClipboardItem({'image/png': blob})]); bc.textContent = '✓ Imagen copiada'; }
+      catch(e){ bc.textContent = 'No se pudo: usa Descargar'; }
+      setTimeout(()=>{ bc.textContent = 'Copiar imagen'; }, 3000);
+    }, 'image/png');
+    const bt = m.querySelector('#rwTxt');
+    bt.onclick = async ()=>{
+      try{ await navigator.clipboard.writeText(texto); bt.textContent = '✓ Texto copiado'; }
+      catch(e){ bt.textContent = 'No se pudo copiar'; }
+      setTimeout(()=>{ bt.textContent = 'Copiar texto'; }, 2500);
+    };
+    const bs = m.querySelector('#rwShare');
+    bs.onclick = ()=>c.toBlob(async blob=>{
+      const file = new File([blob], nombreArchivo, {type:'image/png'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{ await navigator.share({files:[file], text:texto}); }catch(e){ /* canceló */ }
+      } else {
+        toast('Este equipo no permite compartir imágenes: usa Copiar imagen o Descargar');
+      }
+    }, 'image/png');
+  };
+  pintar();
 }
 
 /* Quién tiene algo pendiente ese día: entrada (solo hoy) o salida. */
@@ -7704,6 +7908,7 @@ function tabReportes(b){
           '</select></div></div></details>'+
       (uno ? '<button class="rchip" id="aQuitar">'+esc(nombrePropio(uno.nombre))+' ✕</button>' : '')+
       '<span class="grow"></span>'+
+      '<button class="btn btn-sm btn-line" id="aWa">'+ico('chat')+' Reporte por WhatsApp</button>'+
       '<button class="btn btn-sm btn-line" id="aX">Descargar Excel</button>'+
     '</div>'+
     '<div class="rsub">'+
@@ -7762,6 +7967,7 @@ function tabReportes(b){
   $('#aI').onchange = ()=>{ ANA.desde=$('#aI').value; REP_DIAS=null; save('ca_ana',ANA); tabReportes(b); };
   $('#aF').onchange = ()=>{ ANA.hasta=$('#aF').value; REP_DIAS=null; save('ca_ana',ANA); tabReportes(b); };
   $('#aX').onclick  = ()=>exportar(ANA.desde, ANA.hasta, 'Asistencia_'+ANA.desde+'_a_'+ANA.hasta);
+  $('#aWa').onclick = ()=>reporteWhatsApp(ANA_EMP || '');
   b.querySelectorAll('[data-rango]').forEach(btn=>{
     btn.onclick = ()=>{ const r = rangoPreset(btn.dataset.rango); ANA.desde=r.desde; ANA.hasta=r.hasta; REP_DIAS=null; save('ca_ana',ANA); tabReportes(b); };
   });
@@ -7908,12 +8114,14 @@ function fichaReporte(id, ahora, verMarcajes){
     '</div>'+
     '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
       '<button class="btn btn-sm" id="fMar">Ver sus marcajes</button>'+
-      '<button class="btn btn-sm btn-line" id="fRep">Ver su reporte día por día</button></div></div>';
+      '<button class="btn btn-sm btn-line" id="fRep">Ver su reporte día por día</button>'+
+      '<button class="btn btn-sm btn-line" id="fWa">'+ico('chat')+' Enviarle su reporte</button></div></div>';
   document.body.appendChild(m);
   m.querySelector('#fX').onclick = ()=>m.remove();
   m.onclick = ev=>{ if(ev.target===m) m.remove(); };
   m.querySelector('#fMar').onclick = ()=>{ m.remove(); REP_SUB='mar'; REP_DIAS=null; verMarcajes(id); };
   m.querySelector('#fRep').onclick = ()=>{ m.remove(); REP_SUB='res'; verMarcajes(id); };
+  m.querySelector('#fWa').onclick = ()=>{ m.remove(); reporteWhatsApp(id); };
 }
 
 /* La tabla de siempre, con todas las columnas, para quien la necesite completa. */
