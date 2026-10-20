@@ -3635,7 +3635,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-13.1';
+const APP_VERSION = '2026-10-20.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -5137,7 +5137,11 @@ function panelJefe(emp){
   m.innerHTML = '<div class="box" style="max-height:88vh;overflow:auto"><h2>Mi equipo</h2><div id="jfCuerpo"></div>'+
     '<button class="btn btn-line" id="jfX" style="width:100%;margin-top:14px">Cerrar</button></div>';
   document.body.appendChild(m);
-  m.querySelector('#jfX').onclick = ()=>m.remove();
+  m.querySelector('#jfX').onclick = ()=>{
+    m.remove();
+    // Lo que acaba de revisar o publicar ya no debe seguir avisándose
+    sincronizarMios(emp, null, null, true).then(c=>{ if(c) pintarPermiso(emp); }).catch(()=>{});
+  };
   const cuerpo = m.querySelector('#jfCuerpo');
   const cred = ()=>({ident: emp.dni || emp.id, pin: JEFE_PIN, deviceId: idDispositivo()});
 
@@ -5265,17 +5269,18 @@ function panelJefe(emp){
   const cargarProg = async ()=>{
     if(!JF_SEM) JF_SEM = lunesDe(hoyISO());
     const dias = diasSem();
+    const previa = diaISO(dias[0], -28);     // para ver quién falta y copiar su semana anterior
     if(dias.indexOf(JF_DIA) < 0) JF_DIA = dias.indexOf(hoyISO()) >= 0 ? hoyISO() : dias[0];
     cuerpo.innerHTML = pestanas(0)+'<p style="color:var(--muted)">Cargando…</p>';
     cablearPestanas();
     let r;
-    try{ r = await api('jefeprog', Object.assign(cred(), {desde:dias[0], hasta:dias[6]}), {timeout:30000}); }
+    try{ r = await api('jefeprog', Object.assign(cred(), {desde:previa, hasta:dias[6]}), {timeout:30000}); }
     catch(e){ cuerpo.innerHTML = pestanas(0)+'<div class="alert alert-bad">Sin conexión. Inténtalo de nuevo.</div>'; cablearPestanas(); return; }
     if(!r || !r.ok) return fallo(r);
     equipo = (r.equipo || []).sort((a,b)=>a.nombre.localeCompare(b.nombre));
     const ids = equipo.map(e=>e.id);
     // Se reemplaza solo lo de su gente en esa semana; lo propio del jefe no se toca
-    PROGRAMACION = PROGRAMACION.filter(x=>!(ids.indexOf(x.empId)>=0 && x.fecha>=dias[0] && x.fecha<=dias[6]))
+    PROGRAMACION = PROGRAMACION.filter(x=>!(ids.indexOf(x.empId)>=0 && x.fecha>=previa && x.fecha<=dias[6]))
                                .concat(r.programacion || []);
     pintarProg(r.jefe);
   };
@@ -5307,6 +5312,13 @@ function panelJefe(emp){
     const porValidar = PROGRAMACION.filter(a=>dentro(a) && a.estado==='PUBLICADO' && a.fecha<hoy);
     const variasAreas = new Set(equipo.map(e=>e.area)).size > 1;
     const d0 = new Date(dias[0]+'T12:00:00'), d6 = new Date(dias[6]+'T12:00:00');
+    // Quién falta programar: tuvo turnos en las cuatro semanas anteriores y en
+    // esta no tiene ninguno. Solo para una semana que todavía no terminó.
+    const tramosEn = (id, fs, publicados) => PROGRAMACION.filter(a=>a.empId===id && a.entrada && a.salida &&
+                                                 fs.indexOf(a.fecha)>=0 && (!publicados || a.estado!=='BORRADOR'));
+    const semanaAtras = k => dias.map(f=>diaISO(f, -7*k));
+    const sinProg = dias[6] < hoy ? [] : equipo.filter(e=>!tramosEn(e.id, dias).length &&
+                      [1,2,3,4].some(k=>tramosEn(e.id, semanaAtras(k), true).length));
     const fila = e=>{
       const tramos = segmentosDe(e.id, JF_DIA), base = horarioFijo(e, JF_DIA);
       const txt = tramos.length
@@ -5333,6 +5345,12 @@ function panelJefe(emp){
         '<b style="font-size:14px;text-align:center">'+d0.getDate()+' '+MESES[d0.getMonth()].slice(0,3)+' – '+
           d6.getDate()+' '+MESES[d6.getMonth()].slice(0,3)+'</b>'+
         '<button class="btn btn-sm btn-line" id="jfSig">›</button></div>'+
+      (sinProg.length ? '<div class="alert alert-warn" style="text-align:left;margin-bottom:10px">'+
+        '🗓️ <b>Te falta programar '+(sinProg.length===1 ? 'a 1 persona' : 'a '+sinProg.length+' personas')+'</b> esta semana: '+
+        esc(sinProg.map(e=>nombrePropio(e.nombre)).join(', '))+'.'+
+        '<button class="btn btn-sm" id="jfCopiar" style="width:100%;margin-top:8px">Copiar su semana anterior</button>'+
+        '<div style="font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.4">Se copian de hoy en adelante, en <b>borrador</b>: '+
+          'revisa, cambia lo que haga falta y toca Publicar.</div></div>' : '')+
       '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">'+
         dias.map(f=>{
           const d = new Date(f+'T12:00:00'), on = f===JF_DIA;
@@ -5357,6 +5375,32 @@ function panelJefe(emp){
       const e = equipo.find(x=>x.id===bt.dataset.jfe);
       editarProgramacion(e.id, JF_DIA, {emp:e, guardar:guardarTramoJefe, alCerrar:()=>pintarProg(jefe)});
     });
+    const cop = cuerpo.querySelector('#jfCopiar');
+    if(cop) cop.onclick = ()=>{
+      // De cada persona se toma su semana programada más reciente (la anterior o,
+      // si esa tampoco la tuvo, la de antes) y se corre a esta, día por día.
+      const nuevos = [];
+      let n = 0;
+      sinProg.forEach(e=>{
+        for(let k=1; k<=4; k++){
+          const fuente = tramosEn(e.id, semanaAtras(k), true);
+          if(!fuente.length) continue;
+          fuente.forEach(a=>{
+            const f = diaISO(a.fecha, 7*k);
+            if(f < hoy) return;
+            nuevos.push({id:'G'+Date.now()+String(n++).padStart(3,'0')+Math.floor(Math.random()*900+100),
+                         empId:e.id, nombre:a.nombre||e.nombre, fecha:f, entrada:a.entrada, salida:a.salida,
+                         modalidad:a.modalidad||'PRESENCIAL', nota:a.nota||'', estado:'BORRADOR',
+                         validadoPor:'', validadoEl:''});
+          });
+          break;
+        }
+      });
+      if(!nuevos.length){ toast('No hay días por copiar de hoy en adelante'); return; }
+      PROGRAMACION = PROGRAMACION.concat(nuevos);
+      pintarProg(jefe);
+      enviarProg(nuevos, 'Copiado en borrador: revisa y toca Publicar');
+    };
     const pub = cuerpo.querySelector('#jfPub');
     if(pub) pub.onclick = async ()=>{
       if(!confirm('Se publicarán '+borradores.length+' turno'+(borradores.length===1?'':'s')+' de esta semana.\n\n'+
@@ -5512,12 +5556,40 @@ function pintarPermiso(emp){
       '</div>';
     }).join('')+
     '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>'+
-    (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">'+ico('users')+' Mi equipo: permisos y programación</button>' : '');
+    (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">'+ico('users')+' Mi equipo: permisos y programación'+
+                    (avisosJefeHtml(emp).n ? ' <span style="min-width:22px;height:22px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;font-weight:800;display:inline-grid;place-items:center;padding:0 6px">'+avisosJefeHtml(emp).n+'</span>' : '')+'</button>'+avisosJefeHtml(emp).html : '');
 
   const b = $('#btnPermiso');
   if(b) b.onclick = ()=>solicitarPermiso(emp);
   const bj = $('#btnJefe');
   if(bj) bj.onclick = ()=>panelJefe(emp);
+  c.querySelectorAll('[data-jav]').forEach(x=>x.onclick = ()=>{
+    JF_VISTA = x.dataset.jav;
+    const av = emp.avisosJefe || {};
+    if(JF_VISTA==='prog' && av.semana){ JF_SEM = av.semana; JF_DIA = ''; }
+    panelJefe(emp);
+  });
+}
+
+/* Lo que espera al jefe, a la vista apenas abre la app: así se entera sin tener
+   que entrar a mirar. Solo cuántos; el detalle sigue detrás de su PIN. Lo manda
+   el servidor junto con sus marcajes (avisosJefe). */
+function avisosJefeHtml(emp){
+  const av = emp.esJefe && emp.avisosJefe;
+  if(!av) return {n:0, html:''};
+  const s = (k, uno, varios)=> k===1 ? uno : varios;
+  const items = [
+    av.permisos ? {t:'🔔 Tienes <b>'+av.permisos+' '+s(av.permisos,'permiso','permisos')+'</b> de tu equipo por revisar.', v:'perm', b:'Revisar'} : null,
+    av.sinProgramar ? {t:'🗓️ Falta programar a <b>'+av.sinProgramar+' '+s(av.sinProgramar,'persona','personas')+'</b> de tu equipo para '+
+                         (av.proxima ? 'la próxima semana' : 'esta semana')+'.', v:'prog', b:'Programar'} : null,
+    av.borradores ? {t:'📝 Tienes <b>'+av.borradores+' '+s(av.borradores,'turno','turnos')+' en borrador</b>: todavía no cuentan hasta que los publiques.', v:'prog', b:'Publicar'} : null
+  ].filter(Boolean);
+  return {
+    n: (av.permisos||0) + (av.sinProgramar||0),
+    html: items.map(x=>'<div class="alert alert-warn" style="text-align:left;margin-top:8px;display:flex;gap:10px;align-items:center">'+
+      '<span style="flex:1;font-size:13.5px;line-height:1.45">'+x.t+'</span>'+
+      '<button class="btn btn-sm" data-jav="'+x.v+'">'+x.b+'</button></div>').join('')
+  };
 }
 
 function solicitarPermiso(emp, tipoInicial, pre){
@@ -7069,6 +7141,91 @@ function avisoProyectos(){
 
    Salen todos los pendientes, no solo los de hoy, porque uno pedido para mañana
    también hay que contestarlo antes de que llegue mañana. */
+/* ---------- BANDEJA DE PENDIENTES ----------
+   Todo lo que espera una acción de Administración, en un solo lugar y arriba del
+   tablero de hoy: permisos por responder (también los de días que ya pasaron),
+   salidas que nadie marcó en la última semana y gente sin programar. */
+let BANDEJA_ABIERTA = false;
+function pendientesPanel(){
+  const hoy = hoyISO(), ahora = new Date();
+  const gente = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO');
+  const permisos = agruparPermisos(PERMISOS.filter(p=>p.estado==='PENDIENTE' && p.fecha >= diaISO(hoy, -30)))
+                     .sort((a,b)=>a.desde.localeCompare(b.desde));
+  const salidas = [];
+  for(let k=1; k<=7; k++){
+    const f = diaISO(hoy, -k);
+    if(CFG.inicioOperacion && f < CFG.inicioOperacion) break;
+    gente.forEach(e=>{
+      if(salidaDe(e, f, ahora).estado !== 'NO REGISTRADA') return;
+      const j = jornadaDe(e.id, f);
+      salidas.push({e, f, entrada: j.entrada ? j.entrada.hora : ''});
+    });
+  }
+  // La misma regla que el aviso a los jefes: de lunes a miércoles, esta semana;
+  // desde el jueves, la siguiente.
+  const lunes = lunesDe(hoy), dow = (new Date(hoy+'T12:00:00').getDay()+6)%7;
+  const semana = dow >= 3 ? diaISO(lunes, 7) : lunes, fin = diaISO(semana, 6), desde4 = diaISO(semana, -28);
+  const usa = {}, tiene = {};
+  let borradores = 0;
+  PROGRAMACION.forEach(a=>{
+    if(!a.entrada || !a.salida) return;
+    if(a.fecha >= desde4 && a.fecha < semana && a.estado !== 'BORRADOR') usa[a.empId] = true;
+    if(a.fecha >= semana && a.fecha <= fin){ tiene[a.empId] = true; if(a.estado === 'BORRADOR') borradores++; }
+  });
+  const sinProg = gente.filter(e=>usa[e.id] && !tiene[e.id]);
+  return {permisos, salidas, sinProg, borradores, semana, proxima: semana > lunes};
+}
+
+function bandejaPendientes(){
+  const d = pendientesPanel(), vista = soloVista();
+  const total = d.permisos.length + d.salidas.length + d.sinProg.length + (d.borradores ? 1 : 0);
+  if(!total) return '';
+  const hoy = hoyISO();
+  const linea = (izq, der)=>'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid rgba(0,0,0,.07)">'+
+    '<div style="flex:1 1 240px;min-width:200px">'+izq+'</div>'+(der||'')+'</div>';
+  const seccion = (titulo, n, cuerpo, ir)=>'<div style="margin-top:12px">'+
+    '<div style="display:flex;align-items:center;gap:8px"><b style="font-size:14px">'+titulo+' ('+n+')</b>'+
+      (ir ? '<span class="grow" style="flex:1"></span><button class="btn btn-sm btn-line" data-bir="'+ir.tab+'">'+ir.t+'</button>' : '')+'</div>'+
+    cuerpo+'</div>';
+
+  let h = '';
+  if(d.permisos.length) h += seccion('📝 Permisos por responder', d.permisos.length, d.permisos.map(g=>{
+    const p = g.p, t = tipoReal(p);
+    const cuando = g.ps.length > 1 ? 'del '+fechaCorta(g.desde)+' al '+fechaCorta(g.hasta)
+                 : g.desde === hoy ? '<b>hoy</b>' : (g.desde < hoy ? 'el '+fechaCorta(g.desde)+' <span class="tag tag-warn" style="font-size:10px">ya pasó</span>' : 'el '+fechaCorta(g.desde));
+    return linea('<b>'+esc(p.nombre)+'</b> pide <b>'+esc(t.nombre.toLowerCase())+'</b> '+cuando+
+        (p.hora ? ' · '+esc(p.hora)+(p.horaFin?'–'+esc(p.horaFin):'') : '')+
+        (p.vistoJefe ? ' <span class="tag tag-ok" style="font-size:10px">visto bueno del jefe</span>' : '')+
+        (p.motivo ? '<div style="font-size:12.5px;color:var(--muted);line-height:1.5">'+esc(motivoSinMarca(p))+'</div>' : ''),
+      vista ? '' : g.ps.length > 1
+        ? '<button class="btn btn-sm" data-bir="perm">Revisar</button>'
+        : '<div style="display:flex;gap:7px"><button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
+          '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'">Rechazar</button></div>');
+  }).join(''), vista ? null : {tab:'perm', t:'Ir a Permisos'});
+
+  if(d.salidas.length) h += seccion('🚪 Salidas sin marcar (últimos 7 días)', d.salidas.length, d.salidas.map(x=>
+    linea('<b>'+esc(nombrePropio(x.e.nombre))+'</b> · '+esc(fechaCorta(x.f))+(x.entrada ? ' · entró '+esc(x.entrada) : ''),
+      vista ? '' : '<button class="btn btn-sm btn-line" data-bsal="'+esc(x.e.id+'|'+x.f)+'">Registrar salida</button>')).join(''));
+
+  if(d.sinProg.length || d.borradores){
+    const sem = d.proxima ? 'la próxima semana' : 'esta semana';
+    h += seccion('🗓️ Programación de '+sem, d.sinProg.length + (d.borradores ? 1 : 0),
+      (d.sinProg.length ? linea('Sin programar (la tenían en semanas anteriores): <b>'+esc(d.sinProg.map(e=>nombrePropio(e.nombre)).join(', '))+'</b>') : '')+
+      (d.borradores ? linea('<b>'+d.borradores+' turno'+(d.borradores===1?'':'s')+' en borrador</b> sin publicar: todavía no cuentan para la asistencia.') : ''),
+      {tab:'prog', t:'Ir a Programación'});
+  }
+
+  return '<details class="alert alert-warn hperm" id="bandeja"'+(BANDEJA_ABIERTA?' open':'')+'>'+
+    '<summary>📋 <b>Pendientes: '+total+'</b>'+
+      '<span style="font-size:12.5px;color:var(--muted)">'+[
+        d.permisos.length ? d.permisos.length+' permiso'+(d.permisos.length===1?'':'s') : '',
+        d.salidas.length ? d.salidas.length+' salida'+(d.salidas.length===1?'':'s')+' sin marcar' : '',
+        d.sinProg.length ? d.sinProg.length+' sin programar' : '',
+        d.borradores ? d.borradores+' en borrador' : ''].filter(Boolean).join(' · ')+'</span>'+
+      '<span class="hbtnx">Ver ▾</span></summary>'+h+
+  '</details>';
+}
+
 function avisoPermisosPendientes(){
   const hoy = hoyISO();
   const pend = PERMISOS.filter(p=>p.estado==='PENDIENTE' && p.fecha >= hoy)
@@ -7198,7 +7355,7 @@ function tabHoy(b){
     barra + resumen +
     // #waIndividuales está siempre: vacía (data-total="0") si no hay a quién avisar.
     // Así la tarea de Cowork distingue "nadie pendiente" de "el panel cambió".
-    '<div class="hatn">'+(bloqueAvisosWhatsApp(filas, f, esHoy) || '<ul id="waIndividuales" data-total="0" hidden></ul>')+avisoPermisosPendientes()+'</div>'+
+    '<div class="hatn">'+(bloqueAvisosWhatsApp(filas, f, esHoy) || '<ul id="waIndividuales" data-total="0" hidden></ul>')+(esHoy ? bandejaPendientes() : avisoPermisosPendientes())+'</div>'+
     (grupos || '<div class="empty">'+(q ? 'Nadie coincide con “'+esc(HOY_BUSCA)+'”.' : 'Ningún colaborador coincide con los filtros.')+'</div>')+
     notaExentos();
 
@@ -7282,6 +7439,10 @@ function tabHoy(b){
   };
   b.querySelectorAll('[data-ok]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.ok,'APROBADO'));
   b.querySelectorAll('[data-no]').forEach(x=>x.onclick=()=>resolverPermiso(x.dataset.no,'RECHAZADO'));
+  b.querySelectorAll('[data-bsal]').forEach(x=>x.onclick=()=>{ const v = x.dataset.bsal.split('|'); registroManual(v[1], v[0], 'SALIDA'); });
+  b.querySelectorAll('[data-bir]').forEach(x=>x.onclick=()=>{ TAB = x.dataset.bir; renderTab(); window.scrollTo(0,0); });
+  const bAbre = b.querySelector('#bandeja');
+  if(bAbre) bAbre.addEventListener('toggle', ()=>{ BANDEJA_ABIERTA = bAbre.open; });
 
   wireFiltros('h', ()=>renderTab());
   Array.from(document.querySelectorAll('[data-corr]')).forEach(btn=>{
@@ -9225,7 +9386,7 @@ function ultimoRegistrador(){
   try{ return localStorage.getItem('ca_registrador') || ''; }catch(e){ return ''; }
 }
 
-function registroManual(fechaDef){
+function registroManual(fechaDef, empDef, tipoDef){
   if(soloVista()){ toast('Esa opción no está disponible'); return; }
   const hoy = hoyISO();
   const m = document.createElement('div'); m.className='modal';
@@ -9234,14 +9395,14 @@ function registroManual(fechaDef){
       'Queda marcado como <b>MANUAL</b> en los reportes, para diferenciarlo de un marcaje hecho por el propio colaborador.</p>'+
     '<div class="frow"><div><label>Colaborador</label><select id="rE">'+
       '<option value="">— Selecciona —</option>'+
-      EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').map(e=>'<option value="'+e.id+'">'+esc(e.nombre)+'</option>').join('')+
+      EMP.filter(e=>e.activo && e.modalidad!=='EXENTO').map(e=>'<option value="'+e.id+'"'+(e.id===empDef?' selected':'')+'>'+esc(e.nombre)+'</option>').join('')+
     '</select></div></div>'+
     '<div class="frow">'+
       '<div><label>Fecha</label><input type="date" id="rF" value="'+(fechaDef||hoy)+'" max="'+hoy+'"></div>'+
       '<div><label>Hora</label><input type="time" id="rH"></div>'+
     '</div>'+
     '<div class="frow"><div><label>Tipo</label><select id="rT">'+
-      '<option value="ENTRADA">Entrada</option><option value="SALIDA">Salida</option></select></div></div>'+
+      '<option value="ENTRADA">Entrada</option><option value="SALIDA"'+(tipoDef==='SALIDA'?' selected':'')+'>Salida</option></select></div></div>'+
     '<div class="frow"><div><label>Motivo (obligatorio)</label><input id="rM" placeholder="Se quedó sin batería"></div></div>'+
     '<div class="frow"><div><label>Registrado por (obligatorio)</label><input id="rP" placeholder="Nombre y apellido de quien registra" value="'+esc(ultimoRegistrador())+'"></div></div>'+
     '<div style="display:flex;gap:10px;margin-top:16px">'+

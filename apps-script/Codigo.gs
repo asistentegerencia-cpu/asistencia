@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 16,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 17,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -304,7 +304,7 @@ function mios(p) {
            programacion: miProg, permisos: misPermisos,
            emp: { sede: emp.sede, vacDias: emp.vacDias, vacDesde: emp.vacDesde,
                   esJefe: !!jefeDe(emp.id), modalidad: emp.modalidad, turno: emp.turno,
-                  dias: emp.dias } };
+                  dias: emp.dias, avisosJefe: avisosJefe(emp, emps) } };
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -1802,6 +1802,47 @@ function jefeProgramar(p) {
       ' turno(s) de su equipo.\n\nPuedes verlos en el panel, pestaña Programación.');
   }
   return r;
+}
+
+/* Lo que espera al jefe, para avisarle apenas abre la app (sin pedirle el PIN):
+   solo cuántos, nunca de quién ni el detalle, que eso queda detrás del PIN.
+   - permisos de su gente sin su visto bueno (agrupados como los ve él: un permiso
+     de varios días cuenta una vez)
+   - gente de su equipo sin programar: la que tuvo turnos publicados en las cuatro
+     semanas anteriores y no tiene ninguno en la semana que toca. De lunes a
+     miércoles mira la semana en curso; desde el jueves, la siguiente.
+   - turnos en borrador de esa semana, que todavía no cuentan para nadie. */
+function avisosJefe(emp, emps) {
+  var jefe = jefeDe(emp.id);
+  if (!jefe) return null;
+  var equipo = equipoDeJefe({ emp: emp, jefe: jefe, emps: emps }), enEquipo = {};
+  equipo.forEach(function (e) { enEquipo[e.id] = true; });
+  var areaDe = {};
+  emps.forEach(function (e) { areaDe[e.id] = e.area; });
+  var grupos = {};
+  leerPermisos().forEach(function (x) {
+    if (x.estado !== 'PENDIENTE' || x.vistoJefe || x.empId === emp.id) return;
+    if (jefe.areas.indexOf(areaDe[x.empId]) < 0) return;
+    grupos[x.empId + '|' + x.tipo + '|' + (x.motivo || '') + '|' + x.estado + '|' + (x.hora || '')] = true;
+  });
+
+  var hoy = ahoraISO().fecha;
+  var dow = (new Date(hoy + 'T12:00:00').getDay() + 6) % 7;            // 0 = lunes
+  var lunes = diaDespues(hoy, -dow);
+  var semana = dow >= 3 ? diaDespues(lunes, 7) : lunes;
+  var finSemana = diaDespues(semana, 6), desde4 = diaDespues(semana, -28);
+  var usa = {}, tiene = {}, borradores = 0;
+  leerProgramacion().forEach(function (x) {
+    if (!enEquipo[x.empId] || !x.entrada || !x.salida) return;
+    if (x.fecha >= desde4 && x.fecha < semana && x.estado !== 'BORRADOR') usa[x.empId] = true;
+    if (x.fecha >= semana && x.fecha <= finSemana) {
+      tiene[x.empId] = true;
+      if (x.estado === 'BORRADOR') borradores++;
+    }
+  });
+  var sin = equipo.filter(function (e) { return usa[e.id] && !tiene[e.id]; }).length;
+  return { permisos: Object.keys(grupos).length, sinProgramar: sin, borradores: borradores,
+           semana: semana, proxima: semana > lunes };
 }
 
 /* El jefe da el visto bueno (queda para Administración) o rechaza (y ahí termina). */
