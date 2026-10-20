@@ -1,0 +1,97 @@
+# Publica el servidor de asistencia (Apps Script) solo, cada vez que cambia
+# apps-script/ en main. Así nadie tiene que copiar y pegar Codigo.gs a mano.
+#
+# Qué hace:
+#   1. Baja el proyecto tal como está hoy en Apps Script (con su appsscript.json,
+#      que guarda la zona horaria y los permisos: ese archivo NO se toca).
+#   2. Reemplaza solo los archivos que ya existen allá (Codigo, Recordatorios…)
+#      por los del repositorio. Un archivo nuevo del repositorio no se agrega solo.
+#   3. Sube el código y publica una versión nueva en la MISMA implementación:
+#      la dirección /exec no cambia y los celulares no notan nada.
+#   4. Comprueba con ?accion=ping que el servidor responda la versión nueva.
+#
+# Necesita dos secretos en GitHub (Settings → Secrets and variables → Actions):
+#   APPS_SCRIPT_ID  el ID del proyecto (Apps Script → Configuración del proyecto)
+#   CLASPRC_JSON    el contenido de .clasprc.json tras «clasp login» con la cuenta
+#                   sistemas.gruporobles@gmail.com
+name: Publicar servidor (Apps Script)
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps-script/**']
+  workflow_dispatch:
+
+concurrency:
+  group: publicar-servidor
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+      CLASPRC: ${{ secrets.CLASPRC_JSON }}
+      # La implementación que usan los celulares (la parte de la dirección /exec)
+      DEPLOYMENT_ID: AKfycbwhEPFegOrdzUYDZr0vh9y7Fg4uqL2ga_NNg1MmYA8UAPRlMVBCK_bbtRPme3MgM-ft
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Revisar que estén los secretos
+        run: |
+          if [ -z "$SCRIPT_ID" ] || [ -z "$CLASPRC" ]; then
+            echo "::error::Faltan los secretos APPS_SCRIPT_ID o CLASPRC_JSON en GitHub."
+            exit 1
+          fi
+
+      - name: Instalar clasp
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Credenciales de la cuenta del servidor
+        run: |
+          printf '%s' "$CLASPRC" > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
+
+      - name: Bajar el proyecto tal como está en Apps Script
+        run: |
+          mkdir vivo && cd vivo
+          clasp clone "$SCRIPT_ID"
+          echo "Archivos en Apps Script:"; ls -1
+
+      - name: Reemplazar con los archivos del repositorio
+        run: |
+          for f in apps-script/*.gs; do
+            base=$(basename "$f" .gs)
+            if [ -f "vivo/$base.js" ] || [ -f "vivo/$base.gs" ]; then
+              rm -f "vivo/$base.gs"
+              cp "$f" "vivo/$base.js"
+              echo "Actualizado: $base"
+            else
+              echo "::warning::$base no existe en el proyecto de Apps Script: no se agrega."
+            fi
+          done
+
+      - name: Subir el código
+        run: cd vivo && clasp push --force
+
+      - name: Publicar versión nueva en la misma implementación
+        run: |
+          cd vivo
+          clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "GitHub ${GITHUB_SHA::7}: $(git -C .. log -1 --format=%s | cut -c1-80)"
+
+      - name: Comprobar que el servidor responde la versión nueva
+        run: |
+          esperada=$(grep -o "version: [0-9]*" apps-script/Codigo.gs | head -1 | grep -o "[0-9]*")
+          for i in 1 2 3 4 5 6; do
+            r=$(curl -sL --max-time 40 "https://script.google.com/macros/s/$DEPLOYMENT_ID/exec?accion=ping" || true)
+            echo "Respuesta: $r"
+            if echo "$r" | grep -q "\"version\":$esperada"; then echo "✔ Servidor en la versión $esperada"; exit 0; fi
+            sleep 15
+          done
+          echo "::error::El servidor no respondió la versión $esperada."
+          exit 1
