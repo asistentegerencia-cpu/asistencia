@@ -28,7 +28,8 @@ var HOJA = {
   per: 'Permisos',
   pro: 'Programacion',
   not: 'NotasProg',
-  jef: 'Jefes'
+  jef: 'Jefes',
+  usu: 'Usuarios'
 };
 
 var COLS = {
@@ -68,7 +69,9 @@ var COLS = {
   /* Jefes de área: dan el primer visto bueno a los permisos de su gente antes que
      Administración. Viven en su propia hoja, como los celulares, para que subir el
      padrón no los borre. El PIN se guarda solo como huella (hash), nunca tal cual. */
-  jef: ['emp_id','nombre','areas','pin_hash','actualizado']
+  jef: ['emp_id','nombre','areas','pin_hash','actualizado'],
+  // Quienes entran al panel con nombre propio. La clave se guarda como huella, nunca tal cual.
+  usu: ['usuario','nombre','rol','pass_hash','activo','actualizado']
 };
 
 /* ══════════════════════════════════════════════════════════════
@@ -168,6 +171,10 @@ function responder(obj, callback) {
 function rolDe(p) {
   var c = String(p.clave || '');
   if (!c) return '';
+  // Con usuario, manda su propio rol (y solo su clave): las claves compartidas
+  // no sirven con un nombre de usuario delante.
+  var u = normUsuario(p.usuario);
+  if (u) { var x = usuarioValido(u, c); return x ? x.rol : ''; }
   var cfg = leerConfig();
   if (c === String(cfg.adminPass || '')) return 'admin';
   if (cfg.vistaPass && c === String(cfg.vistaPass)) return 'vista';
@@ -191,7 +198,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 17,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 18,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -205,7 +212,8 @@ function enrutar(p) {
     case 'jefeprogramar': return jefeProgramar(p);
 
     // ---- Con clave ----
-    case 'entrar':      rol = rolDe(p);
+    case 'entrar':      if (normUsuario(p.usuario)) return entrarUsuario(p);
+                        rol = rolDe(p);
                         return rol ? { ok: true, rol: rol }
                                    : { ok: false, error: 'Clave incorrecta' };
     case 'reporte':     rol = rolDe(p);
@@ -229,6 +237,8 @@ function enrutar(p) {
     case 'personal':    return rolDe(p) === 'admin' ? guardarPersonal(p)     : NO_AUTORIZADO;
     case 'config':      return rolDe(p) === 'admin' ? guardarConfig(p)       : NO_AUTORIZADO;
     case 'guardarjefe': return rolDe(p) === 'admin' ? guardarJefe(p)         : NO_AUTORIZADO;
+    case 'usuarios':    return rolDe(p) === 'admin' ? listarUsuarios()        : NO_AUTORIZADO;
+    case 'guardarusuario': return rolDe(p) === 'admin' ? guardarUsuario(p)    : NO_AUTORIZADO;
 
     default:            return { ok: false, error: 'Acción desconocida: ' + accion };
   }
@@ -647,7 +657,7 @@ function instalar(p) {
 var MEMO_SEG = 300;   // cinco minutos: lo escrito desde la app la borra al instante
 var MEMO_ = {};                  // dentro de una misma ejecución, para no repetir
 var MEMO_ESCRIBE_ = false;       // esta ejecución escribe: no deja nada en la memoria compartida
-var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per', 'memo_jef'];
+var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per', 'memo_jef', 'memo_usu'];
 
 function memo(clave, calcular) {
   if (MEMO_.hasOwnProperty(clave)) return MEMO_[clave];
@@ -1675,6 +1685,102 @@ function guardarJefe(p) {
     if (fila) h.getRange(fila, 1, 1, valores.length).setValues([valores]);
     else h.appendRow(valores);
     return { ok: true, jefe: { empId: empId, nombre: emp.nombre, areas: areas, tienePin: true } };
+  } finally { lock.releaseLock(); }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   USUARIOS DEL PANEL
+   Cada uno entra con su usuario y su clave, y tiene su rol: 'admin' (puede
+   cambiar cosas) o 'vista' (solo mira). Las claves compartidas de siempre
+   (adminPass, vistaPass) siguen sirviendo; n8n usa la de solo vista.
+   ══════════════════════════════════════════════════════════════ */
+function normUsuario(u) { return String(u || '').trim().toLowerCase(); }
+
+function huellaUsuario(usuario, clave) {
+  var d = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'usuario|' + usuario + '|' + clave);
+  return d.map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+}
+
+function leerUsuarios() { return memo('memo_usu', leerUsuariosDeHoja); }
+
+function leerUsuariosDeHoja() {
+  var out;
+  try { out = filas(HOJA.usu, COLS.usu); } catch (e) { return []; }
+  return out.filter(function (f) { return f.usuario; }).map(function (f) {
+    return { usuario: normUsuario(f.usuario), nombre: String(f.nombre || ''),
+             rol: String(f.rol || '').toLowerCase() === 'admin' ? 'admin' : 'vista',
+             passHash: String(f.pass_hash || ''), activo: String(f.activo).toUpperCase() !== 'NO' };
+  });
+}
+
+function usuarioValido(usuario, clave) {
+  var us = leerUsuarios(), h = null;
+  for (var i = 0; i < us.length; i++) {
+    var x = us[i];
+    if (x.usuario !== usuario || !x.activo || !x.passHash) continue;
+    h = h || huellaUsuario(usuario, clave);
+    if (x.passHash === h) return x;
+  }
+  return null;
+}
+
+/* Entrar con usuario: cinco intentos fallidos lo bloquean 15 minutos. */
+function entrarUsuario(p) {
+  var u = normUsuario(p.usuario);
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (e) { cache = null; }
+  var claveFallos = 'usufallos_' + u;
+  var fallos = cache ? Number(cache.get(claveFallos) || 0) : 0;
+  if (fallos >= 5) return { ok: false, error: 'Demasiados intentos. Espera 15 minutos e inténtalo de nuevo.' };
+  var x = usuarioValido(u, String(p.clave || ''));
+  if (!x) {
+    if (cache) { try { cache.put(claveFallos, String(fallos + 1), 900); } catch (e) { } }
+    return { ok: false, error: 'Usuario o clave incorrectos' };
+  }
+  if (cache) { try { cache.remove(claveFallos); } catch (e) { } }
+  return { ok: true, rol: x.rol, usuario: x.usuario, nombre: x.nombre };
+}
+
+function listarUsuarios() {
+  return { ok: true, usuarios: leerUsuarios().map(function (x) {
+    return { usuario: x.usuario, nombre: x.nombre, rol: x.rol, activo: x.activo, tieneClave: !!x.passHash };
+  }) };
+}
+
+/** Crea, cambia o quita un usuario. La clave solo se cambia si llega una. */
+function guardarUsuario(p) {
+  olvidar();
+  var u = normUsuario(p.nuevoUsuario || p.cual);
+  if (!/^[a-z0-9._-]{3,30}$/.test(u))
+    return { ok: false, error: 'El usuario debe tener de 3 a 30 letras o números, sin espacios ni tildes.' };
+  var borrar = String(p.borrar) === 'true' || p.borrar === true;
+  var nombre = String(p.nombre || '').trim().replace(/\s+/g, ' ');
+  var rolNuevo = String(p.rol || '').toLowerCase() === 'admin' ? 'admin' : 'vista';
+  var clave = String(p.nuevaClave || '');
+  var activo = !(String(p.activo) === 'false' || p.activo === false);
+  if (!borrar && nombre.length < 3) return { ok: false, error: 'Escribe el nombre de quien usará este acceso.' };
+  if (clave && clave.length < 8) return { ok: false, error: 'La clave debe tener al menos 8 caracteres.' };
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var h = asegurarColumnas(HOJA.usu, COLS.usu);
+    var datos = h.getDataRange().getValues();
+    var cab = cabDe(HOJA.usu, COLS.usu);
+    var cU = cab.indexOf('usuario'), cP = cab.indexOf('pass_hash');
+    var fila = 0, hashPrevio = '';
+    for (var k = 1; k < datos.length; k++) {
+      if (normUsuario(datos[k][cU]) === u) { fila = k + 1; hashPrevio = String(datos[k][cP] || ''); }
+    }
+    if (borrar) { if (fila) h.deleteRow(fila); return { ok: true, borrado: !!fila }; }
+    if (p.nuevoUsuario && fila && String(p.crear) === 'true') return { ok: false, error: 'Ya existe un usuario «' + u + '».' };
+    var hash = clave ? huellaUsuario(u, clave) : hashPrevio;
+    if (!hash) return { ok: false, error: 'Ponle una clave al usuario para que pueda entrar.' };
+    var valores = filaSegunCab(cab, { usuario: u, nombre: nombre, rol: rolNuevo, pass_hash: hash,
+                                      activo: activo ? 'SI' : 'NO', actualizado: new Date() });
+    if (fila) h.getRange(fila, 1, 1, valores.length).setValues([valores]);
+    else h.appendRow(valores);
+    return { ok: true, usuario: { usuario: u, nombre: nombre, rol: rolNuevo, activo: activo, tieneClave: true } };
   } finally { lock.releaseLock(); }
 }
 

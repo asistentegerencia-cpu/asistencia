@@ -3378,12 +3378,14 @@ function jsonp(url, ms){
    Vive solo en memoria: al recargar hay que volver a entrar al panel.
    El celular que marca no tiene ninguna, y no la necesita. */
 let CLAVE = '';
+let USUARIO = null;                    // {usuario, nombre} si entró con su usuario propio
 
 async function api(accion, datos, opts){
   opts = opts || {};
   if(!hayServidor()) throw new Error('No hay servidor configurado');
   const cuerpo = Object.assign({accion}, datos||{});
   if(CLAVE) cuerpo.clave = CLAVE;
+  if(USUARIO && CLAVE) cuerpo.usuario = USUARIO.usuario;
   const ms = opts.timeout || 15000;
 
   // 1) POST sin cabeceras propias: así el navegador no dispara preflight,
@@ -3635,7 +3637,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-20.3';
+const APP_VERSION = '2026-10-20.4';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6848,7 +6850,7 @@ const soloVista = ()=> ROL === 'vista';
    navegador: por eso conviene usarla con la clave de solo vista. */
 const K_SESION = 'ca_sesion';
 function recordarSesion(clave, rol){
-  try{ localStorage.setItem(K_SESION, JSON.stringify({clave, rol, hasta: Date.now() + 30*86400000})); }catch(e){}
+  try{ localStorage.setItem(K_SESION, JSON.stringify({clave, rol, usuario: USUARIO, hasta: Date.now() + 30*86400000})); }catch(e){}
 }
 function olvidarSesion(){ try{ localStorage.removeItem(K_SESION); }catch(e){} }
 function restaurarSesion(){
@@ -6856,6 +6858,7 @@ function restaurarSesion(){
   try{ ses = JSON.parse(localStorage.getItem(K_SESION) || 'null'); }catch(e){}
   if(!ses || !ses.clave || !(ses.hasta > Date.now())){ if(ses) olvidarSesion(); return false; }
   CLAVE = ses.clave; ROL = ses.rol === 'vista' ? 'vista' : 'admin';
+  USUARIO = ses.usuario && ses.usuario.usuario ? ses.usuario : null;
   abrirAdmin();
   // Si la clave cambió desde entonces, se olvida y se vuelve a pedir
   if(hayServidor()){
@@ -6870,8 +6873,10 @@ function restaurarSesion(){
 function pedirPass(){
   const m=document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box"><h2>Acceso al panel</h2>'+
-    '<p class="lead" style="font-size:14px">Ingresa la clave para ver los reportes de asistencia.</p>'+
-    '<input class="input input-sm" id="pw" type="password" placeholder="Clave" autocomplete="off">'+
+    '<p class="lead" style="font-size:14px">Ingresa tu usuario y tu clave para ver los reportes de asistencia.</p>'+
+    '<input class="input input-sm" id="pwU" type="text" placeholder="Usuario" autocomplete="username" autocapitalize="none" spellcheck="false" style="margin-bottom:10px">'+
+    '<input class="input input-sm" id="pw" type="password" placeholder="Clave" autocomplete="current-password">'+
+    '<div style="font-size:12px;color:var(--muted);margin-top:6px">Con la clave general, deja el usuario vacío.</div>'+
     '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:13.5px;line-height:1.45;cursor:pointer">'+
       '<input type="checkbox" id="pwRec" style="margin-top:3px;width:18px;height:18px;flex:none">'+
       '<span>Mantener la sesión abierta en este equipo (30 días)'+
@@ -6882,13 +6887,33 @@ function pedirPass(){
       '<button class="btn" id="pwOk">Entrar</button>'+
     '</div></div>';
   document.body.appendChild(m);
-  const inp=m.querySelector('#pw'); setTimeout(()=>inp.focus(),80);
+  const inp=m.querySelector('#pw'), inpU=m.querySelector('#pwU'); setTimeout(()=>inpU.focus(),80);
   const err = t=>{ m.querySelector('#pwErr').innerHTML='<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">'+esc(t)+'</div>'; inp.value=''; inp.focus(); };
   const btn = m.querySelector('#pwOk');
 
   const go = async ()=>{
-    const v = inp.value;
+    const v = inp.value, u = inpU.value.trim().toLowerCase();
     if(!v) return;
+
+    // Con usuario propio: lo valida siempre el servidor (sus claves no viajan en la app)
+    if(u){
+      if(!hayServidor()) return err('Sin servidor no se puede entrar con usuario: usa la clave general.');
+      btn.disabled = true; btn.textContent = 'Verificando…';
+      try{
+        const r = await api('entrar', {usuario:u, clave:v}, {timeout:15000});
+        btn.disabled = false; btn.textContent = 'Entrar';
+        if(r && r.ok && r.rol){
+          CLAVE = v; ROL = r.rol; USUARIO = {usuario:r.usuario, nombre:r.nombre};
+          if(m.querySelector('#pwRec').checked) recordarSesion(v, r.rol);
+          m.remove(); abrirAdmin(); return;
+        }
+        return err((r && r.error) || 'Usuario o clave incorrectos');
+      }catch(e){
+        btn.disabled = false; btn.textContent = 'Entrar';
+        return err('Sin conexión con el servidor. Inténtalo de nuevo.');
+      }
+    }
+    USUARIO = null;
 
     // Con servidor, la clave la valida el servidor: así no viaja dentro del
     // archivo publicado, que está en un repositorio público.
@@ -6916,6 +6941,7 @@ function pedirPass(){
   };
   m.querySelector('#pwOk').onclick=go;
   inp.onkeydown=e=>{ if(e.key==='Enter') go(); };
+  inpU.onkeydown=e=>{ if(e.key==='Enter') inp.focus(); };
   m.querySelector('#pwX').onclick=()=>{ m.remove(); if(location.hash==='#admin'){ location.hash=''; } boot(); };
 }
 
@@ -6925,6 +6951,7 @@ function abrirAdmin(){
   $('#appAdmin').classList.remove('hidden');
   $('#adTitle').textContent = CFG.empresa + ' · Asistencia';
   $('#adSub').innerHTML = esc(fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase())) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos' +
+    (USUARIO ? ' · 👤 '+esc(nombrePropio(USUARIO.nombre)) : '') +
     '';   // el acceso de consulta no se anuncia en pantalla: la restricción la
           // aplica el servidor, no hace falta recordárselo a quien entra
 
@@ -6959,7 +6986,7 @@ function abrirAdmin(){
   }
 }
 $('#btnExit').addEventListener('click', ()=>{
-  ROL='admin'; CLAVE='';             // al salir se olvidan rol y clave: la próxima vez se vuelve a pedir
+  ROL='admin'; CLAVE=''; USUARIO=null;   // al salir se olvidan rol y clave: la próxima vez se vuelve a pedir
   olvidarSesion();
   $$('#adTabs .tab').forEach(t=>t.classList.remove('hidden'));
   $('#appAdmin').classList.add('hidden');
@@ -9581,6 +9608,7 @@ function corregirMarcajes(empId, fecha){
 
 /* Quien cargó el último manual en este navegador: casi siempre es la misma persona */
 function ultimoRegistrador(){
+  if(USUARIO && USUARIO.nombre) return USUARIO.nombre;     // quien entró con su usuario firma con su nombre
   try{ return localStorage.getItem('ca_registrador') || ''; }catch(e){ return ''; }
 }
 
@@ -10165,7 +10193,7 @@ const CFG_MAPA = {
 function tabConfiguracion(b){
   if(soloVista()) CFG_SEC = 'personal';
   const secs = [['personal','👥','Personal'],['horarios','🕘','Horarios y calendario'],['sedes','📍','Sedes y marcaje'],
-                ['avisos','💬','Avisos y WhatsApp'],['empresa','🏢','Empresa y acceso'],['sistema','⚙️','Servidor y datos']]
+                ['avisos','💬','Avisos y WhatsApp'],['empresa','🏢','Empresa y acceso'],['usuarios','🔑','Usuarios'],['sistema','⚙️','Servidor y datos']]
                .filter(x=>!soloVista() || x[0]==='personal');
   const activos = EMP.filter(e=>e.activo).length;
   b.innerHTML = '<div class="clay"><nav class="cmenu">'+
@@ -10175,6 +10203,7 @@ function tabConfiguracion(b){
   b.querySelectorAll('[data-sec]').forEach(x=>x.onclick=()=>{ CFG_SEC = x.dataset.sec; renderTab(); window.scrollTo(0,0); });
   const main = $('#cMain');
   if(CFG_SEC==='personal') return tabPersonal(main);
+  if(CFG_SEC==='usuarios') return tabUsuarios(main);
   main.innerHTML = '<div id="cfgBloque"></div><div id="qrBloque"></div>';
   tabCfg($('#cfgBloque'));
   tabQr($('#qrBloque'));
@@ -10218,6 +10247,95 @@ function organizarConfig(main){
     if(x && !x.closest('#cSaveBar') && !x.closest('#qrBloque') && !x.closest('.cmenu')) sucio(); });
   $('#cSave2').onclick = ()=>sv.click();
   $('#cDesc').onclick = ()=>{ if(confirm('Se descartarán los cambios sin guardar de esta sección.')) renderTab(); };
+}
+
+/* ---------- USUARIOS DEL PANEL ----------
+   Cada persona entra con su usuario y su clave. Administrador puede cambiar
+   cosas; Solo vista mira y no cambia nada. Las claves se guardan en el servidor
+   como huella: ni la app ni la hoja las tienen escritas. */
+const ROLES_USU = {admin:'Administrador', vista:'Solo vista'};
+async function tabUsuarios(b){
+  b.innerHTML = '<div class="cfg"><h3>Usuarios</h3><p style="color:var(--muted)">Cargando…</p></div>';
+  if(!hayServidor()){ b.innerHTML = '<div class="alert alert-warn">Los usuarios viven en el servidor: conéctalo primero en Servidor y datos.</div>'; return; }
+  let r;
+  try{ r = await api('usuarios', {}, {timeout:20000}); }catch(e){ r = null; }
+  if(!r || !r.ok){
+    const viejo = r && /Acción desconocida/i.test(r.error||'');
+    b.innerHTML = '<div class="alert alert-bad">'+(viejo ? 'El servidor todavía no tiene usuarios: espera a que se publique la versión nueva y vuelve a entrar.'
+                                                          : 'No se pudo cargar la lista de usuarios. '+esc((r&&r.error)||'Sin conexión'))+'</div>';
+    return;
+  }
+  const lista = (r.usuarios||[]).slice().sort((x,y)=>x.nombre.localeCompare(y.nombre));
+  b.innerHTML = '<div class="cfg"><h3>Usuarios</h3>'+
+    '<p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 12px">Cada persona entra al panel con su usuario y su clave. '+
+      '<b>Administrador</b> puede aprobar permisos, corregir marcas y configurar; <b>Solo vista</b> ve todo pero no cambia nada. '+
+      'Las claves generales de siempre siguen funcionando.</p>'+
+    (lista.length ? '<div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Permisos</th><th>Estado</th><th></th></tr></thead><tbody>'+
+      lista.map(x=>'<tr>'+
+        '<td><b>'+esc(x.nombre)+'</b>'+(USUARIO && USUARIO.usuario===x.usuario?' <span class="tag tag-ok" style="font-size:10px">tú</span>':'')+'</td>'+
+        '<td><code>'+esc(x.usuario)+'</code></td>'+
+        '<td>'+esc(ROLES_USU[x.rol]||x.rol)+'</td>'+
+        '<td>'+(x.activo?'<span class="tag tag-ok">Activo</span>':'<span class="tag tag-neutral">Desactivado</span>')+'</td>'+
+        '<td style="white-space:nowrap"><button class="btn btn-sm btn-line" data-ued="'+esc(x.usuario)+'">Editar</button></td></tr>').join('')+
+      '</tbody></table></div>' : '<div class="alert alert-info">Todavía no hay usuarios. Crea el primero.</div>')+
+    '<button class="btn" id="uNuevo" style="margin-top:12px">+ Nuevo usuario</button></div>';
+  b.querySelector('#uNuevo').onclick = ()=>editarUsuario(null, ()=>tabUsuarios(b));
+  b.querySelectorAll('[data-ued]').forEach(x=>x.onclick = ()=>editarUsuario(lista.find(u=>u.usuario===x.dataset.ued), ()=>tabUsuarios(b)));
+}
+
+function editarUsuario(u, alTerminar){
+  const nuevo = !u;
+  u = u || {usuario:'', nombre:'', rol:'vista', activo:true};
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = '<div class="box"><h2>'+(nuevo ? 'Nuevo usuario' : 'Editar usuario')+'</h2>'+
+    '<div class="frow"><div><label>Nombre (quién lo usa)</label><input id="uN" value="'+esc(u.nombre)+'" placeholder="Ítalo Torres"></div></div>'+
+    '<div class="frow"><div><label>Usuario</label><input id="uU" value="'+esc(u.usuario)+'" placeholder="italo" autocapitalize="none" spellcheck="false"'+(nuevo?'':' disabled')+'></div>'+
+      '<div><label>Permisos</label><select id="uR">'+Object.keys(ROLES_USU).map(k=>'<option value="'+k+'"'+(u.rol===k?' selected':'')+'>'+ROLES_USU[k]+'</option>').join('')+'</select></div></div>'+
+    '<div class="frow"><div><label>'+(nuevo ? 'Clave (mínimo 8 caracteres)' : 'Nueva clave (vacío = no se cambia)')+'</label>'+
+      '<input id="uC" type="text" autocomplete="new-password" spellcheck="false" placeholder="'+(nuevo?'':'••••••••')+'"></div></div>'+
+    '<button type="button" class="btn btn-sm btn-line" id="uGen">Generar una clave</button>'+
+    (nuevo ? '' : '<label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px"><input type="checkbox" id="uA"'+(u.activo?' checked':'')+' style="width:18px;height:18px"> Activo (puede entrar)</label>')+
+    '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;line-height:1.5">Anota la clave y entrégasela a la persona en privado: después no se puede volver a ver, solo cambiar.</p>'+
+    '<div id="uErr"></div>'+
+    '<div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">'+
+      (nuevo ? '' : '<button class="btn btn-line" id="uDel" style="color:var(--danger);border-color:var(--danger)">Quitar</button>')+
+      '<span style="flex:1"></span><button class="btn btn-line" id="uX">Cancelar</button><button class="btn" id="uG">Guardar</button></div></div>';
+  document.body.appendChild(m);
+  const err = t=>{ m.querySelector('#uErr').innerHTML = '<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">'+esc(t)+'</div>'; };
+  m.querySelector('#uX').onclick = ()=>m.remove();
+  m.querySelector('#uGen').onclick = ()=>{
+    const abc = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    const r = new Uint32Array(10); crypto.getRandomValues(r);
+    m.querySelector('#uC').value = Array.from(r, n=>abc[n % abc.length]).join('');
+  };
+  const enviar = async (datos, okMsg)=>{
+    const bt = m.querySelector('#uG'); bt.disabled = true;
+    try{
+      const r = await api('guardarusuario', datos, {timeout:30000});
+      if(r && r.ok){ toast(okMsg); m.remove(); alTerminar(); return; }
+      err((r && r.error) || 'No se pudo guardar');
+    }catch(e){ err('Sin conexión: no se guardó'); }
+    bt.disabled = false;
+  };
+  m.querySelector('#uG').onclick = ()=>{
+    const nombre = m.querySelector('#uN').value.trim(), usuario = m.querySelector('#uU').value.trim().toLowerCase();
+    const clave = m.querySelector('#uC').value, rol = m.querySelector('#uR').value;
+    if(nombre.length < 3) return err('Escribe el nombre de quien usará este acceso.');
+    if(!/^[a-z0-9._-]{3,30}$/.test(usuario)) return err('El usuario debe tener de 3 a 30 letras o números, sin espacios ni tildes.');
+    if(nuevo && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
+    if(clave && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
+    const activo = nuevo ? true : m.querySelector('#uA').checked;
+    if(!nuevo && USUARIO && USUARIO.usuario===usuario && (!activo || rol!=='admin') &&
+       !confirm('Te estás quitando el acceso de administrador a ti mismo. ¿Continuar?')) return;
+    const datos = nuevo ? {crear:true, nuevoUsuario:usuario, nombre, rol, nuevaClave:clave}
+                        : {cual:usuario, nombre, rol, nuevaClave:clave, activo};
+    enviar(datos, nuevo ? 'Usuario creado' : 'Usuario guardado');
+  };
+  const del = m.querySelector('#uDel');
+  if(del) del.onclick = ()=>{
+    if(!confirm('Se quitará el usuario «'+u.usuario+'». Ya no podrá entrar al panel. ¿Continuar?')) return;
+    enviar({cual:u.usuario, borrar:true}, 'Usuario quitado');
+  };
 }
 
 /* ---------- PERSONAL (dentro de Configuración) ---------- */
