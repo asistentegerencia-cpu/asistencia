@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 15,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 16,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -211,8 +211,10 @@ function enrutar(p) {
     case 'reporte':     rol = rolDe(p);
                         return rol ? reporte(p) : NO_AUTORIZADO;
     // El resumen de la semana para n8n: basta la clave de solo vista
+    // Con tipo=dia, el resumen de hoy (el del mediodía, para WhatsApp)
     case 'resumen':     rol = rolDe(p);
-                        return rol ? resumenSemana(p) : NO_AUTORIZADO;
+                        if (!rol) return NO_AUTORIZADO;
+                        return p.tipo === 'dia' ? resumenDia(p) : resumenSemana(p);
 
     // ---- Solo administración ----
     case 'instalar':    return rolDe(p) === 'admin' ? instalar(p)            : NO_AUTORIZADO;
@@ -2710,33 +2712,7 @@ function resumenSemana(p) {
     return null;
   };
 
-  // La jornada de un día, como la arma el panel: la entrada de la noche anterior
-  // que abre un turno de madrugada es de este día; la de esta noche, del siguiente.
-  var jornada = function (emp, f) {
-    var ms = (porDia[emp.id + '|' + f] || []).filter(function (m) {
-      return !(m.tipo === 'ENTRADA' && esEntradaNocturna(emp, f, m.hora, cfg, prog));
-    }).sort(function (a, b) { return aMin(a.hora) - aMin(b.hora) || a.ts - b.ts; });
-    var pares = [], previa = null;
-    if (!ms.some(function (m) { return m.tipo === 'ENTRADA'; })) {
-      var ayer = diaDespues(f, -1);
-      (porDia[emp.id + '|' + ayer] || []).forEach(function (m) {
-        if (m.tipo === 'ENTRADA' && esEntradaNocturna(emp, ayer, m.hora, cfg, prog)) previa = m;
-      });
-      if (previa) pares.push({ entrada: previa, salida: null, ini: aMin(previa.hora) - 1440 });
-    }
-    ms.forEach(function (m) {
-      var u = pares[pares.length - 1];
-      if (m.tipo === 'ENTRADA') { if (!u || u.salida) pares.push({ entrada: m, salida: null, ini: aMin(m.hora) }); }
-      else if (u) u.salida = m;
-      else pares.push({ entrada: null, salida: m, ini: null });
-    });
-    var ent = null;
-    for (var i = 0; i < pares.length; i++) if (pares[i].entrada) { ent = pares[i]; break; }
-    var ult = pares[pares.length - 1];
-    var min = 0;
-    pares.forEach(function (x) { if (x.entrada && x.salida) min += Math.max(0, aMin(x.salida.hora) - x.ini); });
-    return { entrada: ent ? ent.entrada : null, salida: ult ? ult.salida : null, min: min };
-  };
+  var jornada = function (emp, f) { return jornadaResumen(emp, f, porDia, cfg, prog); };
 
   var acumular = function (d1, d2) {
     var tot = { programados: 0, asistidos: 0, faltas: 0, justificadas: 0, tardanzas: 0, minutos: 0,
@@ -2825,11 +2801,202 @@ function resumenSemana(p) {
             indicadores: indicadores(actual.tot), indicadoresAnterior: indicadores(anterior.tot),
             areas: listaAreas, puntualesPerfectos: perfectos, masTardanzas: tardes, faltas: faltan,
             olvidosSalida: olvidadizos, permisosPendientes: pend, semanaSinProgramar: sinProgramar,
-            personas: actual.personas };
+            personas: actual.personas, para: destinatariosResumen(cfg) };
   r.texto = textoResumenSemana(r, cfg);
   r.html = htmlResumenSemana(r, cfg);
   r.asunto = 'Resumen semanal de asistencia · ' + fechaCortaSrv(desde) + ' al ' + fechaCortaSrv(hasta);
   return r;
+}
+
+/* La jornada de un día, como la arma el panel: la entrada de la noche anterior
+   que abre un turno de madrugada es de este día; la de esta noche, del siguiente.
+   porDia agrupa los marcajes por 'empId|fecha'. */
+function jornadaResumen(emp, f, porDia, cfg, prog) {
+  var ms = (porDia[emp.id + '|' + f] || []).filter(function (m) {
+    return !(m.tipo === 'ENTRADA' && esEntradaNocturna(emp, f, m.hora, cfg, prog));
+  }).sort(function (a, b) { return aMin(a.hora) - aMin(b.hora) || a.ts - b.ts; });
+  var pares = [], previa = null;
+  if (!ms.some(function (m) { return m.tipo === 'ENTRADA'; })) {
+    var ayer = diaDespues(f, -1);
+    (porDia[emp.id + '|' + ayer] || []).forEach(function (m) {
+      if (m.tipo === 'ENTRADA' && esEntradaNocturna(emp, ayer, m.hora, cfg, prog)) previa = m;
+    });
+    if (previa) pares.push({ entrada: previa, salida: null, ini: aMin(previa.hora) - 1440 });
+  }
+  ms.forEach(function (m) {
+    var u = pares[pares.length - 1];
+    if (m.tipo === 'ENTRADA') { if (!u || u.salida) pares.push({ entrada: m, salida: null, ini: aMin(m.hora) }); }
+    else if (u) u.salida = m;
+    else pares.push({ entrada: null, salida: m, ini: null });
+  });
+  var ent = null;
+  for (var i = 0; i < pares.length; i++) if (pares[i].entrada) { ent = pares[i]; break; }
+  var ult = pares[pares.length - 1];
+  var min = 0;
+  pares.forEach(function (x) { if (x.entrada && x.salida) min += Math.max(0, aMin(x.salida.hora) - x.ini); });
+  return { entrada: ent ? ent.entrada : null, salida: ult ? ult.salida : null, min: min };
+}
+
+/* ══════════════════════════════════════════════════════════════
+   RESUMEN DEL DÍA
+   El mismo resumen que el panel arma con el botón «Resumen del día» (cuántos
+   vinieron, quién falta, quién llegó tarde, qué queda pendiente), calculado aquí
+   para que n8n lo mande solo por WhatsApp a mediodía, sin que nadie abra el
+   panel. Lo pide con  accion=resumen&tipo=dia  y la clave de solo vista.
+   ══════════════════════════════════════════════════════════════ */
+var NOMBRE_AUSENCIA = { COMISION: 'comisión de servicio', VACACIONES: 'vacaciones', MEDICO: 'descanso médico',
+  PERMISO: 'permiso', LICENCIA: 'licencia', JUSTIFICADA: 'falta justificada' };
+var DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+var MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre',
+  'octubre', 'noviembre', 'diciembre'];
+
+function resumenDia(p) {
+  var cfg = leerConfig(), prog = leerProgramacion();
+  var ah = ahoraISO(), hoy = ah.fecha, ayer = diaDespues(hoy, -1), ahoraMin = aMin(ah.hora);
+  var personal = leerPersonal();
+  var emps = personal.filter(function (e) { return e.activo && e.modalidad !== 'EXENTO'; });
+  var porDia = {};
+  filasDesde(HOJA.mar, COLS.mar, diaDespues(hoy, -2)).map(filaAObjeto).forEach(function (m) {
+    var k = m.empId + '|' + m.fecha;
+    (porDia[k] = porDia[k] || []).push(m);
+  });
+  var permisos = leerPermisos();
+  var buscar = function (id, f, cond) {
+    for (var i = 0; i < permisos.length; i++) {
+      var x = permisos[i];
+      if (x.empId === id && x.fecha === f && cond(x)) return x;
+    }
+    return null;
+  };
+  var aprobado = function (id, f, tipo) {
+    return buscar(id, f, function (x) { return x.estado === 'APROBADO' && x.tipo === tipo; });
+  };
+  var llegadaDe = function (id, f) {
+    return buscar(id, f, function (x) {
+      return (x.tipo === 'ENTRADA_FALLIDA' || x.tipo === 'ENTRADA_OLVIDO') && x.estado !== 'RECHAZADO';
+    });
+  };
+  var aus = leerAusencias();
+  var ausDe = function (id, f) {
+    for (var i = 0; i < aus.length; i++) if (aus[i].empId === id && aus[i].desde <= f && aus[i].hasta >= f) return aus[i];
+    return null;
+  };
+  var tol = Number(cfg.tolerancia) || 0;
+
+  var presentes = 0, programados = 0, minutos = 0;
+  var faltan = [], tardes = [], llegadas = [], conPermiso = [], sinSalidaAyer = [];
+  emps.forEach(function (emp) {
+    var n = nombreCorto(emp.nombre);
+
+    // Ayer: marcó entrada (o registró su llegada) y no marcó salida ni pidió corregirla
+    var jAyer = jornadaResumen(emp, ayer, porDia, cfg, prog);
+    if (!jAyer.salida && (jAyer.entrada || llegadaDe(emp.id, ayer)) &&
+        !buscar(emp.id, ayer, function (x) { return x.tipo === 'SALIDA_OLVIDO' && x.estado === 'PENDIENTE'; }))
+      sinSalidaAyer.push({ n: n, d: '' });
+
+    var hor = horarioDe(emp, hoy, cfg, prog);
+    if (!hor) return;                                                 // no le toca hoy
+    var j = jornadaResumen(emp, hoy, porDia, cfg, prog);
+    if (cfg.inicioOperacion && hoy < fechaTexto(cfg.inicioOperacion) && !j.entrada) return;
+    if (aprobado(emp.id, hoy, 'DIA') && !j.entrada) { conPermiso.push({ n: n, d: 'permiso' }); return; }
+    var au = ausDe(emp.id, hoy);
+    if (au && !j.entrada) {
+      if (au.tipo === 'COMISION') { programados++; presentes++; }
+      conPermiso.push({ n: n, d: NOMBRE_AUSENCIA[au.tipo] || 'ausencia' });
+      return;
+    }
+    programados++;
+    var lleg = !j.entrada ? llegadaDe(emp.id, hoy) : null;
+    if (lleg) {
+      presentes++;
+      if (lleg.tipo === 'ENTRADA_FALLIDA' && lleg.estado === 'PENDIENTE') llegadas.push({ n: n, d: lleg.hora || '' });
+      return;
+    }
+    if (j.entrada) {
+      presentes++;
+      var ev = evaluarEntrada(emp, j.entrada.fecha, j.entrada.hora, cfg, prog);
+      if (ev.tardanza > 0 && !aprobado(emp.id, hoy, 'TARDANZA')) {
+        tardes.push({ n: n, d: ev.tardanza + ' min', min: ev.tardanza });
+        minutos += ev.tardanza;
+      }
+      return;
+    }
+    if (ahoraMin > aMin(hor.in) + tol) faltan.push({ n: n, d: 'entra ' + hor.in });
+  });
+  tardes.sort(function (a, b) { return b.min - a.min; });
+  var desde7 = diaDespues(hoy, -7);
+  var pendientes = permisos.filter(function (x) { return x.estado === 'PENDIENTE' && x.fecha >= desde7; }).length;
+
+  // Los viernes, quién tiene programación esta semana y todavía no la de la próxima
+  var sinProgramar = [];
+  var dow = new Date(hoy + 'T12:00:00').getDay();
+  if (dow === 5) {
+    var lunes = diaDespues(hoy, -4), lunesSig = diaDespues(hoy, 3);
+    var tiene = {}, tieneSig = {};
+    prog.forEach(function (x) {
+      if (x.estado === 'BORRADOR') return;
+      if (x.fecha >= lunes && x.fecha < lunesSig) tiene[x.empId] = true;
+      if (x.fecha >= lunesSig && x.fecha <= diaDespues(lunesSig, 6)) tieneSig[x.empId] = true;
+    });
+    sinProgramar = emps.filter(function (e) { return tiene[e.id] && !tieneSig[e.id]; })
+                       .map(function (e) { return nombreCorto(e.nombre); });
+  }
+
+  var d = new Date(hoy + 'T12:00:00');
+  var fecha = DIAS_SEMANA[d.getDay()].replace(/^./, function (c) { return c.toUpperCase(); }) + ' ' +
+              Number(hoy.slice(8, 10)) + ' de ' + MESES[Number(hoy.slice(5, 7)) - 1];
+  var r = {
+    ok: true, tipo: 'dia', fecha: hoy, hora: ah.hora, fechaTexto: fecha,
+    asistencia: programados ? Math.round(presentes / programados * 100) : null,
+    presentes: presentes, programados: programados, minutosTardanza: minutos,
+    secciones: [
+      { titulo: 'No marcaron entrada', items: faltan },
+      { titulo: 'Llegaron tarde', items: tardes.map(function (x) { return { n: x.n, d: x.d }; }) },
+      { titulo: 'Llegada registrada sin poder marcar (por aprobar)', items: llegadas },
+      { titulo: 'Con permiso, comisión o ausencia', items: conPermiso },
+      { titulo: 'Ayer no marcaron salida', items: sinSalidaAyer }
+    ].filter(function (s) { return s.items.length; }),
+    permisosPendientes: pendientes, semanaSiguienteSinProgramar: sinProgramar,
+    para: destinatariosResumen(cfg, personal)
+  };
+  r.texto = textoResumenDia(r, faltan.length, tardes.length);
+  r.asunto = 'Resumen de asistencia · ' + fecha;
+  return r;
+}
+
+/* El texto con el formato de WhatsApp (*negrita*), igual al del botón del panel. */
+function textoResumenDia(r, falta, tarde) {
+  var t = '📊 *Resumen de asistencia*\n' + r.fechaTexto + ' · corte ' + r.hora + '\n\n' +
+    '✅ Asistencia: *' + (r.asistencia === null ? '—' : r.asistencia + '%') + '* (' + r.presentes + ' de ' + r.programados + ')\n' +
+    '❌ Faltan: *' + falta + '*\n' +
+    '⏰ Tardanzas: *' + tarde + '*' + (r.minutosTardanza ? ' (' + r.minutosTardanza + ' min en total)' : '') + '\n';
+  r.secciones.forEach(function (sec) {
+    t += '\n*' + sec.titulo + ' (' + sec.items.length + ')*\n' +
+         sec.items.map(function (it) { return '• ' + it.n + (it.d ? ' — ' + it.d : ''); }).join('\n') + '\n';
+  });
+  if (!r.secciones.length) t += '\n✓ Todo en orden: nadie falta y nadie llegó tarde.\n';
+  if (r.permisosPendientes) t += '\n📝 ' + r.permisosPendientes + ' permiso' + (r.permisosPendientes === 1 ? '' : 's') + ' por responder en el panel.';
+  if (r.semanaSiguienteSinProgramar.length)
+    t += '\n🗓️ Falta programar la próxima semana: ' + r.semanaSiguienteSinProgramar.join(', ') + '.';
+  return t.trim();
+}
+
+/* Quienes reciben los resúmenes por WhatsApp: los marcados en Configuración →
+   «Resumen del día» (resumenPara, ids de Personal) que tengan celular. El número
+   sale con el código de Perú delante, como lo pide WhatsApp. */
+function destinatariosResumen(cfg, personal) {
+  personal = personal || leerPersonal();
+  return String(cfg.resumenPara || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
+    .map(function (id) {
+      for (var i = 0; i < personal.length; i++) if (personal[i].id === id) return personal[i];
+      return null;
+    })
+    .filter(function (e) { return e && e.tel; })
+    .map(function (e) {
+      var t = soloDigitos(e.tel);
+      if (t.length === 9) t = '51' + t;
+      return { nombre: nombreCorto(e.nombre), numero: t };
+    });
 }
 
 function fechaCortaSrv(f) { return f.slice(8, 10) + '/' + f.slice(5, 7); }
