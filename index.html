@@ -3637,7 +3637,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-20.4';
+const APP_VERSION = '2026-10-20.5';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6842,6 +6842,9 @@ let HOY_GRUPO = '', HOY_BUSCA = '', HOY_ABIERTO = {};   // pestaña Hoy: filtro 
    servidor, que es el siguiente paso natural. */
 let ROL = 'admin';
 const soloVista = ()=> ROL === 'vista';
+// Aprobar o rechazar permisos: administración, o un usuario con permiso para eso
+// (Auditoría de Dirección ve todo en solo lectura, pero sí resuelve permisos)
+const puedeResolverPermisos = ()=> !soloVista() || !!(USUARIO && USUARIO.aprueba);
 
 /* ---------- SESIÓN RECORDADA ----------
    En un equipo de confianza (la PC de administración, donde además corre la tarea
@@ -6864,7 +6867,8 @@ function restaurarSesion(){
   if(hayServidor()){
     api('entrar', {clave:ses.clave}, {timeout:15000}).then(r=>{
       if(r && r.ok === false){ olvidarSesion(); $('#btnExit').click(); pedirPass(); }
-      else if(r && r.rol && r.rol !== ROL){ ROL = r.rol; recordarSesion(ses.clave, r.rol); abrirAdmin(); }
+      else if(r && r.rol && (r.rol !== ROL || (USUARIO && !!r.aprueba !== !!USUARIO.aprueba))){
+        ROL = r.rol; if(USUARIO) USUARIO.aprueba = !!r.aprueba; recordarSesion(ses.clave, r.rol); abrirAdmin(); }
     }).catch(()=>{});
   }
   return true;
@@ -6903,7 +6907,7 @@ function pedirPass(){
         const r = await api('entrar', {usuario:u, clave:v}, {timeout:15000});
         btn.disabled = false; btn.textContent = 'Entrar';
         if(r && r.ok && r.rol){
-          CLAVE = v; ROL = r.rol; USUARIO = {usuario:r.usuario, nombre:r.nombre};
+          CLAVE = v; ROL = r.rol; USUARIO = {usuario:r.usuario, nombre:r.nombre, aprueba:!!r.aprueba};
           if(m.querySelector('#pwRec').checked) recordarSesion(v, r.rol);
           m.remove(); abrirAdmin(); return;
         }
@@ -7418,11 +7422,11 @@ function bandejaPendientes(){
         (p.hora ? ' · '+esc(p.hora)+(p.horaFin?'–'+esc(p.horaFin):'') : '')+
         (p.vistoJefe ? ' <span class="tag tag-ok" style="font-size:10px">visto bueno del jefe</span>' : '')+
         (p.motivo ? '<div style="font-size:12.5px;color:var(--muted);line-height:1.5">'+esc(motivoSinMarca(p))+'</div>' : ''),
-      vista ? '' : g.ps.length > 1
+      !puedeResolverPermisos() ? '' : g.ps.length > 1
         ? '<button class="btn btn-sm" data-bir="perm">Revisar</button>'
         : '<div style="display:flex;gap:7px"><button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
           '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'">Rechazar</button></div>');
-  }).join(''), vista ? null : {tab:'perm', t:'Ir a Permisos'});
+  }).join(''), puedeResolverPermisos() ? {tab:'perm', t:'Ir a Permisos'} : null);
 
   if(d.salidas.length) h += seccion('🚪 Salidas sin marcar (últimos 7 días)', d.salidas.length, d.salidas.map(x=>
     linea('<b>'+esc(nombrePropio(x.e.nombre))+'</b> · '+esc(fechaCorta(x.f))+(x.entrada ? ' · entró '+esc(x.entrada) : ''),
@@ -7464,7 +7468,7 @@ function avisoPermisosPendientes(){
         (p.motivo ? '<div style="font-size:12.5px;color:var(--muted);line-height:1.5">'+
                     esc(p.motivo)+'</div>' : '')+
       '</div>'+
-      (soloVista() ? '<span style="font-size:12px;color:var(--muted)">Sin responder</span>'
+      (!puedeResolverPermisos() ? '<span style="font-size:12px;color:var(--muted)">Sin responder</span>'
         : '<div style="display:flex;gap:7px">'+
             '<button class="btn btn-sm" data-ok="'+esc(p.id)+'">Aprobar</button>'+
             '<button class="btn btn-sm btn-line" data-no="'+esc(p.id)+'">Rechazar</button>'+
@@ -9190,7 +9194,7 @@ function agruparPermisos(lista){
   });
 }
 
-let FLT_PERM = {texto:'', tipo:'', estado:'', mes:''};
+let FLT_PERM = {texto:'', tipo:'', estado:'', mes:'', por:''};
 
 function tabPermisos(b){
   const hoy = hoyISO();
@@ -9203,6 +9207,7 @@ function tabPermisos(b){
       (!f.tipo   || tipoReal(p).id===f.tipo) &&
       (!f.estado || p.estado===f.estado) &&
       (!f.mes    || String(p.fecha).slice(0,7)===f.mes) &&
+      (!f.por    || quienResolvio(p)===f.por) &&
       (!f.texto  || (p.nombre+' '+(p.motivo||'')).toLowerCase().indexOf(f.texto.toLowerCase())>=0)))
     .sort((a,c)=>c.desde.localeCompare(a.desde));
 
@@ -9215,7 +9220,7 @@ function tabPermisos(b){
     const vencido = g.desde < hoy;
     const ids = esc(g.ids.join(','));
     return '<tr>'+
-      (conBotones && !soloVista() ? '<td class="tc-wide"><input type="checkbox" class="pSel" value="'+ids+'"></td>' : '')+
+      (conBotones && puedeResolverPermisos() ? '<td class="tc-wide"><input type="checkbox" class="pSel" value="'+ids+'"></td>' : '')+
       '<td class="name">'+esc(p.nombre)+'</td>'+
       '<td data-l="Tipo"><span class="tag tag-info">'+esc(t.nombre)+'</span></td>'+
       '<td class="num" data-l="Días">'+rango(g)+
@@ -9233,7 +9238,7 @@ function tabPermisos(b){
         (p.resueltoPor ? '<div style="font-size:11px;color:var(--muted)">'+esc(p.resueltoPor)+'</div>' : '')+
         (p.vistoJefePor && p.estado==='PENDIENTE' ? '<div style="font-size:11px;color:var(--muted)">Visto: '+esc(p.vistoJefePor)+'</div>' : '')+'</td>'+
       '<td class="'+(p.comentario?'tc-wide':'tc-hide')+'" data-l="Comentario" style="white-space:normal">'+esc(p.comentario||'')+'</td>'+
-      (soloVista() ? '<td class="tc-hide"></td>'
+      (!puedeResolverPermisos() || (soloVista() && !conBotones) ? '<td class="tc-hide"></td>'
         : '<td class="tc-wide"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
             (conBotones
               ? '<button class="btn btn-sm" data-ok="'+ids+'">Aprobar</button>'+
@@ -9241,13 +9246,13 @@ function tabPermisos(b){
               : '')+
             // Borrar es para la solicitud que nació mal —una prueba, un duplicado,
             // un día equivocado—, no para deshacer una decisión.
-            '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
-              'style="color:var(--gray-700);padding:0;width:44px" title="Borrar la solicitud" aria-label="Borrar">'+ico('trash')+'</button>'+
+            (soloVista() ? '' : '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
+              'style="color:var(--gray-700);padding:0;width:44px" title="Borrar la solicitud" aria-label="Borrar">'+ico('trash')+'</button>')+
           '</div></td>')+
     '</tr>';
   };
 
-  const cab = conSel => '<thead><tr>'+(conSel && !soloVista() ? '<th><input type="checkbox" id="pTodos"></th>' : '')+
+  const cab = conSel => '<thead><tr>'+(conSel && puedeResolverPermisos() ? '<th><input type="checkbox" id="pTodos"></th>' : '')+
     '<th>Colaborador</th><th>Qué pide</th><th>Días</th><th>Hora</th>'+
     '<th>Motivo</th><th>Estado</th><th>Comentario</th><th></th></tr></thead>';
 
@@ -9263,7 +9268,7 @@ function tabPermisos(b){
     (pend.length
       ? '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px">'+
           '<h3 style="margin:0;font-size:15px">Pendientes</h3>'+
-          (soloVista() ? '' : '<div style="display:flex;gap:8px">'+
+          (!puedeResolverPermisos() ? '' : '<div style="display:flex;gap:8px">'+
             '<button class="btn btn-sm" id="pOkSel" disabled>Aprobar seleccionadas</button>'+
             '<button class="btn btn-sm btn-line" id="pNoSel" disabled style="color:var(--danger);border-color:var(--danger)">Rechazar seleccionadas</button></div>')+
         '</div>'+
@@ -9282,6 +9287,8 @@ function tabPermisos(b){
         opt('APROBADO','Aprobados',f.estado)+opt('RECHAZADO','Rechazados',f.estado)+'</select></div>'+
       '<div>'+lbl('Mes')+'<select class="sel" id="fpM">'+opt('','Todos',f.mes)+
         meses.map(m=>opt(m, MESES[+m.slice(5,7)-1]+' '+m.slice(0,4), f.mes)).join('')+'</select></div>'+
+      '<div>'+lbl('Resuelto por')+'<select class="sel" id="fpR">'+opt('','Todos',f.por)+
+        Array.from(new Set(todosRes.map(quienResolvio).filter(Boolean))).sort().map(n=>opt(n, nombrePropio(n), f.por)).join('')+'</select></div>'+
     '</div>'+
     (resueltos.length
       ? '<div class="tblwrap"><div class="tblscroll"><table class="tcards">'+cab(false)+'<tbody>'+
@@ -9296,11 +9303,11 @@ function tabPermisos(b){
   const ref = ()=>renderTab();
   const fpT = $('#fpT');
   if(fpT) fpT.onchange = ()=>{ FLT_PERM.texto = fpT.value.trim(); ref(); };
-  [['fpTi','tipo'],['fpE','estado'],['fpM','mes']].forEach(([id,k])=>{
+  [['fpTi','tipo'],['fpE','estado'],['fpM','mes'],['fpR','por']].forEach(([id,k])=>{
     const el = $('#'+id); if(el) el.onchange = ()=>{ FLT_PERM[k] = el.value; ref(); };
   });
 
-  if(soloVista()) return;
+  if(!puedeResolverPermisos()) return;
 
   const ids = s => String(s).split(',').filter(Boolean);
   Array.from(b.querySelectorAll('[data-ok]')).forEach(x=>x.onclick=()=>resolverPermiso(ids(x.dataset.ok),'APROBADO'));
@@ -9319,6 +9326,12 @@ function tabPermisos(b){
   const okS = $('#pOkSel'), noS = $('#pNoSel');
   if(okS) okS.onclick = ()=>resolverPermiso(marcados(), 'APROBADO');
   if(noS) noS.onclick = ()=>resolverPermiso(marcados(), 'RECHAZADO');
+}
+
+/* Quién resolvió un permiso, tal como se agrupa en el historial: el nombre de
+   quien lo firmó, sin el «(jefe de área)» y en mayúsculas para juntar variantes. */
+function quienResolvio(p){
+  return String(p.resueltoPor||'').replace(/\s*\(jefe de área\)\s*$/i,'').trim().replace(/\s+/g,' ').toUpperCase();
 }
 
 /* Cuántos días de permiso tuvo cada persona en el mes, por tipo. Solo aprobados. */
@@ -9400,7 +9413,7 @@ function resolverPermiso(ids, decision){
     '<div class="frow"><div><label>Comentario '+(aprobar?'(opcional)':'(obligatorio)')+' — lo verá el colaborador</label>'+
       '<input id="rsC" placeholder="'+(aprobar?'Que te mejores':'Motivo del rechazo')+'" maxlength="150"></div></div>'+
     '<div class="frow"><div><label>Resuelto por</label>'+
-      '<input id="rsP" value="'+esc(ultimoRegistrador())+'" placeholder="Nombre y apellido"></div></div>'+
+      '<input id="rsP" value="'+esc(ultimoRegistrador())+'" placeholder="Nombre y apellido"'+(USUARIO?' readonly':'')+'></div></div>'+
     '<div style="display:flex;gap:10px;margin-top:16px">'+
       '<button class="btn btn-line" id="rsX">Cancelar</button>'+
       '<button class="btn" id="rsG"'+(aprobar?'':' style="background:var(--danger)"')+'>'+(aprobar?'Aprobar':'Rechazar')+'</button></div></div>';
@@ -10253,7 +10266,7 @@ function organizarConfig(main){
    Cada persona entra con su usuario y su clave. Administrador puede cambiar
    cosas; Solo vista mira y no cambia nada. Las claves se guardan en el servidor
    como huella: ni la app ni la hoja las tienen escritas. */
-const ROLES_USU = {admin:'Administrador', vista:'Solo vista'};
+const ROLES_USU = {admin:'Administrador', permisos:'Solo vista + aprobar permisos', vista:'Solo vista'};
 async function tabUsuarios(b){
   b.innerHTML = '<div class="cfg"><h3>Usuarios</h3><p style="color:var(--muted)">Cargando…</p></div>';
   if(!hayServidor()){ b.innerHTML = '<div class="alert alert-warn">Los usuarios viven en el servidor: conéctalo primero en Servidor y datos.</div>'; return; }
@@ -10268,7 +10281,8 @@ async function tabUsuarios(b){
   const lista = (r.usuarios||[]).slice().sort((x,y)=>x.nombre.localeCompare(y.nombre));
   b.innerHTML = '<div class="cfg"><h3>Usuarios</h3>'+
     '<p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 12px">Cada persona entra al panel con su usuario y su clave. '+
-      '<b>Administrador</b> puede aprobar permisos, corregir marcas y configurar; <b>Solo vista</b> ve todo pero no cambia nada. '+
+      '<b>Administrador</b> puede aprobar permisos, corregir marcas y configurar; <b>Solo vista + aprobar permisos</b> ve todo y '+
+      'solo puede aprobar o rechazar permisos; <b>Solo vista</b> ve todo pero no cambia nada. '+
       'Las claves generales de siempre siguen funcionando.</p>'+
     (lista.length ? '<div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Permisos</th><th>Estado</th><th></th></tr></thead><tbody>'+
       lista.map(x=>'<tr>'+
@@ -10276,11 +10290,44 @@ async function tabUsuarios(b){
         '<td><code>'+esc(x.usuario)+'</code></td>'+
         '<td>'+esc(ROLES_USU[x.rol]||x.rol)+'</td>'+
         '<td>'+(x.activo?'<span class="tag tag-ok">Activo</span>':'<span class="tag tag-neutral">Desactivado</span>')+'</td>'+
-        '<td style="white-space:nowrap"><button class="btn btn-sm btn-line" data-ued="'+esc(x.usuario)+'">Editar</button></td></tr>').join('')+
+        '<td style="white-space:nowrap"><button class="btn btn-sm btn-line" data-uhis="'+esc(x.usuario)+'">Historial ('+resueltosPor(x).length+')</button> '+
+          '<button class="btn btn-sm btn-line" data-ued="'+esc(x.usuario)+'">Editar</button></td></tr>').join('')+
       '</tbody></table></div>' : '<div class="alert alert-info">Todavía no hay usuarios. Crea el primero.</div>')+
     '<button class="btn" id="uNuevo" style="margin-top:12px">+ Nuevo usuario</button></div>';
   b.querySelector('#uNuevo').onclick = ()=>editarUsuario(null, ()=>tabUsuarios(b));
   b.querySelectorAll('[data-ued]').forEach(x=>x.onclick = ()=>editarUsuario(lista.find(u=>u.usuario===x.dataset.ued), ()=>tabUsuarios(b)));
+  b.querySelectorAll('[data-uhis]').forEach(x=>x.onclick = ()=>historialUsuario(lista.find(u=>u.usuario===x.dataset.uhis)));
+}
+
+/* Los permisos que resolvió un usuario: los firmados con su usuario y, de antes
+   de que existieran los usuarios, los firmados con su mismo nombre. */
+function resueltosPor(u){
+  const nom = String(u.nombre||'').trim().replace(/\s+/g,' ').toUpperCase();
+  return PERMISOS.filter(p=>p.estado!=='PENDIENTE' &&
+    (p.resueltoUsuario ? p.resueltoUsuario===u.usuario : (nom && quienResolvio(p)===nom)));
+}
+
+function historialUsuario(u){
+  const grupos = agruparPermisos(resueltosPor(u))
+    .sort((a,b)=>String(b.p.resueltoEl||'').localeCompare(String(a.p.resueltoEl||'')) || b.desde.localeCompare(a.desde));
+  const ap = grupos.filter(g=>g.p.estado==='APROBADO').length, re = grupos.length - ap;
+  const m = document.createElement('div'); m.className = 'modal';
+  m.innerHTML = '<div class="box" style="max-width:720px;max-height:90vh;overflow:auto"><h2>Historial de '+esc(nombrePropio(u.nombre))+'</h2>'+
+    '<p style="font-size:13px;color:var(--muted);margin:0 0 12px">'+grupos.length+' solicitud'+(grupos.length===1?'':'es')+' resuelta'+(grupos.length===1?'':'s')+
+      ' · <b style="color:var(--ok-text)">'+ap+' aprobada'+(ap===1?'':'s')+'</b> · <b style="color:var(--danger-text)">'+re+' rechazada'+(re===1?'':'s')+'</b></p>'+
+    (grupos.length ? '<div class="tblwrap"><div class="tblscroll"><table class="tcards"><thead><tr><th>Resuelto el</th><th>Colaborador</th><th>Qué pidió</th><th>Días</th><th>Decisión</th><th>Comentario</th></tr></thead><tbody>'+
+      grupos.map(g=>{ const p = g.p;
+        return '<tr><td class="num" data-l="Resuelto el">'+esc(p.resueltoEl ? fechaCorta(p.resueltoEl) : '—')+'</td>'+
+          '<td class="name">'+esc(nombrePropio(p.nombre))+'</td>'+
+          '<td data-l="Qué pidió">'+esc(tipoReal(p).nombre)+'</td>'+
+          '<td class="num" data-l="Días">'+esc(g.ps.length===1 ? fechaCorta(g.desde) : fechaCorta(g.desde)+' → '+fechaCorta(g.hasta))+'</td>'+
+          '<td data-l="Decisión">'+(p.estado==='APROBADO' ? '<span class="tag tag-ok">APROBADO</span>' : '<span class="tag tag-bad">RECHAZADO</span>')+'</td>'+
+          '<td data-l="Comentario" style="white-space:normal">'+esc(p.comentario||'')+'</td></tr>'; }).join('')+
+      '</tbody></table></div></div>' : '<div class="alert alert-info">Todavía no resolvió ningún permiso.</div>')+
+    '<button class="btn btn-line" id="uhX" style="width:100%;margin-top:12px">Cerrar</button></div>';
+  document.body.appendChild(m);
+  m.querySelector('#uhX').onclick = ()=>m.remove();
+  m.onclick = ev=>{ if(ev.target===m) m.remove(); };
 }
 
 function editarUsuario(u, alTerminar){
