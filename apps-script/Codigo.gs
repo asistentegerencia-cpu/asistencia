@@ -191,7 +191,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 14,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 15,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -2879,33 +2879,39 @@ function htmlResumenSemana(r, cfg) {
   var tarjeta = function (t, v, ant, malo) {
     var dif = (v !== null && ant !== null) ? Math.round((v - ant) * 10) / 10 : null;
     var bien = dif === null ? null : (malo ? dif < 0 : dif > 0);
-    return '<td style="padding:10px 12px;border:1px solid #e3e8e6;border-radius:10px;width:25%">' +
+    // Bloques que se acomodan solos: cuatro en fila en la computadora, dos y dos en
+    // el celular. Con una tabla de cuatro columnas el celular cortaba la cuarta.
+    return '<div style="display:inline-block;vertical-align:top;box-sizing:border-box;width:22%;min-width:132px;' +
+             'margin:0 6px 8px 0;padding:10px 12px;border:1px solid #e3e8e6;border-radius:10px">' +
       '<div style="font-size:12px;color:#5b6b66">' + t + '</div>' +
       '<div style="font-size:24px;font-weight:800;color:#1b2b4a">' + (v === null ? '—' : v) + '</div>' +
       (dif === null || dif === 0 ? '<div style="font-size:11px;color:#8a9692">igual que la semana anterior</div>'
         : '<div style="font-size:11px;color:' + (bien ? '#1f7a4d' : '#b3261e') + '">' + (dif > 0 ? '▲ +' : '▼ ') + dif + ' vs. semana anterior</div>') +
-      '</td>';
+      '</div>';
   };
   var lista = function (titulo, items) {
     if (!items.length) return '';
     return '<h3 style="font-size:15px;margin:18px 0 6px;color:#1b2b4a">' + titulo + '</h3><ul style="margin:0;padding-left:18px">' +
       items.map(function (x) { return '<li style="margin:2px 0">' + x + '</li>'; }).join('') + '</ul>';
   };
-  var h = '<div style="font-family:Arial,Helvetica,sans-serif;color:#22302c;max-width:640px">' +
+  // lang="es": sin esto Gmail ofrecía traducirlo «del inglés»
+  var h = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">' +
+    '<meta http-equiv="Content-Language" content="es"><meta name="viewport" content="width=device-width,initial-scale=1"></head>' +
+    '<body style="margin:0"><div lang="es" style="font-family:Arial,Helvetica,sans-serif;color:#22302c;max-width:640px">' +
     '<h2 style="margin:0;color:#1b2b4a">Resumen semanal de asistencia</h2>' +
     '<div style="color:#5b6b66;margin:4px 0 14px">' + e(cfg.empresa || 'Grupo Robles') + ' · del ' +
       fechaCortaSrv(r.periodo.desde) + ' al ' + fechaCortaSrv(r.periodo.hasta) + '</div>' +
-    '<table cellspacing="6" style="width:100%;border-collapse:separate"><tr>' +
+    '<div>' +
       tarjeta('Asistencia %', i.asistencia, a.asistencia) + tarjeta('Puntualidad %', i.puntualidad, a.puntualidad) +
       tarjeta('Faltas', i.faltas, a.faltas, true) + tarjeta('Salidas sin marcar', i.olvidosSalida, a.olvidosSalida, true) +
-    '</tr></table>' +
+    '</div>' +
     '<div style="font-size:13px;color:#5b6b66;margin:4px 6px">Tardanzas: ' + i.tardanzas + ' (' + i.minutosTardanza + ' min)' +
       (i.horasPromedio ? ' · Promedio trabajado: ' + i.horasPromedio + ' h por día' : '') + ' · Días justificados: ' + i.justificadas + '</div>';
   if (r.areas.length) {
-    h += '<h3 style="font-size:15px;margin:18px 0 6px;color:#1b2b4a">Por área</h3><table style="border-collapse:collapse;font-size:13px;width:100%">' +
-      '<tr style="background:#f2f5f4"><th style="text-align:left;padding:6px">Área</th><th style="text-align:right;padding:6px">Asistencia</th><th style="text-align:right;padding:6px">Puntualidad</th></tr>' +
+    h += '<h3 style="font-size:15px;margin:18px 0 6px;color:#1b2b4a">Por área</h3><table style="border-collapse:collapse;font-size:13px;width:100%;max-width:640px;table-layout:fixed">' +
+      '<tr style="background:#f2f5f4"><th style="text-align:left;padding:6px;width:50%">Área</th><th style="text-align:right;padding:6px">Asist.</th><th style="text-align:right;padding:6px">Puntual.</th></tr>' +
       r.areas.map(function (g) {
-        return '<tr><td style="padding:6px;border-top:1px solid #e3e8e6">' + e(g.area) + '</td>' +
+        return '<tr><td style="padding:6px;border-top:1px solid #e3e8e6;word-wrap:break-word">' + e(g.area) + '</td>' +
                '<td style="padding:6px;border-top:1px solid #e3e8e6;text-align:right">' + g.asistencia + '%</td>' +
                '<td style="padding:6px;border-top:1px solid #e3e8e6;text-align:right">' + (g.puntualidad === null ? '—' : g.puntualidad + '%') + '</td></tr>';
       }).join('') + '</table>';
@@ -2920,6 +2926,6 @@ function htmlResumenSemana(r, cfg) {
   if (r.semanaSinProgramar.length) at.push('<b>Sin programación esta semana</b> (la tenían la pasada): ' + r.semanaSinProgramar.map(function (n) { return e(nombreCorto(n)); }).join(', '));
   if (at.length) h += '<div style="background:#fff6e5;border:1px solid #f0d9a8;border-radius:10px;padding:10px 12px;margin-top:18px">' +
     '<b>⚠️ Para atender esta semana</b><ul style="margin:6px 0 0;padding-left:18px">' + at.map(function (x) { return '<li>' + x + '</li>'; }).join('') + '</ul></div>';
-  h += '<p style="font-size:11px;color:#8a9692;margin-top:18px">Calculado con las mismas reglas del panel (pestaña Reportes). Aviso automático del control de asistencia.</p></div>';
+  h += '<p style="font-size:11px;color:#8a9692;margin-top:18px">Calculado con las mismas reglas del panel (pestaña Reportes). Aviso automático del control de asistencia.</p></div></body></html>';
   return h;
 }
