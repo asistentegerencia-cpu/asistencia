@@ -3637,7 +3637,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-20.5';
+const APP_VERSION = '2026-10-20.6';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6896,7 +6896,7 @@ function pedirPass(){
   const btn = m.querySelector('#pwOk');
 
   const go = async ()=>{
-    const v = inp.value, u = inpU.value.trim().toLowerCase();
+    const v = inp.value, u = limpiarUsuario(inpU.value);
     if(!v) return;
 
     // Con usuario propio: lo valida siempre el servidor (sus claves no viajan en la app)
@@ -10267,6 +10267,12 @@ function organizarConfig(main){
    cosas; Solo vista mira y no cambia nada. Las claves se guardan en el servidor
    como huella: ni la app ni la hoja las tienen escritas. */
 const ROLES_USU = {admin:'Administrador', permisos:'Solo vista + aprobar permisos', vista:'Solo vista'};
+/* El usuario se arregla solo: sin tildes, en minúsculas y con punto en vez de
+   espacios («Auditoría de Dirección» → «auditoria.de.direccion»). */
+function limpiarUsuario(t){
+  return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()
+    .replace(/ñ/g,'n').replace(/\s+/g,'.').replace(/[^a-z0-9._-]/g,'').replace(/\.{2,}/g,'.').replace(/^[.]+|[.]+$/g,'').slice(0,30);
+}
 async function tabUsuarios(b){
   b.innerHTML = '<div class="cfg"><h3>Usuarios</h3><p style="color:var(--muted)">Cargando…</p></div>';
   if(!hayServidor()){ b.innerHTML = '<div class="alert alert-warn">Los usuarios viven en el servidor: conéctalo primero en Servidor y datos.</div>'; return; }
@@ -10336,7 +10342,8 @@ function editarUsuario(u, alTerminar){
   const m = document.createElement('div'); m.className = 'modal';
   m.innerHTML = '<div class="box"><h2>'+(nuevo ? 'Nuevo usuario' : 'Editar usuario')+'</h2>'+
     '<div class="frow"><div><label>Nombre (quién lo usa)</label><input id="uN" value="'+esc(u.nombre)+'" placeholder="Ítalo Torres"></div></div>'+
-    '<div class="frow"><div><label>Usuario</label><input id="uU" value="'+esc(u.usuario)+'" placeholder="italo" autocapitalize="none" spellcheck="false"'+(nuevo?'':' disabled')+'></div>'+
+    '<div class="frow"><div><label>Usuario (con el que entra)</label><input id="uU" value="'+esc(u.usuario)+'" placeholder="italo" autocapitalize="none" spellcheck="false"'+(nuevo?'':' disabled')+'>'+
+      '<div style="font-size:11.5px;color:var(--muted);margin-top:4px">Sin tildes ni espacios; se arregla solo.</div></div>'+
       '<div><label>Permisos</label><select id="uR">'+Object.keys(ROLES_USU).map(k=>'<option value="'+k+'"'+(u.rol===k?' selected':'')+'>'+ROLES_USU[k]+'</option>').join('')+'</select></div></div>'+
     '<div class="frow"><div><label>'+(nuevo ? 'Clave (mínimo 8 caracteres)' : 'Nueva clave (vacío = no se cambia)')+'</label>'+
       '<input id="uC" type="text" autocomplete="new-password" spellcheck="false" placeholder="'+(nuevo?'':'••••••••')+'"></div></div>'+
@@ -10350,6 +10357,14 @@ function editarUsuario(u, alTerminar){
   document.body.appendChild(m);
   const err = t=>{ m.querySelector('#uErr').innerHTML = '<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">'+esc(t)+'</div>'; };
   m.querySelector('#uX').onclick = ()=>m.remove();
+  const uU = m.querySelector('#uU'), uN = m.querySelector('#uN');
+  if(nuevo){
+    let tocado = false;
+    // Mientras no lo escriban, se propone con el primer nombre
+    uN.oninput = ()=>{ if(!tocado) uU.value = limpiarUsuario(String(uN.value).trim().split(/\s+/)[0]); };
+    uU.oninput = ()=>{ tocado = true; };
+    uU.onblur = ()=>{ uU.value = limpiarUsuario(uU.value); };
+  }
   m.querySelector('#uGen').onclick = ()=>{
     const abc = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
     const r = new Uint32Array(10); crypto.getRandomValues(r);
@@ -10365,10 +10380,11 @@ function editarUsuario(u, alTerminar){
     bt.disabled = false;
   };
   m.querySelector('#uG').onclick = ()=>{
-    const nombre = m.querySelector('#uN').value.trim(), usuario = m.querySelector('#uU').value.trim().toLowerCase();
+    const nombre = m.querySelector('#uN').value.trim(), usuario = nuevo ? limpiarUsuario(uU.value) : uU.value.trim().toLowerCase();
+    uU.value = usuario;
     const clave = m.querySelector('#uC').value, rol = m.querySelector('#uR').value;
     if(nombre.length < 3) return err('Escribe el nombre de quien usará este acceso.');
-    if(!/^[a-z0-9._-]{3,30}$/.test(usuario)) return err('El usuario debe tener de 3 a 30 letras o números, sin espacios ni tildes.');
+    if(!/^[a-z0-9._-]{3,30}$/.test(usuario)) return err('Escribe un usuario de al menos 3 letras (por ejemplo: italo).');
     if(nuevo && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
     if(clave && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
     const activo = nuevo ? true : m.querySelector('#uA').checked;
