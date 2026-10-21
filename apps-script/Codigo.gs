@@ -201,7 +201,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 20,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 21,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -609,7 +609,7 @@ function instalar(p) {
     var cfg = datos.cfg || {};
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
-     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
+     'inicioOperacion','cierreMargenMin','refrigerioMin','refrigerioDesdeMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
      'whatsappSoporte','resumenPara'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
@@ -712,7 +712,7 @@ function leerConfigDeHoja() {
     var v = f.valor;
     if (k === 'turnos' || k === 'proyectos' || k === 'sabadosTrabajados' || k === 'domingosTrabajados' ||
         k === 'sedesExtra') { try { v = JSON.parse(v); } catch (e) { v = []; } }
-    else if (['lat','lng','radio','tolerancia','umbralGrave','cierreMargenMin'].indexOf(k) >= 0) v = Number(v);
+    else if (['lat','lng','radio','tolerancia','umbralGrave','cierreMargenMin','refrigerioMin','refrigerioDesdeMin'].indexOf(k) >= 0) v = Number(v);
     // Si la hoja convirtió la fecha en fecha/hora, dejarla como texto AAAA-MM-DD.
     // Un "2026-08-24T05:00:00.000Z" rompe las comparaciones y esconde las faltas del día.
     else if (k === 'inicioOperacion') v = fechaTexto(v);
@@ -2603,7 +2603,7 @@ function guardarConfig(p) {
 
     var pares = [];
     ['empresa','sigla','lat','lng','radio','gpsModo','tolerancia','umbralGrave',
-     'inicioOperacion','cierreMargenMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
+     'inicioOperacion','cierreMargenMin','refrigerioMin','refrigerioDesdeMin','adminPass','vistaPass','exigirDispositivo','correoAlertas',
      'whatsappSoporte','resumenPara'].forEach(function (k) {
       if (cfg[k] !== undefined) pares.push([k, String(cfg[k])]);
     });
@@ -2930,7 +2930,8 @@ function resumenSemana(p) {
         var tard = ev.tardanza > 0 && !aprob[emp.id + '|' + f + '|TARDANZA'] ? ev.tardanza : 0;
         if (tard > 0) { a.tardanzas++; a.minutos += tard; } else a.puntuales++;
         if (!j.salida || j.salida.origen === 'DECLARADO' || aprob[emp.id + '|' + f + '|SALIDA_OLVIDO']) a.olvidos++;
-        if (j.salida && j.min > 0) { a.trabajados += j.min; a.diasConJornada++; }
+        // Como el panel: cuentan los tramos cerrados, aunque el último del día quedara sin salida
+        if (j.min > 0) { a.trabajados += j.min; a.diasConJornada++; }
       }
       for (var k in tot) tot[k] += a[k];
       return a;
@@ -3020,9 +3021,26 @@ function jornadaResumen(emp, f, porDia, cfg, prog) {
   var ent = null;
   for (var i = 0; i < pares.length; i++) if (pares[i].entrada) { ent = pares[i]; break; }
   var ult = pares[pares.length - 1];
-  var min = 0;
-  pares.forEach(function (x) { if (x.entrada && x.salida) min += Math.max(0, aMin(x.salida.hora) - x.ini); });
-  return { entrada: ent ? ent.entrada : null, salida: ult ? ult.salida : null, min: min };
+  var min = 0, hueco = 0, finPrevio = null;
+  pares.forEach(function (x) {
+    if (!(x.entrada && x.salida)) return;
+    if (finPrevio !== null) hueco = Math.max(hueco, x.ini - finPrevio);
+    min += Math.max(0, aMin(x.salida.hora) - x.ini);
+    finPrevio = aMin(x.salida.hora);
+  });
+  var refri = refrigerioDe(min, hueco, cfg);
+  return { entrada: ent ? ent.entrada : null, salida: ult ? ult.salida : null, min: min - refri, bruto: min, refrigerio: refri };
+}
+
+/* El refrigerio no es trabajo: en una jornada continua de más de
+   refrigerioDesdeMin (6 h) se descuentan refrigerioMin (60) minutos. Si la
+   persona marcó salida y regreso para almorzar (un hueco de 30 min o más), ese
+   tiempo ya quedó fuera y no se descuenta otra vez. Igual que el panel. */
+function refrigerioDe(bruto, huecoMax, cfg) {
+  var ref = (cfg.refrigerioMin === undefined || cfg.refrigerioMin === '' || cfg.refrigerioMin === null) ? 60 : (Number(cfg.refrigerioMin) || 0);
+  var desde = (cfg.refrigerioDesdeMin === undefined || cfg.refrigerioDesdeMin === '' || cfg.refrigerioDesdeMin === null) ? 360 : (Number(cfg.refrigerioDesdeMin) || 0);
+  if (!ref || bruto <= desde || huecoMax >= 30) return 0;
+  return Math.min(ref, bruto);
 }
 
 /* ══════════════════════════════════════════════════════════════
