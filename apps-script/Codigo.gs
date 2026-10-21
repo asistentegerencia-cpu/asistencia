@@ -176,7 +176,10 @@ function rolDe(p) {
   var u = normUsuario(p.usuario);
   if (u) { var x = usuarioValido(u, c); return x ? (x.rol === 'admin' ? 'admin' : 'vista') : ''; }
   var cfg = leerConfig();
-  if (c === String(cfg.adminPass || '')) return 'admin';
+  // Con usuarios administradores, la clave general de administración ya no abre
+  // nada: cada uno entra con lo suyo. Si se desactivan o borran todos, vuelve a
+  // servir (es la puerta de emergencia: editar la hoja Usuarios).
+  if (c === String(cfg.adminPass || '')) return hayAdminUsuario() ? '' : 'admin';
   if (cfg.vistaPass && c === String(cfg.vistaPass)) return 'vista';
   return '';
 }
@@ -198,7 +201,7 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 19,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 20,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p));
     case 'identificar': return identificar(p);
@@ -214,6 +217,8 @@ function enrutar(p) {
     // ---- Con clave ----
     case 'entrar':      if (normUsuario(p.usuario)) return entrarUsuario(p);
                         rol = rolDe(p);
+                        if (!rol && hayAdminUsuario() && String(p.clave || '') === String(leerConfig().adminPass || ''))
+                          return { ok: false, error: 'La clave general de administración ya no se usa: entra con tu usuario.' };
                         return rol ? { ok: true, rol: rol }
                                    : { ok: false, error: 'Clave incorrecta' };
     case 'reporte':     rol = rolDe(p);
@@ -307,11 +312,16 @@ function mios(p) {
   var misPermisos = leerPermisos().filter(function (x) {
     return String(x.empId) === String(emp.id);
   });
+  // Y sus ausencias registradas: sin ellas, «Mis marcas» mostraría como falta
+  // un día de vacaciones o de comisión.
+  var misAusencias = leerAusencias().filter(function (x) {
+    return String(x.empId) === String(emp.id) && x.hasta >= desde && x.desde <= hasta;
+  });
 
   // Sus datos de ficha, por si administración le cambió la sede, el saldo de
   // vacaciones o lo nombró jefe después de que su celular lo guardara.
   return { ok: true, empId: emp.id, marcajes: out, total: out.length,
-           programacion: miProg, permisos: misPermisos,
+           programacion: miProg, permisos: misPermisos, ausencias: misAusencias,
            emp: { sede: emp.sede, vacDias: emp.vacDias, vacDesde: emp.vacDesde,
                   esJefe: !!jefeDe(emp.id), modalidad: emp.modalidad, turno: emp.turno,
                   dias: emp.dias, avisosJefe: avisosJefe(emp, emps) } };
@@ -768,6 +778,7 @@ function arranque(rol) {
   delete publica.vistaPass;
   delete publica.correoAlertas;
   publica.tieneVistaPass = !!cfg.vistaPass;
+  publica.claveAdminActiva = !hayAdminUsuario();
   // El correo no sale nunca, pero hace falta poder comprobar desde el panel
   // que hay uno puesto: si se borra, los avisos dejan de llegar sin que nadie
   // se entere, porque el envío falla en silencio a propósito.
@@ -1735,6 +1746,11 @@ function leerUsuariosDeHoja() {
              rol: ROLES_USUARIO.indexOf(String(f.rol || '').toLowerCase()) >= 0 ? String(f.rol).toLowerCase() : 'vista',
              passHash: String(f.pass_hash || ''), activo: String(f.activo).toUpperCase() !== 'NO' };
   });
+}
+
+/* ¿Hay al menos un administrador con usuario propio que pueda entrar? */
+function hayAdminUsuario() {
+  return leerUsuarios().some(function (x) { return x.activo && x.rol === 'admin' && x.passHash; });
 }
 
 function usuarioValido(usuario, clave) {

@@ -3637,7 +3637,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-20.6';
+const APP_VERSION = '2026-10-21.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -3838,6 +3838,11 @@ async function sincronizarMios(emp, desde, hasta, forzar){
     PROGRAMACION = PROGRAMACION.filter(x=>x.empId!==emp.id).concat(r.programacion);
     if(previo !== JSON.stringify(r.programacion)) cambioAlgo = true;
     try{ localStorage.setItem('ca_progMia_'+emp.id, JSON.stringify(r.programacion)); }catch(e){}
+  }
+  if(Array.isArray(r.ausencias)){
+    const previo = JSON.stringify(AUS.filter(x=>x.empId===emp.id));
+    AUS = AUS.filter(x=>x.empId!==emp.id).concat(r.ausencias);
+    if(previo !== JSON.stringify(r.ausencias)){ saveAus(); cambioAlgo = true; }
   }
   if(Array.isArray(r.permisos)){
     const previo = JSON.stringify(PERMISOS.filter(x=>x.empId===emp.id));
@@ -4235,6 +4240,70 @@ function dibujarReportePersona(r, periodo){
   });
   txt('✎ marca corregida o registrada a mano · Si algo no es correcto, pide la corrección en la app', W/2, H-36, 19, '#98a2b3', 600, 'center');
   return c;
+}
+
+/* ---------- MIS MARCAS (en el celular de cada persona) ----------
+   Su mes día por día, con las mismas reglas del panel, para que revise sola si
+   sus marcas están bien. Los días con algo raro de la última semana traen el
+   botón para pedir la corrección; los más antiguos, ya no se pueden pedir desde
+   la app y se ven así. */
+let MIS_PERIODO = 'mes';
+async function verMisMarcas(emp){
+  const m = document.createElement('div'); m.className = 'modal';
+  document.body.appendChild(m);
+  const cerrar = ()=>{
+    m.remove();
+    // Lo que se trajo para mirar otro mes no debe quedar como su semana actual
+    sincronizarMios(emp, null, null, true).then(c=>{ if(c && typeof renderMark==='function') renderMark(); }).catch(()=>{});
+  };
+  const pintar = async ()=>{
+    const ahora = new Date(), hoy = hoyISO(ahora), per = periodoReporte(MIS_PERIODO, ahora);
+    m.innerHTML = '<div class="box"><p style="color:var(--muted)">Cargando tus marcas de '+esc(per.nombre)+'…</p></div>';
+    let sinServidor = false;
+    try{ await sincronizarMios(emp, per.desde, per.hasta, true); }catch(e){ sinServidor = true; }
+    if(!hayServidor()) sinServidor = true;
+    const r = datosReportePersona(emp, per.desde, per.hasta, ahora), a = r.a;
+    const tope = diaISO(hoy, -7);
+    // Cada problema con la corrección que le corresponde: una salida corregida no
+    // arregla la tardanza de ese mismo día.
+    const pedida = (f, tipos)=>PERMISOS.find(p=>p.empId===emp.id && p.fecha===f && p.estado!=='RECHAZADO' && tipos.indexOf(p.tipo)>=0);
+    const accion = x=>{
+      if(!x.mal || x.f >= hoy) return '';
+      const tipo = /Sin salida/.test(x.obs) ? 'SALIDA_OLVIDO' : x.obs==='Falta' ? 'JORNADA' : 'ENTRADA_OLVIDO';
+      const tipos = tipo==='SALIDA_OLVIDO' ? ['SALIDA_OLVIDO'] : tipo==='JORNADA' ? ['JORNADA','ENTRADA_FALLIDA','DIA'] : ['ENTRADA_OLVIDO','TARDANZA'];
+      const p = pedida(x.f, tipos);
+      if(p) return '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Corrección '+(p.estado==='APROBADO'?'aprobada':'pedida, esperando respuesta')+'</div>';
+      if(x.f < tope) return '';
+      return '<button class="btn btn-sm btn-line" data-mmc="'+x.f+'|'+tipo+'" style="margin-top:4px;min-height:30px;padding:2px 10px;font-size:12.5px">Pedir corrección</button>';
+    };
+    const stat = (t,v)=>'<div style="flex:1;min-width:70px;background:var(--surface-2);border-radius:10px;padding:6px 8px">'+
+      '<div style="font-size:11px;color:var(--muted);font-weight:700">'+t+'</div><div style="font-size:17px;font-weight:800">'+v+'</div></div>';
+    m.innerHTML = '<div class="box" style="max-height:90vh;overflow:auto"><h2 style="margin-bottom:4px">Mis marcas</h2>'+
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
+        '<select class="sel" id="mmP" style="flex:1"><option value="mes"'+(MIS_PERIODO==='mes'?' selected':'')+'>Este mes</option>'+
+          '<option value="ant"'+(MIS_PERIODO==='ant'?' selected':'')+'>Mes anterior</option></select></div>'+
+      (sinServidor ? '<div class="alert alert-warn" style="margin-bottom:10px;font-size:13px">Sin conexión: se muestra lo guardado en este celular.</div>' : '')+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+
+        stat('Asistencia', r.pa==null?'—':r.pa+'%')+stat('Tardanzas', a.tardanzas)+stat('Faltas', a.faltas)+stat('Sin salida', r.olvidos)+'</div>'+
+      (r.dias.length ? r.dias.slice().reverse().map(x=>
+        '<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 2px;border-top:1px solid var(--line)">'+
+          '<div style="width:74px;flex:none;font-weight:800;font-size:13.5px">'+esc(diaCorto(x.f))+'</div>'+
+          '<div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px">'+esc(x.marcas)+'</div>'+
+            '<div style="font-size:12.5px;font-weight:700;color:'+(x.mal?'var(--danger-text)':x.obs==='A tiempo'?'var(--ok-text)':'var(--muted)')+'">'+esc(x.obs)+'</div>'+
+            accion(x)+'</div></div>').join('')
+        : '<div class="alert alert-info">No hay días para mostrar en este periodo.</div>')+
+      '<p style="font-size:11.5px;color:var(--muted);margin:12px 0 0;line-height:1.5">✎ = marca corregida o registrada a mano. '+
+        'Puedes pedir corrección de los últimos 7 días; para algo más antiguo, habla con Administración.</p>'+
+      '<button class="btn btn-line" id="mmX" style="width:100%;margin-top:12px">Cerrar</button></div>';
+    m.querySelector('#mmX').onclick = cerrar;
+    m.querySelector('#mmP').onchange = ev=>{ MIS_PERIODO = ev.target.value; pintar(); };
+    m.querySelectorAll('[data-mmc]').forEach(bt=>bt.onclick = ()=>{
+      const [f, tipo] = bt.dataset.mmc.split('|');
+      m.remove();
+      solicitarPermiso(emp, tipo, {fecha:f});
+    });
+  };
+  pintar();
 }
 
 async function reporteWhatsApp(empId){
@@ -5751,12 +5820,15 @@ function pintarPermiso(emp){
         (p.comentario ? '<br><span style="font-size:12.5px">'+esc(p.comentario)+'</span>' : '')+
       '</div>';
     }).join('')+
+    '<button class="btn btn-line" id="btnMisMarcas" style="width:100%;margin-bottom:8px">📋 Ver mis marcas del mes</button>'+
     '<button class="btn btn-line" id="btnPermiso" style="width:100%">Solicitar un permiso</button>'+
     (emp.esJefe ? '<button class="btn btn-line" id="btnJefe" style="width:100%;margin-top:8px">'+ico('users')+' Mi equipo: permisos y programación'+
                     (avisosJefeHtml(emp).n ? ' <span style="min-width:22px;height:22px;border-radius:999px;background:var(--warn);color:#fff;font-size:12px;font-weight:800;display:inline-grid;place-items:center;padding:0 6px">'+avisosJefeHtml(emp).n+'</span>' : '')+'</button>'+avisosJefeHtml(emp).html : '');
 
   const b = $('#btnPermiso');
   if(b) b.onclick = ()=>solicitarPermiso(emp);
+  const bmm = $('#btnMisMarcas');
+  if(bmm) bmm.onclick = ()=>verMisMarcas(emp);
   const bj = $('#btnJefe');
   if(bj) bj.onclick = ()=>panelJefe(emp);
   c.querySelectorAll('[data-jav]').forEach(x=>x.onclick = ()=>{
@@ -6931,10 +7003,12 @@ function pedirPass(){
           if(m.querySelector('#pwRec').checked) recordarSesion(v, r.rol);
           m.remove(); abrirAdmin(); return;
         }
-        return err('Clave incorrecta');
+        return err((r && r.error) || 'Clave incorrecta');
       }catch(e){
         btn.disabled = false; btn.textContent = 'Entrar';
-        // Sin conexión se cae al modo local, para no dejar a administración afuera
+        // Con servidor la clave la decide siempre el servidor: sin conexión no se
+        // entra con una copia guardada, que podría ser una clave ya retirada.
+        return err('Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.');
       }
     }
 
@@ -10614,7 +10688,10 @@ function tabCfg(b){
   '<p class="hint">Nombre que ven los colaboradores y clave del panel de administración.</p>'+
   '<div class="frow"><div><label>Nombre</label><input id="cEmp" value="'+esc(CFG.empresa)+'"></div>'+
   '<div style="max-width:90px"><label>Sigla</label><input id="cSig" maxlength="2" value="'+esc(CFG.sigla)+'"></div></div>'+
-  '<div class="frow"><div><label>Clave de administrador</label><input id="cPas" value="'+esc(CFG.adminPass)+'"></div></div>'+
+  '<div class="frow"><div><label>Clave general de administrador</label><input id="cPas" value="'+esc(CFG.adminPass)+'"'+
+    (CFG.claveAdminActiva===false ? ' placeholder="Desactivada: se entra con usuario"' : '')+'>'+
+    (CFG.claveAdminActiva===false ? '<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45">Desactivada: como hay usuarios administradores, '+
+      'cada uno entra con su usuario (Configuración → Usuarios). Vuelve a servir solo si no queda ningún administrador activo.</div>' : '')+'</div></div>'+
   '<div class="frow"><div><label>Clave de solo lectura</label><input id="cPasV" value="'+esc(CFG.vistaPass||'')+'" placeholder="Déjala vacía para no habilitarla"></div></div>'+
   '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.55">'+
     'Quien entre con la <b>clave de solo lectura</b> ve el tablero, el análisis, las ausencias y el historial, '+
