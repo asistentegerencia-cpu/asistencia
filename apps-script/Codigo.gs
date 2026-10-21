@@ -71,7 +71,7 @@ var COLS = {
      padrón no los borre. El PIN se guarda solo como huella (hash), nunca tal cual. */
   jef: ['emp_id','nombre','areas','pin_hash','actualizado'],
   // Quienes entran al panel con nombre propio. La clave se guarda como huella, nunca tal cual.
-  usu: ['usuario','nombre','rol','pass_hash','activo','actualizado']
+  usu: ['usuario','nombre','rol','pass_hash','activo','actualizado','areas','emp_id']
 };
 
 /* ══════════════════════════════════════════════════════════════
@@ -174,7 +174,7 @@ function rolDe(p) {
   // Con usuario, manda su propio rol (y solo su clave): las claves compartidas
   // no sirven con un nombre de usuario delante.
   var u = normUsuario(p.usuario);
-  if (u) { var x = usuarioValido(u, c); return x ? (x.rol === 'admin' ? 'admin' : 'vista') : ''; }
+  if (u) { var x = usuarioValido(u, c); return x ? (x.rol === 'admin' ? 'admin' : x.rol === 'area' ? 'area' : 'vista') : ''; }
   var cfg = leerConfig();
   // Con usuarios administradores, la clave general de administración ya no abre
   // nada: cada uno entra con lo suyo. Si se desactivan o borran todos, vuelve a
@@ -201,9 +201,9 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 21,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 22,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
-    case 'arranque':    return arranque(rolDe(p));
+    case 'arranque':    return arranque(rolDe(p), p);
     case 'identificar': return identificar(p);
     case 'marcar':      return marcar(p);
     case 'mios':        return mios(p);
@@ -222,20 +222,24 @@ function enrutar(p) {
                         return rol ? { ok: true, rol: rol }
                                    : { ok: false, error: 'Clave incorrecta' };
     case 'reporte':     rol = rolDe(p);
-                        return rol ? reporte(p) : NO_AUTORIZADO;
+                        return rol ? reporte(p, rol === 'area' ? ambitoDe(p) : null) : NO_AUTORIZADO;
     // El resumen de la semana para n8n: basta la clave de solo vista
     // Con tipo=dia, el resumen de hoy (el del mediodía, para WhatsApp)
     case 'resumen':     rol = rolDe(p);
-                        if (!rol) return NO_AUTORIZADO;
+                        if (!rol || rol === 'area') return NO_AUTORIZADO;
                         return p.tipo === 'dia' ? resumenDia(p) : resumenSemana(p);
 
     // ---- Solo administración ----
     case 'instalar':    return rolDe(p) === 'admin' ? instalar(p)            : NO_AUTORIZADO;
     case 'ausencia':    return rolDe(p) === 'admin' ? guardarAusencia(p)     : NO_AUTORIZADO;
-    case 'borrar':      return rolDe(p) === 'admin' ? borrarMarcajes(p)      : NO_AUTORIZADO;
+    case 'borrar':      rol = rolDe(p);
+                        if (rol === 'admin') return borrarMarcajes(p, null);
+                        // El jefe de área corrige marcas de su gente, una por una (nunca por rango)
+                        if (rol === 'area' && (p.ids || p.id)) return borrarMarcajes(mezclar(p, { desde: '', hasta: '' }), ambitoDe(p));
+                        return NO_AUTORIZADO;
     case 'liberar':     return rolDe(p) === 'admin' ? liberarDispositivo(p)  : NO_AUTORIZADO;
     case 'resolver':    return puedeResolver(p) ? resolverPermiso(p)          : NO_AUTORIZADO;
-    case 'programar':   return rolDe(p) === 'admin' ? guardarProgramacion(p)  : NO_AUTORIZADO;
+    case 'programar':   return puedeProgramar(p) ? guardarProgramacion(p)    : NO_AUTORIZADO;
     case 'notasprog':   return rolDe(p) === 'admin' ? guardarNotasProg(p)     : NO_AUTORIZADO;
     case 'reparar':     return rolDe(p) === 'admin' ? repararTodo()           : NO_AUTORIZADO;
     case 'borrarperm':  return rolDe(p) === 'admin' ? borrarPermiso(p)        : NO_AUTORIZADO;
@@ -768,7 +772,7 @@ function leerAusencias() {
  * Nada de eso identifica a nadie, y es lo que el celular necesita para funcionar.
  * Con clave, además, el padrón y las ausencias — eso es para el panel.
  */
-function arranque(rol) {
+function arranque(rol, p) {
   var cfg = leerConfig();
 
   // Las claves NUNCA salen del servidor
@@ -808,6 +812,25 @@ function arranque(rol) {
       return { empId: j.empId, nombre: j.nombre, areas: j.areas, tienePin: !!j.pinHash };
     });
     r.rol = rol;
+  }
+  // El jefe de área recibe lo mismo, pero solo de la gente de sus áreas
+  if (rol === 'area') {
+    var amb = ambitoDe(p || {});
+    if (!amb) return r;
+    var mio = function (x) { return !!amb.ids[String(x.empId)]; };
+    r.emp = leerPersonal().filter(function (e) { return !!amb.ids[e.id]; });
+    r.aus = leerAusencias().filter(mio);
+    var disp = leerDispositivos(), dsp = {};
+    for (var id in disp) if (disp.hasOwnProperty(id) && amb.ids[id]) dsp[id] = disp[id];
+    r.dispositivos = dsp;
+    r.dispositivosFilas = null;
+    r.alertas = leerAlertas(60).filter(mio);
+    r.permisos = leerPermisos().filter(mio);
+    r.programacion = leerProgramacion().filter(mio);
+    r.notasProg = [];
+    r.jefes = [];
+    r.rol = 'area';
+    r.ambito = { areas: amb.areas, empId: amb.empId };
   }
   return r;
 }
@@ -1715,8 +1738,25 @@ function guardarJefe(p) {
    ══════════════════════════════════════════════════════════════ */
 function normUsuario(u) { return String(u || '').trim().toLowerCase(); }
 
-/* admin: todo · permisos: ve todo y además aprueba o rechaza permisos · vista: solo mira */
-var ROLES_USUARIO = ['admin', 'permisos', 'vista'];
+/* admin: todo · area: jefe de área, solo su equipo (ve, programa, aprueba y
+   corrige marcas) · permisos: ve todo y además aprueba o rechaza permisos ·
+   vista: solo mira */
+var ROLES_USUARIO = ['admin', 'area', 'permisos', 'vista'];
+
+/* Lo que puede ver y tocar un jefe de área: la gente de sus áreas (activa o no),
+   sin él mismo para lo que cambia algo. null = sin límite (los demás roles). */
+function ambitoDe(p) {
+  var x = usuarioDe(p);
+  if (!x || x.rol !== 'area') return null;
+  var ids = {};
+  var areas = x.areas || [];             // una copia en memoria de antes de esta versión no las trae
+  leerPersonal().forEach(function (e) { if (areas.indexOf(e.area) >= 0) ids[e.id] = true; });
+  return { areas: areas, empId: x.empId || '', ids: ids, nombre: x.nombre };
+}
+/* ¿Puede cambiar algo de esta persona? Su gente, nunca él mismo. */
+function enAmbito(amb, empId) {
+  return !amb || (!!amb.ids[String(empId)] && String(empId) !== String(amb.empId));
+}
 
 /* El usuario con el que vino el pedido, si vino con uno válido. */
 function usuarioDe(p) {
@@ -1724,11 +1764,33 @@ function usuarioDe(p) {
   return u ? usuarioValido(u, String(p.clave || '')) : null;
 }
 
-/* Aprobar o rechazar permisos: administración, o un usuario con rol permisos. */
+/* Aprobar o rechazar permisos: administración, un usuario con rol permisos, o el
+   jefe de área para la gente de su equipo (nunca los suyos). */
 function puedeResolver(p) {
   if (rolDe(p) === 'admin') return true;
   var x = usuarioDe(p);
-  return !!(x && x.rol === 'permisos');
+  if (x && x.rol === 'permisos') return true;
+  if (x && x.rol === 'area') {
+    var amb = ambitoDe(p), id = String(p.id || '');
+    var per = leerPermisos().filter(function (q) { return q.id === id; })[0];
+    return !!(per && enAmbito(amb, per.empId));
+  }
+  return false;
+}
+
+/* Programar: administración, o el jefe de área solo con tramos de su gente. */
+function puedeProgramar(p) {
+  if (rolDe(p) === 'admin') return true;
+  var amb = ambitoDe(p);
+  if (!amb) return false;
+  var lista = p.datos ? (typeof p.datos === 'string' ? JSON.parse(p.datos) : p.datos) : [];
+  var dueno = {};
+  leerProgramacion().forEach(function (x) { dueno[x.id] = String(x.empId); });
+  for (var i = 0; i < lista.length; i++) {
+    if (!enAmbito(amb, lista[i].empId)) return false;
+    if (lista[i].id && dueno[lista[i].id] && !enAmbito(amb, dueno[lista[i].id])) return false;
+  }
+  return true;
 }
 
 function huellaUsuario(usuario, clave) {
@@ -1744,7 +1806,9 @@ function leerUsuariosDeHoja() {
   return out.filter(function (f) { return f.usuario; }).map(function (f) {
     return { usuario: normUsuario(f.usuario), nombre: String(f.nombre || ''),
              rol: ROLES_USUARIO.indexOf(String(f.rol || '').toLowerCase()) >= 0 ? String(f.rol).toLowerCase() : 'vista',
-             passHash: String(f.pass_hash || ''), activo: String(f.activo).toUpperCase() !== 'NO' };
+             passHash: String(f.pass_hash || ''), activo: String(f.activo).toUpperCase() !== 'NO',
+             areas: String(f.areas || '').split('|').map(function (a) { return a.trim(); }).filter(function (a) { return a; }),
+             empId: String(f.emp_id || '') };
   });
 }
 
@@ -1778,13 +1842,14 @@ function entrarUsuario(p) {
     return { ok: false, error: 'Usuario o clave incorrectos' };
   }
   if (cache) { try { cache.remove(claveFallos); } catch (e) { } }
-  return { ok: true, rol: x.rol === 'admin' ? 'admin' : 'vista', usuario: x.usuario, nombre: x.nombre,
-           aprueba: x.rol === 'admin' || x.rol === 'permisos', rolUsuario: x.rol };
+  return { ok: true, rol: x.rol === 'admin' ? 'admin' : x.rol === 'area' ? 'area' : 'vista', usuario: x.usuario, nombre: x.nombre,
+           aprueba: x.rol !== 'vista', rolUsuario: x.rol, areas: x.areas || [] };
 }
 
 function listarUsuarios() {
   return { ok: true, usuarios: leerUsuarios().map(function (x) {
-    return { usuario: x.usuario, nombre: x.nombre, rol: x.rol, activo: x.activo, tieneClave: !!x.passHash };
+    return { usuario: x.usuario, nombre: x.nombre, rol: x.rol, activo: x.activo, tieneClave: !!x.passHash,
+             areas: x.areas, empId: x.empId };
   }) };
 }
 
@@ -1799,7 +1864,12 @@ function guardarUsuario(p) {
   var rolNuevo = ROLES_USUARIO.indexOf(String(p.rol || '').toLowerCase()) >= 0 ? String(p.rol).toLowerCase() : 'vista';
   var clave = String(p.nuevaClave || '');
   var activo = !(String(p.activo) === 'false' || p.activo === false);
+  var areas = p.areas ? (typeof p.areas === 'string' ? (p.areas.charAt(0) === '[' ? JSON.parse(p.areas) : p.areas.split('|')) : p.areas) : [];
+  areas = areas.map(function (a) { return String(a).trim(); }).filter(function (a) { return a; });
+  var empVinc = String(p.empId || '');
   if (!borrar && nombre.length < 3) return { ok: false, error: 'Escribe el nombre de quien usará este acceso.' };
+  if (!borrar && rolNuevo === 'area' && !areas.length) return { ok: false, error: 'Elige al menos un área para el jefe de área.' };
+  if (rolNuevo !== 'area') { areas = []; }
   if (clave && clave.length < 8) return { ok: false, error: 'La clave debe tener al menos 8 caracteres.' };
 
   var lock = LockService.getScriptLock();
@@ -1818,10 +1888,12 @@ function guardarUsuario(p) {
     var hash = clave ? huellaUsuario(u, clave) : hashPrevio;
     if (!hash) return { ok: false, error: 'Ponle una clave al usuario para que pueda entrar.' };
     var valores = filaSegunCab(cab, { usuario: u, nombre: nombre, rol: rolNuevo, pass_hash: hash,
-                                      activo: activo ? 'SI' : 'NO', actualizado: new Date() });
+                                      activo: activo ? 'SI' : 'NO', actualizado: new Date(),
+                                      areas: areas.join('|'), emp_id: empVinc });
     if (fila) h.getRange(fila, 1, 1, valores.length).setValues([valores]);
     else h.appendRow(valores);
-    return { ok: true, usuario: { usuario: u, nombre: nombre, rol: rolNuevo, activo: activo, tieneClave: true } };
+    return { ok: true, usuario: { usuario: u, nombre: nombre, rol: rolNuevo, activo: activo, tieneClave: true,
+                                  areas: areas, empId: empVinc } };
   } finally { lock.releaseLock(); }
 }
 
@@ -2160,7 +2232,12 @@ function marcar(p) {
     // cualquiera que supiera un DNI podía mandar origen MANUAL y marcar por otra
     // persona, a la hora que quisiera, esquivando todo el control.
     var manualAdmin = (p.origen === 'MANUAL');
-    if (manualAdmin && rolDe(p) !== 'admin') {
+    // El jefe de área también registra a mano, pero solo a la gente de su equipo
+    var rolManual = manualAdmin ? rolDe(p) : '';
+    if (manualAdmin && rolManual === 'area' && !enAmbito(ambitoDe(p), emp.id)) {
+      return { ok: false, motivo: 'no_autorizado', error: 'Solo puedes registrar marcas de la gente de tu equipo.' };
+    }
+    if (manualAdmin && rolManual !== 'admin' && rolManual !== 'area') {
       return { ok: false, motivo: 'no_autorizado',
                error: 'El registro manual solo lo puede hacer administración.' };
     }
@@ -2453,13 +2530,13 @@ function marcar(p) {
   }
 }
 
-function reporte(p) {
+function reporte(p, amb) {
   var desde = p.desde || '0000-01-01';
   var hasta = p.hasta || '9999-12-31';
   var out = filasDesde(HOJA.mar, COLS.mar, desde)
     .filter(function (m) {
       var f = fechaTexto(m.fecha);
-      return f >= desde && f <= hasta;
+      return f >= desde && f <= hasta && (!amb || amb.ids[String(m.emp_id)]);
     })
     .map(filaAObjeto);
   return { ok: true, marcajes: out, total: out.length };
@@ -2470,7 +2547,7 @@ function reporte(p) {
  * Sirve para limpiar los marcajes de prueba antes de arrancar en serio, y para
  * corregir un registro equivocado sin tener que buscar la fila a mano.
  */
-function borrarMarcajes(p) {
+function borrarMarcajes(p, amb) {
   olvidar();               // lo que se escriba aquí tiene que verse en el próximo pedido
   var ids = [];
   if (p.ids)      ids = (typeof p.ids === 'string') ? JSON.parse(p.ids) : p.ids;
@@ -2494,6 +2571,7 @@ function borrarMarcajes(p) {
       var id = String(datos[i][cId]);
       var f  = fechaTexto(datos[i][cFecha]);
       var coincide = ids.length ? (ids.indexOf(id) >= 0) : (f >= desde && f <= hasta);
+      if (coincide && amb && !enAmbito(amb, datos[i][cab.indexOf('emp_id')])) coincide = false;   // no es de su gente
       if (coincide) {
         detalle.push(f + ' ' + String(datos[i][cab.indexOf('nombre')]) + ' ' + String(datos[i][cab.indexOf('tipo')]));
         h.deleteRow(i + 1);

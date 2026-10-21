@@ -3550,6 +3550,12 @@ async function sincronizarArranque(){
   if(Array.isArray(r.jefes)) JEFES = r.jefes;
   if(Array.isArray(r.programacion)) PROGRAMACION = r.programacion;
   if(Array.isArray(r.notasProg)) NOTAS_PROG = r.notasProg;
+  if(r.rol === 'area'){
+    if(!r.emp || !r.emp.length){ EMP = []; saveEmp(); }
+    if(USUARIO && r.ambito){ USUARIO.areas = r.ambito.areas || USUARIO.areas; USUARIO.empId = r.ambito.empId || ''; }
+    limpiarFueraDeArea();
+    pintarSubtitulo();
+  }
   DISP_FILAS = (typeof r.dispositivosFilas === 'number') ? r.dispositivosFilas : null;
   if(r.cfg) CFG.tieneCorreoAlertas = !!r.cfg.tieneCorreoAlertas;
   if(r.cfg){
@@ -3563,6 +3569,17 @@ async function sincronizarArranque(){
     saveCfg();
   }
   return true;
+}
+
+/* El jefe de área no debe ver en su equipo lo que quedó guardado de otra sesión
+   (por ejemplo, si antes entró administración en esa misma computadora). */
+function limpiarFueraDeArea(){
+  const ids = new Set(EMP.map(e=>e.id));
+  MAR = MAR.filter(m=>ids.has(m.empId)); saveMar();
+  PERMISOS = PERMISOS.filter(p=>ids.has(p.empId));
+  PROGRAMACION = PROGRAMACION.filter(p=>ids.has(p.empId));
+  AUS = AUS.filter(a=>ids.has(a.empId)); saveAus();
+  ALERTAS = ALERTAS.filter(a=>ids.has(a.empId));
 }
 
 /* ---- Empujar al servidor lo que se edita en el panel ----
@@ -3642,7 +3659,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-21.2';
+const APP_VERSION = '2026-10-21.3';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6948,6 +6965,10 @@ let HOY_GRUPO = '', HOY_BUSCA = '', HOY_ABIERTO = {};   // pestaña Hoy: filtro 
    servidor, que es el siguiente paso natural. */
 let ROL = 'admin';
 const soloVista = ()=> ROL === 'vista';
+// Jefe de área con usuario propio: ve y maneja solo a la gente de sus áreas
+// (programar, aprobar permisos, corregir marcas); nada de configuración.
+const esJefeArea = ()=> ROL === 'area';
+const sinAdmin = ()=> soloVista() || esJefeArea();
 // Aprobar o rechazar permisos: administración, o un usuario con permiso para eso
 // (Auditoría de Dirección ve todo en solo lectura, pero sí resuelve permisos)
 const puedeResolverPermisos = ()=> !soloVista() || !!(USUARIO && USUARIO.aprueba);
@@ -6966,8 +6987,9 @@ function restaurarSesion(){
   let ses = null;
   try{ ses = JSON.parse(localStorage.getItem(K_SESION) || 'null'); }catch(e){}
   if(!ses || !ses.clave || !(ses.hasta > Date.now())){ if(ses) olvidarSesion(); return false; }
-  CLAVE = ses.clave; ROL = ses.rol === 'vista' ? 'vista' : 'admin';
+  CLAVE = ses.clave; ROL = ses.rol === 'vista' ? 'vista' : ses.rol === 'area' ? 'area' : 'admin';
   USUARIO = ses.usuario && ses.usuario.usuario ? ses.usuario : null;
+  if(ROL === 'area'){ EMP = EMP.filter(e=>USUARIO && (USUARIO.areas||[]).indexOf(e.area)>=0); limpiarFueraDeArea(); }
   abrirAdmin();
   // Si la clave cambió desde entonces, se olvida y se vuelve a pedir
   if(hayServidor()){
@@ -7013,7 +7035,8 @@ function pedirPass(){
         const r = await api('entrar', {usuario:u, clave:v}, {timeout:15000});
         btn.disabled = false; btn.textContent = 'Entrar';
         if(r && r.ok && r.rol){
-          CLAVE = v; ROL = r.rol; USUARIO = {usuario:r.usuario, nombre:r.nombre, aprueba:!!r.aprueba};
+          CLAVE = v; ROL = r.rol; USUARIO = {usuario:r.usuario, nombre:r.nombre, aprueba:!!r.aprueba, areas:r.areas||[]};
+          if(ROL === 'area'){ EMP = EMP.filter(e=>(USUARIO.areas||[]).indexOf(e.area)>=0); limpiarFueraDeArea(); }
           if(m.querySelector('#pwRec').checked) recordarSesion(v, r.rol);
           m.remove(); abrirAdmin(); return;
         }
@@ -7057,18 +7080,23 @@ function pedirPass(){
   m.querySelector('#pwX').onclick=()=>{ m.remove(); if(location.hash==='#admin'){ location.hash=''; } boot(); };
 }
 
+function pintarSubtitulo(){
+  const el = $('#adSub'); if(!el) return;
+  el.innerHTML = esc(fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase())) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos' +
+    (USUARIO ? ' · 👤 '+esc(nombrePropio(USUARIO.nombre)) : '') +
+    (esJefeArea() && USUARIO && USUARIO.areas && USUARIO.areas.length ? ' · Equipo: '+esc(USUARIO.areas.map(nombrePropio).join(', ')) : '');
+}
+
 function abrirAdmin(){
   HOY_VER = '';                     // el tablero siempre abre en el día de hoy
   $('#appMarcaje').classList.add('hidden');
   $('#appAdmin').classList.remove('hidden');
   $('#adTitle').textContent = CFG.empresa + ' · Asistencia';
-  $('#adSub').innerHTML = esc(fechaLarga(new Date()).replace(/^./,c=>c.toUpperCase())) + ' · ' + EMP.filter(e=>e.activo).length + ' colaboradores activos' +
-    (USUARIO ? ' · 👤 '+esc(nombrePropio(USUARIO.nombre)) : '') +
-    '';   // el acceso de consulta no se anuncia en pantalla: la restricción la
-          // aplica el servidor, no hace falta recordárselo a quien entra
+  pintarSubtitulo();   // el acceso de consulta no se anuncia en pantalla: la restricción la
+                       // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
-  const ocultas = [];   // en solo lectura, Configuración muestra solo Personal
+  const ocultas = esJefeArea() ? ['cfg'] : [];   // en solo lectura, Configuración muestra solo Personal
   $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
   if(ocultas.indexOf(TAB)>=0){
     TAB='hoy';
@@ -7182,7 +7210,7 @@ function avisoAlertas(){
 }
 
 function avisoCorreoAlertas(){
-  if(soloVista() || !hayServidor()) return '';
+  if(sinAdmin() || !hayServidor()) return '';
   if(CFG.tieneCorreoAlertas) return '';
   const candado = String(CFG.exigirDispositivo)==='true' || CFG.exigirDispositivo===true;
   return '<div class="alert alert-bad" style="margin-bottom:16px">📧 <b>No hay correo para los avisos.</b> '+
@@ -7193,7 +7221,7 @@ function avisoCorreoAlertas(){
 }
 
 function avisoUbicacion(){
-  if(soloVista() || CFG.ubicacionOk) return '';
+  if(sinAdmin() || CFG.ubicacionOk) return '';
   return '<div class="alert alert-warn" style="margin-bottom:16px">⚠ <b>Pendiente:</b> la ubicación de la oficina todavía es un valor de ejemplo. '+
          'Ve a <b>Configuración</b>, párate en la puerta de la oficina y toca <b>Capturar ubicación actual</b>. '+
          'Hasta entonces el control por GPS solo advierte, no bloquea.</div>';
@@ -7303,7 +7331,7 @@ function avisoRecepcionRemotos(){
 
 /* Nadie puede identificarse sin al menos un dato: DNI, celular o correo */
 function avisoSinIdentificador(){
-  if(soloVista()) return '';
+  if(sinAdmin()) return '';
   const sin = EMP.filter(e=>e.activo && e.modalidad!=='EXENTO' && !normTel(e.dni) && !normTel(e.tel) && !e.email);
   if(!sin.length) return '';
   return '<div class="alert alert-bad" style="margin-bottom:16px">🚫 <b>'+sin.map(e=>esc(e.nombre)).join(', ')+
@@ -7314,7 +7342,7 @@ function avisoSinIdentificador(){
 /* El error más fácil de cometer en el primer reporte: pedir "este mes" cuando el
    sistema lleva dos días andando, y presentar semanas de faltas que nunca ocurrieron. */
 function avisoInicioOperacion(desde){
-  if(soloVista() || !MAR.length) return '';
+  if(sinAdmin() || !MAR.length) return '';
   if(!CFG.inicioOperacion){
     return '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Falta definir desde cuándo está operando el sistema.</b> '+
       'Mientras no lo definas, todos los días anteriores al lanzamiento se cuentan como inasistencia — y nadie podía marcar entonces. '+
@@ -7330,7 +7358,7 @@ function avisoInicioOperacion(desde){
 
 /* Sin servidor no hay consolidado: es la advertencia más importante del panel */
 function avisoServidor(){
-  if(soloVista()) return '';
+  if(sinAdmin()) return '';
   if(hayServidor()){
     if(COLA.length) return '<div class="alert alert-warn" style="margin-bottom:16px">📤 <b>'+COLA.length+
       ' marcaje'+(COLA.length===1?'':'s')+' sin enviar al servidor.</b> Se reintenta solo. '+
@@ -7428,7 +7456,7 @@ function anomalias(desde, hasta){
 }
 
 function avisoAnomalias(desde, hasta){
-  if(soloVista()) return '';
+  if(sinAdmin()) return '';
   const a = anomalias(desde, hasta);
   const graves = a.filter(x=>x.nivel==='grave');
   if(!graves.length) return '';
@@ -7441,7 +7469,7 @@ function avisoAnomalias(desde, hasta){
 /* Si hay marcajes de alguien que ya no está en el padrón, es que se borró su fila.
    Esa persona no puede marcar y su historial queda huérfano: hay que avisarlo fuerte. */
 function avisoPadronHuerfano(){
-  if(soloVista() || !MAR.length) return '';
+  if(sinAdmin() || !MAR.length) return '';
   const ids = new Set(EMP.map(e=>e.id));
   const perdidos = {};
   MAR.forEach(m=>{ if(m.empId && !ids.has(m.empId)) perdidos[m.empId] = m.nombre || m.empId; });
@@ -8438,7 +8466,7 @@ function bloqueAusencias(desde, hasta, empId){
       que: '<span class="tag '+(t.cuenta==='ASISTIDO'?'tag-ok':'tag-warn')+'">'+esc(t.nombre)+'</span>',
       detalle: esc(a.actividad || a.motivo || '') + (a.lugar ? '<div style="color:var(--muted)">📍 '+esc(a.lugar)+'</div>' : ''),
       quienAutorizo: a.autorizadoPor ? esc(a.autorizadoPor) : '<span class="tag tag-warn" style="font-size:9px">SIN REGISTRAR</span>',
-      accion: soloVista() ? '' : '<button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button>'
+      accion: sinAdmin() ? '' : '<button class="btn btn-sm btn-line" data-ed="'+esc(a.id)+'">Editar</button>'
     };
   }).concat(per.map(p=>{
     const t = tipoReal(p);
@@ -8455,7 +8483,7 @@ function bloqueAusencias(desde, hasta, empId){
   return '<p class="hint" style="margin-bottom:10px">'+
       'Lo que pasó fuera de los marcajes. Las <b>comisiones de servicio</b> cuentan como día trabajado; '+
       'vacaciones, descanso médico, permiso y licencia salen del conteo.</p>'+
-    (soloVista()?'':'<div class="toolbar"><div class="grow"></div>'+
+    (sinAdmin()?'':'<div class="toolbar"><div class="grow"></div>'+
       '<button class="btn btn-sm" id="auN">Registrar ausencia</button></div>')+
     (filas.length
       ? '<div class="tblwrap"><div class="tblscroll"><table><thead><tr>'+
@@ -9069,7 +9097,7 @@ function descargarHorario(gente, idsArea){
 
 function bloqueNotas(){
   const mias = NOTAS_PROG.filter(n=>n.semana===PROG_SEM && n.area===PROG_AREA);
-  const puede = !soloVista();
+  const puede = !sinAdmin();
 
   const cuerpo = PROG_NOTAS_EDIT
     ? '<textarea id="pnT" rows="'+Math.max(4, mias.length+2)+'" '+
@@ -9324,8 +9352,10 @@ function tabPermisos(b){
     : esc(fechaCorta(g.desde))+' → '+esc(fechaCorta(g.hasta))+
       '<div style="font-size:11px;color:var(--muted)">'+g.ps.length+' días</div>';
 
-  const fila = (g, conBotones)=>{
+  const fila = (g, conBotonesPedidos)=>{
     const p = g.p, t = tipoReal(p);
+    // El jefe de área no resuelve lo suyo: eso lo ve Administración
+    const conBotones = conBotonesPedidos && !(esJefeArea() && USUARIO && USUARIO.empId && USUARIO.empId===p.empId);
     const vencido = g.desde < hoy;
     const ids = esc(g.ids.join(','));
     return '<tr>'+
@@ -9355,7 +9385,7 @@ function tabPermisos(b){
               : '')+
             // Borrar es para la solicitud que nació mal —una prueba, un duplicado,
             // un día equivocado—, no para deshacer una decisión.
-            (soloVista() ? '' : '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
+            (sinAdmin() ? '' : '<button class="btn btn-sm btn-line" data-delp="'+ids+'" '+
               'style="color:var(--gray-700);padding:0;width:44px" title="Borrar la solicitud" aria-label="Borrar">'+ico('trash')+'</button>')+
           '</div></td>')+
     '</tr>';
@@ -9470,7 +9500,7 @@ function resumenPermisosMes(){
    asistencia de una persona, y borrarlos de rebote al limpiar una lista sería el
    error más caro de los dos. El aviso lo dice antes de borrar. */
 async function borrarSolicitud(ids){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  if(sinAdmin()){ toast('Esa opción no está disponible'); return; }
   ids = [].concat(ids);
   const ps = PERMISOS.filter(x=>ids.indexOf(x.id)>=0);
   if(!ps.length) return;
@@ -9588,7 +9618,7 @@ function diasEntre(d,h){ return Math.round((new Date(h+'T12:00:00')-new Date(d+'
 
 
 function editarAus(id){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  if(sinAdmin()){ toast('Esa opción no está disponible'); return; }
   const hoy = hoyISO();
   const a = id ? AUS.find(x=>x.id===id)
               : {id:'', empId:'', tipo:'COMISION', desde:hoy, hasta:hoy, lugar:'', actividad:'', motivo:'', autorizadoPor:''};
@@ -9998,7 +10028,7 @@ function wireLiberar(b){
    Entrar uno por uno a 22 fichas para asignar el proyecto es una barrera real.
    Esta pantalla los pone todos juntos y guarda de una sola vez. */
 function asignarProyectos(){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  if(sinAdmin()){ toast('Esa opción no está disponible'); return; }
   const activos = EMP.filter(e=>e.activo);
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML = '<div class="box" style="max-width:560px"><h2>Asignar equipo o proyecto</h2>'+
@@ -10030,7 +10060,7 @@ function asignarProyectos(){
 
 /* ---------- Cargador masivo de DNI ---------- */
 function cargarDniMasivo(){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  if(sinAdmin()){ toast('Esa opción no está disponible'); return; }
   const m = document.createElement('div'); m.className='modal';
   m.innerHTML =
    '<div class="box" style="max-width:620px"><h2>Cargar DNI desde Excel</h2>'+
@@ -10120,7 +10150,7 @@ function cargarDniMasivo(){
 }
 
 function editarEmp(id){
-  if(soloVista()){ toast('Esa opción no está disponible'); return; }
+  if(sinAdmin()){ toast('Esa opción no está disponible'); return; }
   const e = id ? EMP.find(x=>x.id===id) : {id:'', nombre:'', dni:'', cargo:'', area:'', tel:'', email:'', turno:CFG.turnos[0].id, activo:true, exento:false, modalidad:'PRESENCIAL', proyecto:'', planilla:true};
   const m=document.createElement('div'); m.className='modal side';
   m.onclick = ev=>{ if(ev.target === m) m.remove(); };       // clic fuera cierra la ficha
@@ -10375,7 +10405,7 @@ function organizarConfig(main){
    Cada persona entra con su usuario y su clave. Administrador puede cambiar
    cosas; Solo vista mira y no cambia nada. Las claves se guardan en el servidor
    como huella: ni la app ni la hoja las tienen escritas. */
-const ROLES_USU = {admin:'Administrador', permisos:'Solo vista + aprobar permisos', vista:'Solo vista'};
+const ROLES_USU = {admin:'Administrador', area:'Jefe de área (solo su equipo)', permisos:'Solo vista + aprobar permisos', vista:'Solo vista'};
 /* El usuario se arregla solo: sin tildes, en minúsculas y con punto en vez de
    espacios («Auditoría de Dirección» → «auditoria.de.direccion»). */
 function limpiarUsuario(t){
@@ -10397,13 +10427,14 @@ async function tabUsuarios(b){
   b.innerHTML = '<div class="cfg"><h3>Usuarios</h3>'+
     '<p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 12px">Cada persona entra al panel con su usuario y su clave. '+
       '<b>Administrador</b> puede aprobar permisos, corregir marcas y configurar; <b>Solo vista + aprobar permisos</b> ve todo y '+
-      'solo puede aprobar o rechazar permisos; <b>Solo vista</b> ve todo pero no cambia nada. '+
+      'solo puede aprobar o rechazar permisos; <b>Solo vista</b> ve todo pero no cambia nada; '+
+      '<b>Jefe de área</b> ve solo a la gente de sus áreas y ahí programa, aprueba permisos y corrige marcas (no los suyos). '+
       'Las claves generales de siempre siguen funcionando.</p>'+
     (lista.length ? '<div class="tblwrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Permisos</th><th>Estado</th><th></th></tr></thead><tbody>'+
       lista.map(x=>'<tr>'+
         '<td><b>'+esc(x.nombre)+'</b>'+(USUARIO && USUARIO.usuario===x.usuario?' <span class="tag tag-ok" style="font-size:10px">tú</span>':'')+'</td>'+
         '<td><code>'+esc(x.usuario)+'</code></td>'+
-        '<td>'+esc(ROLES_USU[x.rol]||x.rol)+'</td>'+
+        '<td>'+esc(ROLES_USU[x.rol]||x.rol)+(x.rol==='area' && x.areas && x.areas.length ? '<div style="font-size:11.5px;color:var(--muted)">'+esc(x.areas.map(nombrePropio).join(', '))+'</div>' : '')+'</td>'+
         '<td>'+(x.activo?'<span class="tag tag-ok">Activo</span>':'<span class="tag tag-neutral">Desactivado</span>')+'</td>'+
         '<td style="white-space:nowrap"><button class="btn btn-sm btn-line" data-uhis="'+esc(x.usuario)+'">Historial ('+resueltosPor(x).length+')</button> '+
           '<button class="btn btn-sm btn-line" data-ued="'+esc(x.usuario)+'">Editar</button></td></tr>').join('')+
@@ -10454,6 +10485,13 @@ function editarUsuario(u, alTerminar){
     '<div class="frow"><div><label>Usuario (con el que entra)</label><input id="uU" value="'+esc(u.usuario)+'" placeholder="italo" autocapitalize="none" spellcheck="false"'+(nuevo?'':' disabled')+'>'+
       '<div style="font-size:11.5px;color:var(--muted);margin-top:4px">Sin tildes ni espacios; se arregla solo.</div></div>'+
       '<div><label>Permisos</label><select id="uR">'+Object.keys(ROLES_USU).map(k=>'<option value="'+k+'"'+(u.rol===k?' selected':'')+'>'+ROLES_USU[k]+'</option>').join('')+'</select></div></div>'+
+    '<div id="uArea" style="display:none"><div class="frow"><div><label>Áreas que maneja</label><div id="uAreas" style="display:flex;flex-wrap:wrap;gap:6px 14px">'+
+      Array.from(new Set(EMP.map(e=>e.area).filter(Boolean))).sort().map(a=>'<label style="display:flex;gap:6px;align-items:center;font-size:14px;font-weight:600">'+
+        '<input type="checkbox" value="'+esc(a)+'"'+((u.areas||[]).indexOf(a)>=0?' checked':'')+' style="width:18px;height:18px"> '+esc(nombrePropio(a))+'</label>').join('')+
+      '</div></div></div>'+
+      '<div class="frow"><div><label>Es este colaborador (no podrá aprobarse ni corregirse a sí mismo)</label><select id="uEmp"><option value="">— Elige —</option>'+
+        EMP.filter(e=>e.activo).slice().sort((x,y)=>x.nombre.localeCompare(y.nombre)).map(e=>'<option value="'+esc(e.id)+'"'+(u.empId===e.id?' selected':'')+'>'+esc(nombrePropio(e.nombre))+' · '+esc(nombrePropio(e.area||''))+'</option>').join('')+
+      '</select></div></div></div>'+
     '<div class="frow"><div><label>'+(nuevo ? 'Clave (mínimo 8 caracteres)' : 'Nueva clave (vacío = no se cambia)')+'</label>'+
       '<input id="uC" type="text" autocomplete="new-password" spellcheck="false" placeholder="'+(nuevo?'':'••••••••')+'"></div></div>'+
     '<button type="button" class="btn btn-sm btn-line" id="uGen">Generar una clave</button>'+
@@ -10466,7 +10504,17 @@ function editarUsuario(u, alTerminar){
   document.body.appendChild(m);
   const err = t=>{ m.querySelector('#uErr').innerHTML = '<div class="alert alert-bad" style="margin-top:12px;margin-bottom:0">'+esc(t)+'</div>'; };
   m.querySelector('#uX').onclick = ()=>m.remove();
-  const uU = m.querySelector('#uU'), uN = m.querySelector('#uN');
+  const uU = m.querySelector('#uU'), uN = m.querySelector('#uN'), uR = m.querySelector('#uR');
+  const verArea = ()=>{ m.querySelector('#uArea').style.display = uR.value==='area' ? '' : 'none'; };
+  uR.onchange = verArea; verArea();
+  // Al elegir a la persona, se marcan solas las áreas de las que es jefa
+  m.querySelector('#uEmp').onchange = ev=>{
+    const j = JEFES.find(x=>x.empId===ev.target.value), e = EMP.find(x=>x.id===ev.target.value);
+    const marcar = j && j.areas && j.areas.length ? j.areas : (e && e.area ? [e.area] : []);
+    if(!m.querySelectorAll('#uAreas input:checked').length)
+      m.querySelectorAll('#uAreas input').forEach(c=>{ if(marcar.indexOf(c.value)>=0) c.checked = true; });
+    if(!uN.value.trim() && e){ uN.value = nombrePropio(e.nombre); uN.oninput && uN.oninput(); }
+  };
   if(nuevo){
     let tocado = false;
     // Mientras no lo escriban, se propone con el primer nombre
@@ -10497,10 +10545,14 @@ function editarUsuario(u, alTerminar){
     if(nuevo && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
     if(clave && clave.length < 8) return err('La clave debe tener al menos 8 caracteres.');
     const activo = nuevo ? true : m.querySelector('#uA').checked;
+    const areas = Array.from(m.querySelectorAll('#uAreas input:checked')).map(c=>c.value);
+    const empId = m.querySelector('#uEmp').value;
+    if(rol==='area' && !areas.length) return err('Marca al menos un área que maneja.');
+    if(rol==='area' && !empId) return err('Elige qué colaborador es, para que no pueda aprobarse a sí mismo.');
     if(!nuevo && USUARIO && USUARIO.usuario===usuario && (!activo || rol!=='admin') &&
        !confirm('Te estás quitando el acceso de administrador a ti mismo. ¿Continuar?')) return;
-    const datos = nuevo ? {crear:true, nuevoUsuario:usuario, nombre, rol, nuevaClave:clave}
-                        : {cual:usuario, nombre, rol, nuevaClave:clave, activo};
+    const datos = nuevo ? {crear:true, nuevoUsuario:usuario, nombre, rol, nuevaClave:clave, areas, empId}
+                        : {cual:usuario, nombre, rol, nuevaClave:clave, activo, areas, empId};
     enviar(datos, nuevo ? 'Usuario creado' : 'Usuario guardado');
   };
   const del = m.querySelector('#uDel');
