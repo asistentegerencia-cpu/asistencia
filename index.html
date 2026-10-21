@@ -3034,6 +3034,11 @@ const DEF_CFG = {
      del turno el día se cierra como SALIDA NO REGISTRADA (no inventa la hora). */
   cierreMargenMin:120,
 
+  /* Refrigerio: en una jornada continua de más de refrigerioDesdeMin minutos se
+     descuentan refrigerioMin de las horas trabajadas (el almuerzo no es trabajo). */
+  refrigerioMin:60,
+  refrigerioDesdeMin:360,
+
   /* Fecha desde la que el sistema está operando. Los días anteriores no se
      cuentan como falta: nadie podía marcar porque el sistema no existía.
      Sin esto, pedir el reporte "de este mes" en la primera semana muestra
@@ -3551,7 +3556,7 @@ async function sincronizarArranque(){
     // El servidor manda en las reglas del negocio; lo del equipo se queda local
     ['turnos','feriados','tolerancia','umbralGrave','lat','lng','radio','gpsModo','sabadosTrabajados','domingosTrabajados',
      'inicioOperacion','cierreMargenMin','empresa','sigla','proyectos','exigirDispositivo','correoAlertas',
-     'sedesExtra','nombreSedePrincipal','whatsappSoporte','resumenPara'].forEach(k=>{
+     'sedesExtra','nombreSedePrincipal','whatsappSoporte','resumenPara','refrigerioMin','refrigerioDesdeMin','claveAdminActiva'].forEach(k=>{
       if(r.cfg[k] !== undefined && r.cfg[k] !== '' && r.cfg[k] !== null) CFG[k] = r.cfg[k];
     });
     if(CFG.lat!==DEF_CFG.lat || CFG.lng!==DEF_CFG.lng) CFG.ubicacionOk = true;
@@ -3637,7 +3642,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-21.1';
+const APP_VERSION = '2026-10-21.2';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -4178,6 +4183,7 @@ function periodoReporte(k, ahora){
 }
 
 const ddmm = f=>f.slice(8,10)+'/'+f.slice(5,7);
+const horasTexto = m=>{ const h = Math.floor(m/60), r = m%60; return h+' h'+(r ? ' '+r+' min' : ''); };
 const diaCorto = f=>{ const t = DIAS[new Date(f+'T12:00:00').getDay()].slice(0,3); return t.charAt(0).toUpperCase()+t.slice(1)+' '+ddmm(f); };
 
 function textoReportePersona(r, periodo){
@@ -4187,6 +4193,7 @@ function textoReportePersona(r, periodo){
   L.push('Hola '+nom+', revisa que tus marcas del '+ddmm(r.desde)+' al '+ddmm(r.hasta)+' estén correctas:');
   L.push('');
   L.push('_Asistencia '+(r.pa==null?'—':r.pa+'%')+' · Tardanzas '+a.tardanzas+' · Faltas '+a.faltas+' · Sin salida '+r.olvidos+'_');
+  if(a.diasConJornada) L.push('🕒 Horas trabajadas: *'+horasTexto(a.trabajados)+'*'+(a.refrigerio ? ' ('+horasTexto(a.enEmpresa)+' en la empresa − '+horasTexto(a.refrigerio)+' de refrigerio)' : ''));
   L.push('');
   r.dias.forEach(x=>L.push((x.mal?'⚠️ ':'▫️ ')+'*'+diaCorto(x.f)+'*  '+x.marcas+(x.obs && x.obs!=='A tiempo' ? '  ('+x.obs+')' : '')));
   L.push('');
@@ -4196,7 +4203,7 @@ function textoReportePersona(r, periodo){
 
 function dibujarReportePersona(r, periodo){
   const W = 1080, P = 50, F = 'Figtree, "Segoe UI", Roboto, Arial, sans-serif', a = r.a;
-  const LH = 50, H = 190 + 96 + 60 + r.dias.length*LH + 90;
+  const LH = 50, conHoras = a.diasConJornada > 0, H = 190 + 96 + (conHoras ? 44 : 0) + 60 + r.dias.length*LH + 90;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
   const rr = (x,y,w,h,rad,fill)=>{ g.beginPath(); g.moveTo(x+rad,y); g.arcTo(x+w,y,x+w,y+h,rad); g.arcTo(x+w,y+h,x,y+h,rad);
@@ -4223,6 +4230,11 @@ function dibujarReportePersona(r, periodo){
     txt(k[1], x+18, y+64, 30, '#101828', 800);
   });
   y += 96;
+  if(conHoras){
+    txt(corta('Horas trabajadas: '+horasTexto(a.trabajados)+(a.refrigerio ? '  ('+horasTexto(a.enEmpresa)+' en la empresa − '+horasTexto(a.refrigerio)+' de refrigerio)' : ''),
+              W-P*2, 24, 700), P, y+26, 24, '#101828', 700);
+    y += 44;
+  }
 
   // Encabezado de la tabla
   const cDia = P+16, cMar = P+220, cObs = P+640;
@@ -4285,6 +4297,8 @@ async function verMisMarcas(emp){
       (sinServidor ? '<div class="alert alert-warn" style="margin-bottom:10px;font-size:13px">Sin conexión: se muestra lo guardado en este celular.</div>' : '')+
       '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">'+
         stat('Asistencia', r.pa==null?'—':r.pa+'%')+stat('Tardanzas', a.tardanzas)+stat('Faltas', a.faltas)+stat('Sin salida', r.olvidos)+'</div>'+
+      (a.diasConJornada ? '<div style="font-size:13px;margin:-4px 0 12px;line-height:1.45">🕒 Horas trabajadas: <b>'+esc(horasTexto(a.trabajados))+'</b>'+
+        (a.refrigerio ? '<br><span style="color:var(--muted);font-size:12px">'+esc(horasTexto(a.enEmpresa))+' en la empresa − '+esc(horasTexto(a.refrigerio))+' de refrigerio</span>' : '')+'</div>' : '')+
       (r.dias.length ? r.dias.slice().reverse().map(x=>
         '<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 2px;border-top:1px solid var(--line)">'+
           '<div style="width:74px;flex:none;font-weight:800;font-size:13.5px">'+esc(diaCorto(x.f))+'</div>'+
@@ -4906,22 +4920,40 @@ function salidaDe(emp, fechaISO, ahora){
    Mientras no haya salida el día está abierto. Si es hoy se devuelve lo que va
    corrido hasta ahora, marcado como en curso, porque a media tarde "—" no informa
    nada; en un día ya cerrado no se inventa una salida que nadie marcó. */
+/* Minutos de refrigerio que se descuentan de una jornada (ver DEF_CFG). */
+function refrigerioDe(bruto, huecoMax){
+  const ref = (CFG.refrigerioMin===undefined || CFG.refrigerioMin===null || CFG.refrigerioMin==='') ? 60 : (+CFG.refrigerioMin || 0);
+  const desde = (CFG.refrigerioDesdeMin===undefined || CFG.refrigerioDesdeMin===null || CFG.refrigerioDesdeMin==='') ? 360 : (+CFG.refrigerioDesdeMin || 0);
+  if(!ref || bruto <= desde || huecoMax >= 30) return 0;
+  return Math.min(ref, bruto);
+}
+
+/* Lo trabajado ese día: el tiempo dentro (bruto) menos el refrigerio. */
 function jornadaTrabajada(d, fechaISO, ahora){
+  const t = jornadaTrabajadaBruta(d, fechaISO, ahora);
+  const refrigerio = t.hay ? refrigerioDe(t.min, t.hueco||0) : 0;
+  return {min: t.min - refrigerio, bruto: t.min, refrigerio, enCurso: t.enCurso, hay: t.hay};
+}
+
+function jornadaTrabajadaBruta(d, fechaISO, ahora){
   const j = d && d.j;
   if(!j || !j.entrada) return {min:0, enCurso:false, hay:false};
   // Jornada partida: se suma cada tramo; el hueco entre uno y otro no es trabajo
   if(j.pares && j.pares.length > 1){
     ahora = ahora || new Date();
-    let min = 0, enCurso = false;
+    let min = 0, enCurso = false, hueco = 0, fin = null;
     j.pares.forEach((p,i)=>{
       if(!p.entrada) return;
       const ini = i===0 ? minEntrada(j, fechaISO) : toMin(p.entrada.hora);
-      if(p.salida){ min += Math.max(0, toMin(p.salida.hora) - ini); return; }
+      // El mayor hueco entre un tramo y el siguiente: si salió a almorzar y volvió,
+      // el refrigerio ya quedó fuera
+      if(fin !== null) hueco = Math.max(hueco, ini - fin);
+      if(p.salida){ min += Math.max(0, toMin(p.salida.hora) - ini); fin = toMin(p.salida.hora); return; }
       if(fechaISO === hoyISO(ahora) && i === j.pares.length-1){
         min += Math.max(0, ahora.getHours()*60 + ahora.getMinutes() - ini); enCurso = true;
       }
     });
-    return {min, enCurso, hay: min > 0};
+    return {min, enCurso, hay: min > 0, hueco};
   }
   const ent = minEntrada(j, fechaISO);
   if(j.salida){
@@ -4939,7 +4971,7 @@ function acumuladosDe(emp, desde, hasta, ahora){
   const hoy = hoyISO(ahora);
   const a = {programados:0, asistidos:0, conEntrada:0, faltas:0, justificadas:0, comisiones:0,
              puntuales:0, tardanzas:0, minutos:0, sinSalida:0, declaradas:0, noLaborables:0, sinSistema:0,
-             trabajados:0, diasConJornada:0};
+             trabajados:0, diasConJornada:0, enEmpresa:0, refrigerio:0};
 
   rangoFechas(desde, hasta).forEach(f=>{
     if(f > hoy) return;                            // el futuro no se cuenta
@@ -4966,7 +4998,7 @@ function acumuladosDe(emp, desde, hasta, ahora){
       // Solo suma la jornada cerrada: un día sin salida marcada no tiene duración,
       // y estimarla haría que las horas del mes dependieran de quién se olvidó de marcar.
       const t = jornadaTrabajada(d, f, ahora);
-      if(t.hay && !t.enCurso){ a.trabajados += t.min; a.diasConJornada++; }
+      if(t.hay && !t.enCurso){ a.trabajados += t.min; a.enEmpresa += t.bruto; a.refrigerio += t.refrigerio; a.diasConJornada++; }
       return;
     }
     if(d.clase==='FALTA') a.faltas++;
@@ -4980,6 +5012,8 @@ function acumuladosDe(emp, desde, hasta, ahora){
   a.absentismo     = a.programados ? Math.round(a.faltas/a.programados*1000)/10 : 0;
   a.tardanzaProm   = a.tardanzas ? Math.round(a.minutos/a.tardanzas) : 0;
   a.trabajadoHHMM  = min2hhmm(a.trabajados);
+  a.enEmpresaHHMM  = min2hhmm(a.enEmpresa);
+  a.refrigerioHHMM = min2hhmm(a.refrigerio);
   a.horasDia       = a.diasConJornada ? Math.round(a.trabajados/a.diasConJornada) : 0;
   return a;
 }
@@ -7895,7 +7929,8 @@ function reporteColaborador(emp, desde, hasta, ahora){
 
   return cabecera +
     '<div class="kpis">'+
-      kpi('Horas trabajadas', a.trabajadoHHMM, 'k-ok')+
+      kpi('Horas trabajadas', a.trabajadoHHMM+(a.refrigerio?'<div style="font-size:11px;font-weight:600;color:var(--muted)">'+
+            a.enEmpresaHHMM+' en la empresa − '+a.refrigerioHHMM+' de refrigerio</div>':''), 'k-ok')+
       kpi('Días con jornada', a.diasConJornada+' / '+a.programados, '')+
       kpi('Tardanzas', a.tardanzas, a.tardanzas?'k-warn':'k-ok')+
       kpi('Inasistencias', a.faltas, a.faltas?'k-bad':'k-ok')+
@@ -10270,7 +10305,7 @@ let PER_BUS = '';           // Personal: texto del buscador
 /* Qué bloque va en cada tema. Los bloques se siguen dibujando todos —así el botón
    de guardar lee todos los campos como siempre—, pero solo se ve el tema elegido. */
 const CFG_MAPA = {
-  horarios: ['Turnos','Sábados que se trabaja','Domingos que se abre','Feriados','Tolerancias','Inicio de operación'],
+  horarios: ['Turnos','Sábados que se trabaja','Domingos que se abre','Feriados','Tolerancias','Refrigerio','Inicio de operación'],
   sedes:    ['Modo de uso','Ubicación de la oficina','Otras sedes','Un celular por persona'],
   avisos:   ['Avisos y WhatsApp'],
   empresa:  ['Empresa y acceso','Equipos y proyectos'],
@@ -10684,6 +10719,14 @@ function tabCfg(b){
   '<div class="frow"><div><label>Intentos antes de bloquear</label><input id="cInt" type="number" min="1" max="10" value="'+CFG.intentosMax+'"></div>'+
   '<div><label>Bloqueo (min)</label><input id="cBlq" type="number" min="1" max="120" value="'+CFG.bloqueoMin+'"></div></div></div>'+
 
+  '<div class="cfg"><h3>Refrigerio</h3>'+
+  '<p class="hint">El almuerzo no es trabajo: se descuenta de las horas trabajadas en las jornadas largas. '+
+    'Si la persona marca su salida y regreso para almorzar, ese tiempo ya queda fuera y no se descuenta otra vez.</p>'+
+  '<div class="frow"><div><label>Refrigerio (min, 0 = no descontar)</label><input id="cRef" type="number" min="0" max="180" value="'+
+    (CFG.refrigerioMin==null||CFG.refrigerioMin===''?60:CFG.refrigerioMin)+'"></div>'+
+  '<div><label>Se descuenta si la jornada pasa de (horas)</label><input id="cRefD" type="number" min="0" max="16" step="0.5" value="'+
+    ((CFG.refrigerioDesdeMin==null||CFG.refrigerioDesdeMin===''?360:CFG.refrigerioDesdeMin)/60)+'"></div></div></div>'+
+
   '<div class="cfg"><h3>Empresa y acceso</h3>'+
   '<p class="hint">Nombre que ven los colaboradores y clave del panel de administración.</p>'+
   '<div class="frow"><div><label>Nombre</label><input id="cEmp" value="'+esc(CFG.empresa)+'"></div>'+
@@ -10874,6 +10917,7 @@ function tabCfg(b){
     if($('#cSedP')) CFG.nombreSedePrincipal = $('#cSedP').value.trim() || 'Oficina';
     CFG.gpsModo=$('#cMod').value;
     CFG.tolerancia=+$('#cTol').value||0;
+    if($('#cRef')){ CFG.refrigerioMin = Math.max(0, +$('#cRef').value||0); CFG.refrigerioDesdeMin = Math.round(Math.max(0, +$('#cRefD').value||0)*60); }
     CFG.umbralGrave=+$('#cGrv').value||30;
     CFG.intentosMax=+$('#cInt').value||3;
     CFG.bloqueoMin=+$('#cBlq').value||15;
@@ -11280,7 +11324,10 @@ function exportar(desde, hasta, nombre){
       '% de puntualidad':a.pctPuntualidad==null?'':a.pctPuntualidad+'%',
       'Tasa de absentismo':a.absentismo+'%',
       'Días sin registro de salida':a.sinSalida,
-      'Olvidos de salida':a.declaradas
+      'Olvidos de salida':a.declaradas,
+      'Tiempo en la empresa':a.enEmpresaHHMM,
+      'Refrigerio descontado':a.refrigerioHHMM,
+      'Horas trabajadas':a.trabajadoHHMM
     };
   }).sort((a,b)=>b['Minutos de tardanza']-a['Minutos de tardanza']);
 
@@ -11304,6 +11351,8 @@ function exportar(desde, hasta, nombre){
       'Min. tardanza':d.clase==='ASISTIO'?d.tard:'',
       'Min. salida anticipada':es?es.anticipada:'',
       'Permanencia':(d.j.entrada&&d.j.salida)?min2hhmm(toMin(d.j.salida.hora)-minEntrada(d.j, f)):'',
+      'Refrigerio':(()=>{ const t = jornadaTrabajada(d, f, ahora); return t.hay && !t.enCurso ? min2hhmm(t.refrigerio) : ''; })(),
+      'Horas trabajadas':(()=>{ const t = jornadaTrabajada(d, f, ahora); return t.hay && !t.enCurso ? min2hhmm(t.min) : ''; })(),
       'Origen entrada':d.j.entrada?(d.j.entrada.origen||'APP'):'',
       'Origen salida':d.j.salida?(d.j.salida.origen||'APP'):'',
       'Justificación':d.aus?tipoAus(d.aus.tipo).nombre:'',
