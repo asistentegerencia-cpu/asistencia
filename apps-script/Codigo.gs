@@ -201,7 +201,8 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 22,
+    case 'calentar':    return calentar();
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 23,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p), p);
     case 'identificar': return identificar(p);
@@ -668,7 +669,8 @@ function instalar(p) {
    ver el horario nuevo o el sistema le exigirá ubicación estando en su casa. Con el
    borrado al escribir, ese caso no existe; los cinco minutos solo aplican a una
    edición hecha a mano directamente en la hoja. */
-var MEMO_SEG = 300;   // cinco minutos: lo escrito desde la app la borra al instante
+var MEMO_SEG = 900;   // quince minutos: lo escrito desde la app la borra al instante, y
+                      // «calentar» (cada 10 min, desde GitHub) la renueva antes de que venza
 var MEMO_ = {};                  // dentro de una misma ejecución, para no repetir
 var MEMO_ESCRIBE_ = false;       // esta ejecución escribe: no deja nada en la memoria compartida
 var MEMO_CLAVES = ['memo_cfg', 'memo_emp', 'memo_pro', 'memo_per', 'memo_jef', 'memo_usu'];
@@ -700,7 +702,42 @@ function memo(clave, calcular) {
 function olvidar() {
   MEMO_ = {};
   MEMO_ESCRIBE_ = true;
-  try { CacheService.getScriptCache().removeAll(MEMO_CLAVES); } catch (e) { }
+  try {
+    var c = CacheService.getScriptCache();
+    c.removeAll(MEMO_CLAVES);
+    c.put('memo_ver', String(new Date().getTime()) + Math.random(), 21600);   // ver calentar()
+  } catch (e) { }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   CALENTAR
+   Cuando la memoria compartida vence, el siguiente pedido tiene que leer seis
+   hojas: así se medían arranques de 10 s, y con el panel pidiendo varias cosas a
+   la vez se pasaba de los 15 s que la app espera antes de decir «sin conexión».
+   El workflow «Vigilar servidor» de GitHub llama a esto cada 10 minutos en
+   horario de oficina: relee las hojas y deja la memoria lista, así ningún
+   celular ni el panel encuentran al servidor «dormido».
+   No devuelve datos. Si algo se escribe mientras relee, no guarda lo leído (ya
+   estaría viejo): para eso olvidar() deja una marca nueva en memo_ver.
+   ══════════════════════════════════════════════════════════════ */
+function calentar() {
+  var cache;
+  try { cache = CacheService.getScriptCache(); } catch (e) { return { ok: false, error: 'sin memoria' }; }
+  if (cache.get('calentado')) return { ok: true, saltado: true };          // otro lo hizo hace menos de 1 min
+  cache.put('calentado', '1', 60);
+  var ver = cache.get('memo_ver');
+  var fuentes = { memo_cfg: leerConfigDeHoja, memo_emp: leerPersonalDeHoja, memo_pro: leerProgramacionDeHoja,
+                  memo_per: leerPermisosDeHoja, memo_jef: leerJefesDeHoja, memo_usu: leerUsuariosDeHoja };
+  var t0 = new Date().getTime(), hechos = 0;
+  for (var k in fuentes) {
+    try {
+      var v = fuentes[k]();
+      if (cache.get('memo_ver') !== ver) return { ok: true, interrumpido: true, calentados: hechos };
+      cache.put(k, JSON.stringify(v), MEMO_SEG);
+      hechos++;
+    } catch (e) { /* una que no entre en memoria no impide las demás */ }
+  }
+  return { ok: true, calentados: hechos, ms: new Date().getTime() - t0 };
 }
 
 function leerConfig()       { return memo('memo_cfg', leerConfigDeHoja); }
