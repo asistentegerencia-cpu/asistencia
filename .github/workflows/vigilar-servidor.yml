@@ -1,0 +1,50 @@
+# Vigila el servidor de asistencia desde fuera, como lo haría un celular.
+#
+# Cada 10 minutos, en horario de oficina (lunes a sábado, 7:00 a 21:00 de Lima),
+# hace tres pedidos y anota cuánto tardó cada uno:
+#   ping        responde sin leer la hoja: mide solo a Google
+#   arranque    lo primero que pide la app al abrirse (POST, igual que la app)
+#   identificar busca un DNI en Personal: lee la hoja
+# Si alguno falla o tarda más de 15 s (lo que la app espera antes de decir
+# «sin conexión»), la ejecución sale en rojo. Así se ve cuándo y cuánto falla.
+name: Vigilar servidor
+
+on:
+  schedule:
+    - cron: '*/10 12-23 * * 1-6'
+    - cron: '*/10 0-1 * * 2-7'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vigilar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      URL: https://script.google.com/macros/s/AKfycbwhEPFegOrdzUYDZr0vh9y7Fg4uqL2ga_NNg1MmYA8UAPRlMVBCK_bbtRPme3MgM-ft/exec
+    steps:
+      - name: Medir
+        run: |
+          mal=0
+          medir() {
+            nombre="$1"; shift
+            r=$(curl -sL -o cuerpo.txt -w '%{http_code} %{time_total}' --max-time 45 "$@" || echo "000 45")
+            codigo=${r%% *}; seg=${r##* }
+            ok=no; grep -q '"ok":true' cuerpo.txt 2>/dev/null && ok=si
+            grep -q '"motivo":"no_encontrado"' cuerpo.txt 2>/dev/null && ok=si    # identificar de prueba
+            lento=$(python3 -c "print('si' if float('$seg') > 15 else 'no')")
+            estado=bien
+            if [ "$ok" != si ]; then estado=FALLA; mal=1; elif [ "$lento" = si ]; then estado=LENTO; mal=1; fi
+            hora=$(TZ=America/Lima date '+%Y-%m-%d %H:%M')
+            echo "$hora $nombre http=$codigo ${seg}s $estado"
+            echo "| $hora | $nombre | $codigo | ${seg} s | $estado |" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$estado" = FALLA ]; then echo "  respuesta: $(head -c 300 cuerpo.txt)"; fi
+          }
+          echo "| Hora (Lima) | Pedido | HTTP | Tiempo | Estado |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          medir ping        "$URL?accion=ping"
+          medir arranque    --data '{"accion":"arranque"}' "$URL"
+          medir identificar "$URL?accion=identificar&ident=00000000"
+          exit $mal

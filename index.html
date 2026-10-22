@@ -3659,7 +3659,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-21.3';
+const APP_VERSION = '2026-10-22.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -3737,7 +3737,7 @@ setInterval(()=>{
   if(!$('#appAdmin').classList.contains('hidden') && Date.now() - VERSIONES.revisado > 30*60000) revisarServidor();
 }, 60000);
 
-const PANEL_SYNC = {ult:0, corriendo:false, error:''};
+const PANEL_SYNC = {ult:0, corriendo:false, error:'', fallos:0, reintentando:false};
 function panelVisible(){
   const a = $('#appAdmin');
   return !!a && !a.classList.contains('hidden') && document.visibilityState !== 'hidden';
@@ -3753,24 +3753,44 @@ async function refrescarPanel(forzar){
   if(!hayServidor() || PANEL_SYNC.corriendo) return false;
   PANEL_SYNC.corriendo = true;
   pintarEstadoSync();
+  let error = '';
   try{
     await enviarCola();
     const sem = rangoReciente();
-    const res = await Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)]);
-    PANEL_SYNC.ult = Date.now();
-    PANEL_SYNC.error = res[0] || res[1] ? '' : 'el servidor no devolvió datos';
+    // Con que uno de los dos responda, el servidor está: no es «sin conexión»
+    const res = await Promise.allSettled([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)]);
+    const alguno = res.some(x=>x.status==='fulfilled' && x.value);
+    if(alguno) PANEL_SYNC.ult = Date.now();
+    else error = res.map(x=>x.status==='rejected' && x.reason ? x.reason.message : '').filter(Boolean)[0] || 'el servidor no devolvió datos';
   }catch(e){
-    PANEL_SYNC.error = (e && e.message) || 'sin respuesta';
+    error = (e && e.message) || 'sin respuesta';
   }finally{
     PANEL_SYNC.corriendo = false;
+  }
+  // Google a veces tarda o corta un pedido suelto. Una falla sola no es «sin
+  // conexión»: se reintenta a los 15 s y solo se avisa si vuelve a fallar.
+  PANEL_SYNC.reintentando = false;
+  if(!error){ PANEL_SYNC.fallos = 0; PANEL_SYNC.error = ''; }
+  else{
+    PANEL_SYNC.fallos++;
+    if(PANEL_SYNC.fallos < 2 && !forzar){
+      PANEL_SYNC.reintentando = true;
+      setTimeout(()=>{ if(panelVisible()) refrescarPanel(false); }, 15000);
+    } else PANEL_SYNC.error = error;
   }
   if(forzar || sePuedeRepintar()) renderTab(); else pintarEstadoSync();
   return !PANEL_SYNC.error;
 }
 function textoEstadoSync(){
   if(PANEL_SYNC.corriendo) return 'Actualizando…';
+  if(PANEL_SYNC.reintentando) return 'Reintentando…';
   if(PANEL_SYNC.error) return '⚠ Sin conexión';
   return PANEL_SYNC.ult ? 'Actualizado '+hhmm(new Date(PANEL_SYNC.ult)) : 'Actualizar';
+}
+/* La primera carga al abrir el panel: si falla, un reintento antes de avisar. */
+function falloAlAbrir(msg){
+  PANEL_SYNC.fallos = 1; PANEL_SYNC.reintentando = true;
+  setTimeout(()=>{ PANEL_SYNC.reintentando = false; if(panelVisible()) refrescarPanel(false); else PANEL_SYNC.error = msg; }, 15000);
 }
 function pintarEstadoSync(){
   const t = $('#rHoyT'); if(t) t.textContent = textoEstadoSync();
@@ -7115,8 +7135,9 @@ function abrirAdmin(){
     revisarServidor();
     PANEL_SYNC.corriendo = true;
     Promise.all([sincronizarArranque(), sincronizarMarcajes(sem.desde, sem.hasta)])
-      .then(res=>{ PANEL_SYNC.ult = Date.now(); PANEL_SYNC.error = res[0]||res[1] ? '' : 'el servidor no devolvió datos'; },
-            e=>{ PANEL_SYNC.error = (e && e.message) || 'sin respuesta'; })
+      .then(res=>{ if(res[0]||res[1]){ PANEL_SYNC.ult = Date.now(); PANEL_SYNC.error = ''; PANEL_SYNC.fallos = 0; }
+                   else falloAlAbrir('el servidor no devolvió datos'); },
+            e=>{ falloAlAbrir((e && e.message) || 'sin respuesta'); })
       .then(()=>{ PANEL_SYNC.corriendo = false; renderTab(); })
       // El inicio de operación llega con el arranque: recién ahí se sabe desde cuándo traer
       .then(()=>{ const r = rangoSync();
