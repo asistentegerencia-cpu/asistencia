@@ -1,7 +1,9 @@
 # Vigila el servidor de asistencia desde fuera, como lo haría un celular.
 #
-# Cada 10 minutos, en horario de oficina (lunes a sábado, 7:00 a 21:00 de Lima),
-# hace tres pedidos y anota cuánto tardó cada uno:
+# Cada 10 minutos, en horario de oficina (lunes a sábado, 7:00 a 21:00 de Lima):
+#   calentar    relee las hojas y deja lista la memoria del servidor, para que
+#               ningún celular lo encuentre «dormido» (lo que tardaba 10 s)
+# y después hace tres pedidos y anota cuánto tardó cada uno:
 #   ping        responde sin leer la hoja: mide solo a Google
 #   arranque    lo primero que pide la app al abrirse (POST, igual que la app)
 #   identificar busca un DNI en Personal: lee la hoja
@@ -44,6 +46,8 @@ jobs:
           }
           echo "| Hora (Lima) | Pedido | HTTP | Tiempo | Estado |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          # Primero deja la memoria del servidor lista (ver calentar() en Codigo.gs)
+          medir calentar    "$URL?accion=calentar"
           medir ping        "$URL?accion=ping"
           medir arranque    --data '{"accion":"arranque"}' "$URL"
           medir identificar "$URL?accion=identificar&ident=00000000"
