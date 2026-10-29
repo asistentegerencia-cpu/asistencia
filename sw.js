@@ -10,6 +10,10 @@
  * propia cola, que ya sabe reintentar.
  */
 
+// Avisos al celular (OneSignal): recibe y muestra las notificaciones, y al
+// tocarlas abre la app. Si no carga (sin internet al instalar), la app sigue igual.
+try { importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js'); } catch (e) { }
+
 var CACHE = 'asistencia-v1';
 var ARCHIVOS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
@@ -38,6 +42,7 @@ self.addEventListener('fetch', function (e) {
 
   // El servidor nunca se cachea: la asistencia tiene que ser siempre la de verdad
   if (url.indexOf('script.google.com') >= 0 || url.indexOf('googleusercontent.com') >= 0) return;
+  if (url.indexOf('onesignal.com') >= 0) return;
   if (e.request.method !== 'GET') return;
 
   // Para la app: primero la red, y si falla, lo guardado.
