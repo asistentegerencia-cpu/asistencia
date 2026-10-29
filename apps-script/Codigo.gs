@@ -202,7 +202,11 @@ function enrutar(p) {
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
     case 'calentar':    return calentar();
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 23,
+    // Para el recordatorio de salida (n8n → notificación al celular): quién ya
+    // pasó su hora de salida y no la marcó. Basta la clave de solo vista.
+    case 'salidaspendientes': rol = rolDe(p);
+                        return (rol === 'admin' || rol === 'vista') ? salidasPendientes(p) : NO_AUTORIZADO;
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 24,
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p), p);
     case 'identificar': return identificar(p);
@@ -707,6 +711,40 @@ function olvidar() {
     c.removeAll(MEMO_CLAVES);
     c.put('memo_ver', String(new Date().getTime()) + Math.random(), 21600);   // ver calentar()
   } catch (e) { }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   SALIDAS PENDIENTES
+   Quién marcó su entrada hoy, ya pasó su hora de salida (entre «desdeMin» y
+   «hastaMin» minutos, por defecto 15 y 180) y todavía no marcó la salida ni
+   pidió corregirla. n8n lo consulta cada 12 minutos y a cada uno le manda una
+   notificación al celular, una sola vez por día.
+   ══════════════════════════════════════════════════════════════ */
+function salidasPendientes(p) {
+  var cfg = leerConfig(), prog = leerProgramacion();
+  var ah = ahoraISO(), hoy = ah.fecha, ahoraMin = aMin(ah.hora);
+  var desdeMin = Number(p.desdeMin) || 15, hastaMin = Number(p.hastaMin) || 180;
+  var porDia = {};
+  filasDesde(HOJA.mar, COLS.mar, diaDespues(hoy, -1)).map(filaAObjeto).forEach(function (m) {
+    var k = m.empId + '|' + m.fecha;
+    (porDia[k] = porDia[k] || []).push(m);
+  });
+  var pedidas = {};
+  leerPermisos().forEach(function (x) {
+    if (x.tipo === 'SALIDA_OLVIDO' && x.fecha === hoy && x.estado !== 'RECHAZADO') pedidas[x.empId] = true;
+  });
+  var out = [];
+  leerPersonal().forEach(function (emp) {
+    if (!emp.activo || emp.modalidad === 'EXENTO' || pedidas[emp.id]) return;
+    var hor = horarioDe(emp, hoy, cfg, prog);
+    if (!hor || !hor.out) return;
+    var j = jornadaResumen(emp, hoy, porDia, cfg, prog);
+    if (!j.entrada || j.salida) return;                       // no vino, o ya marcó salida
+    var pasados = ahoraMin - aMin(hor.out);
+    if (pasados < desdeMin || pasados > hastaMin) return;
+    out.push({ empId: emp.id, nombre: nombreCorto(emp.nombre).split(' ')[0], salida: hor.out, minutos: pasados });
+  });
+  return { ok: true, fecha: hoy, hora: ah.hora, pendientes: out };
 }
 
 /* ══════════════════════════════════════════════════════════════

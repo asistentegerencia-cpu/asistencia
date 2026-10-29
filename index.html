@@ -567,6 +567,7 @@ function ico(n, extra){
         <div class="statusrow"><span class="chip chip-idle" id="gpsChip"><span class="dot"></span><span id="gpsTxt">Verificando ubicación…</span></span></div>
         <div id="mkPend"></div>
         <div id="mkAlert"></div>
+        <div id="mkAvisos"></div>
         <button class="markbtn mb-in" id="btnMark" disabled>
           <span class="mb-icon" id="mkBtnIcon"></span>
           <span class="mb-label" id="mkBtnLabel">MARCAR ENTRADA</span>
@@ -3659,7 +3660,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-22.1';
+const APP_VERSION = '2026-10-29.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -5399,6 +5400,7 @@ function renderMark(){
   pintarBoton(emp);
   pintarDia(emp);
   pintarPermiso(emp);
+  pintarAvisosPush(emp);
   pedirSalidaPendiente(emp);
   pedirEntradaOlvidada(emp);
   if(!CFG.modoRecepcion){
@@ -6928,7 +6930,96 @@ function pintarInstalar(){
 if('serviceWorker' in navigator && location.protocol==='https:'){
   window.addEventListener('load', ()=>{
     navigator.serviceWorker.register('sw.js').catch(()=>{ /* sin él la app funciona igual */ });
+    cargarPush();
   });
+}
+
+/* ---------- AVISOS AL CELULAR (OneSignal) ----------
+   Si a los 15 minutos de su hora de salida la persona no marcó, n8n le manda una
+   notificación al celular (una sola vez por día). Para eso la persona toca
+   «Activar avisos» una vez y queda identificada con su id de Personal. OneSignal
+   es gratuito; usa el mismo service worker de la app (sw.js lo importa). */
+const ONESIGNAL_APP_ID = '83579f9e-dd9a-4059-8e7f-0c1a81d173f6';
+const PUSH = {cargado:false, listo:false, os:null};
+const baseApp = ()=>location.pathname.replace(/[^/]*$/, '');          // «/asistencia/»
+function empDelCelular(){
+  if(CFG.modoRecepcion || typeof DEV==='undefined' || !DEV || !DEV.empId) return null;
+  return EMP.find(e=>e.id===DEV.empId) || null;
+}
+function cargarPush(){
+  if(PUSH.cargado || location.protocol!=='https:' || !('serviceWorker' in navigator)) return;
+  PUSH.cargado = true;
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  const sc = document.createElement('script');
+  sc.src = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js'; sc.defer = true;
+  document.head.appendChild(sc);
+  window.OneSignalDeferred.push(async OneSignal=>{
+    try{
+      await OneSignal.init({
+        appId: ONESIGNAL_APP_ID,
+        serviceWorkerPath: baseApp().slice(1) + 'sw.js',
+        serviceWorkerParam: {scope: baseApp()},
+        notifyButton: {enable:false},
+        autoResubscribe: true
+      });
+      PUSH.os = OneSignal; PUSH.listo = true;
+      OneSignal.Notifications.addEventListener('permissionChange', ()=>{ const e = empDelCelular(); if(e){ vincularPush(e); pintarAvisosPush(e); } });
+      const e = empDelCelular();
+      if(e){ vincularPush(e); pintarAvisosPush(e); }
+    }catch(err){ PUSH.error = String((err && err.message) || err); }
+  });
+}
+/* La suscripción de este celular queda a nombre de la persona (su id de Personal) */
+async function vincularPush(emp){
+  if(!PUSH.listo || !emp) return;
+  try{
+    if(localStorage.getItem('ca_push_emp') === emp.id && PUSH.os.User.externalId === emp.id) return;
+    await PUSH.os.login(emp.id);
+    localStorage.setItem('ca_push_emp', emp.id);
+  }catch(e){}
+}
+function esIphone(){ return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function appInstalada(){ return !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)); }
+function pintarAvisosPush(emp){
+  const box = $('#mkAvisos'); if(!box) return;
+  box.innerHTML = '';
+  if(CFG.modoRecepcion || !emp) return;
+  let oculto = 0; try{ oculto = +localStorage.getItem('ca_push_luego') || 0; }catch(e){}
+  if(oculto > Date.now()) return;
+  const tarjeta = (html, boton)=>'<div class="alert alert-info" style="text-align:left;margin-top:10px;font-size:13.5px;line-height:1.45">'+html+
+    '<div style="display:flex;gap:8px;margin-top:8px">'+(boton||'')+
+    '<button class="btn btn-sm btn-line" id="pushLuego" style="flex:none">Ahora no</button></div></div>';
+  // iPhone: los avisos solo llegan con la app instalada en la pantalla de inicio
+  if(esIphone() && !appInstalada()){
+    box.innerHTML = tarjeta('🔔 <b>¿Quieres que te avisemos si olvidas marcar tu salida?</b><br>'+
+      'En iPhone, primero instala la app: toca <b>Compartir</b> (el cuadro con la flecha ↑) → <b>«Agregar a inicio»</b>, '+
+      'y ábrela desde ese ícono.');
+  } else {
+    if(!PUSH.listo) return;
+    let soporta = false; try{ soporta = PUSH.os.Notifications.isPushSupported(); }catch(e){}
+    if(!soporta) return;
+    const permiso = PUSH.os.Notifications.permission;
+    const activo = permiso && PUSH.os.User.PushSubscription.optedIn;
+    if(activo) return;                                         // ya los recibe: no se dice nada
+    if(typeof Notification!=='undefined' && Notification.permission==='denied'){
+      box.innerHTML = tarjeta('🔕 Los avisos están <b>bloqueados</b> en este celular. Para que te recordemos marcar tu salida, '+
+        'actívalos en los ajustes del navegador (Notificaciones → Permitir).');
+    } else {
+      box.innerHTML = tarjeta('🔔 <b>Activa los avisos:</b> si un día olvidas marcar tu salida, te llegará un recordatorio al celular.',
+        '<button class="btn btn-sm" id="pushSi" style="flex:1">Activar avisos</button>');
+    }
+  }
+  const si = $('#pushSi');
+  if(si) si.onclick = async ()=>{
+    si.disabled = true; si.textContent = 'Activando…';
+    try{
+      await PUSH.os.Notifications.requestPermission();
+      if(PUSH.os.Notifications.permission){ await PUSH.os.User.PushSubscription.optIn(); await vincularPush(emp); toast('✓ Avisos activados'); }
+    }catch(e){ toast('No se pudo activar: '+((e && e.message) || e)); }
+    pintarAvisosPush(emp);
+  };
+  const luego = $('#pushLuego');
+  if(luego) luego.onclick = ()=>{ try{ localStorage.setItem('ca_push_luego', String(Date.now() + 3*86400000)); }catch(e){} box.innerHTML = ''; };
 }
 
 /* ---------- 8. ARRANQUE ---------- */
