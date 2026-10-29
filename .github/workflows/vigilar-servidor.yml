@@ -47,8 +47,10 @@ jobs:
           echo "| Hora (Lima) | Pedido | HTTP | Tiempo | Estado |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
           # Primero deja la memoria del servidor lista (ver calentar() en Codigo.gs)
-          medir calentar    "$URL?accion=calentar"
+          # Antes de calentar: cuándo lo despertó n8n por última vez (lo anota calentar)
           medir ping        "$URL?accion=ping"
+          echo "  último calentar: $(grep -o '"ultimoCalentar":"[^"]*"' cuerpo.txt)"
+          medir calentar    "$URL?accion=calentar&origen=github"
           medir arranque    --data '{"accion":"arranque"}' "$URL"
           medir identificar "$URL?accion=identificar&ident=00000000"
           exit $mal

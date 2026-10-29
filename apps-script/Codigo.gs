@@ -201,12 +201,12 @@ function enrutar(p) {
 
   switch (accion) {
     // ---- Abiertas: las usa el celular que marca ----
-    case 'calentar':    return calentar();
+    case 'calentar':    return calentar(p);
     // Para el recordatorio de salida (n8n → notificación al celular): quién ya
     // pasó su hora de salida y no la marcó. Basta la clave de solo vista.
     case 'salidaspendientes': rol = rolDe(p);
                         return (rol === 'admin' || rol === 'vista') ? salidasPendientes(p) : NO_AUTORIZADO;
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 24,
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 25, ultimoCalentar: ultimoCalentar(),
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p), p);
     case 'identificar': return identificar(p);
@@ -758,9 +758,16 @@ function salidasPendientes(p) {
    No devuelve datos. Si algo se escribe mientras relee, no guarda lo leído (ya
    estaría viejo): para eso olvidar() deja una marca nueva en memo_ver.
    ══════════════════════════════════════════════════════════════ */
-function calentar() {
+function ultimoCalentar() {
+  try { return CacheService.getScriptCache().get('ultimo_calentar') || ''; } catch (e) { return ''; }
+}
+
+function calentar(p) {
   var cache;
   try { cache = CacheService.getScriptCache(); } catch (e) { return { ok: false, error: 'sin memoria' }; }
+  // Quién y cuándo lo despertó por última vez: ping lo muestra, para comprobar
+  // desde fuera que n8n lo está llamando (el flujo no guarda sus ejecuciones).
+  try { cache.put('ultimo_calentar', ahoraISO().fecha + ' ' + ahoraISO().hora + (p && p.origen ? ' · ' + String(p.origen).slice(0, 20) : ''), 21600); } catch (e) { }
   if (cache.get('calentado')) return { ok: true, saltado: true };          // otro lo hizo hace menos de 1 min
   cache.put('calentado', '1', 60);
   var ver = cache.get('memo_ver');
