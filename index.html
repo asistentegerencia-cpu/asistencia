@@ -3660,7 +3660,7 @@ function rangoSync(){
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
    no pegó el código nuevo o no publicó la «Nueva versión», y las funciones nuevas
    fallan con errores que no dicen por qué. El panel lo avisa en rojo. */
-const APP_VERSION = '2026-10-29.1';
+const APP_VERSION = '2026-10-30.1';
 const SERVIDOR_MINIMO = 12;
 const VERSIONES = {servidor:null, revisado:0};
 
@@ -6929,7 +6929,10 @@ function pintarInstalar(){
 /* Registrar el service worker: es lo que permite instalar y abrir sin internet */
 if('serviceWorker' in navigator && location.protocol==='https:'){
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('sw.js').catch(()=>{ /* sin él la app funciona igual */ });
+    // Con el App ID de OneSignal en la dirección: el service worker de OneSignal lo
+    // lee de ahí. Registrarlo como «sw.js» a secas pisaba el que dejaba OneSignal y
+    // las notificaciones llegaban al celular pero no se mostraban.
+    navigator.serviceWorker.register('sw.js?appId=' + ONESIGNAL_APP_ID).catch(()=>{ /* sin él la app funciona igual */ });
     cargarPush();
   });
 }
@@ -6957,7 +6960,7 @@ function cargarPush(){
     try{
       await OneSignal.init({
         appId: ONESIGNAL_APP_ID,
-        serviceWorkerPath: baseApp().slice(1) + 'sw.js',
+        serviceWorkerPath: baseApp().slice(1) + 'sw.js',          // OneSignal le agrega ?appId=…
         serviceWorkerParam: {scope: baseApp()},
         notifyButton: {enable:false},
         autoResubscribe: true
