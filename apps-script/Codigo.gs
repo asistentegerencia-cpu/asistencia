@@ -206,7 +206,7 @@ function enrutar(p) {
     // pasó su hora de salida y no la marcó. Basta la clave de solo vista.
     case 'salidaspendientes': rol = rolDe(p);
                         return (rol === 'admin' || rol === 'vista') ? salidasPendientes(p) : NO_AUTORIZADO;
-    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 25, ultimoCalentar: ultimoCalentar(),
+    case 'ping':        return { ok: true, servidor: 'asistencia-grupo-robles', version: 26, ultimoCalentar: ultimoCalentar(),
                                  hora: ahoraISO().hora, fecha: ahoraISO().fecha };
     case 'arranque':    return arranque(rolDe(p), p);
     case 'identificar': return identificar(p);
@@ -1905,9 +1905,20 @@ function usuarioValido(usuario, clave) {
     var x = us[i];
     if (x.usuario !== usuario || !x.activo || !x.passHash) continue;
     h = h || huellaUsuario(usuario, clave);
-    if (x.passHash === h) return x;
+    if (x.passHash !== h) continue;
+    // Un usuario vinculado a un colaborador que ya no está activo (por ejemplo,
+    // una jefa que dejó la empresa) deja de poder entrar, aunque nadie haya
+    // desactivado su usuario a mano.
+    if (x.empId && !colaboradorActivo(x.empId)) return null;
+    return x;
   }
   return null;
+}
+
+function colaboradorActivo(empId) {
+  var emps = leerPersonal();
+  for (var i = 0; i < emps.length; i++) if (emps[i].id === String(empId)) return emps[i].activo;
+  return false;
 }
 
 /* Entrar con usuario: cinco intentos fallidos lo bloquean 15 minutos. */
@@ -1921,7 +1932,16 @@ function entrarUsuario(p) {
   var x = usuarioValido(u, String(p.clave || ''));
   if (!x) {
     if (cache) { try { cache.put(claveFallos, String(fallos + 1), 900); } catch (e) { } }
-    return { ok: false, error: 'Usuario o clave incorrectos' };
+    return { ok: false, error: (function () {
+      // Si la clave es la correcta pero su colaborador está inactivo, se dice claro
+      var us = leerUsuarios();
+      for (var i = 0; i < us.length; i++) {
+        var y = us[i];
+        if (y.usuario === u && y.activo && y.empId && y.passHash === huellaUsuario(u, String(p.clave || '')) && !colaboradorActivo(y.empId))
+          return 'Este usuario está vinculado a un colaborador inactivo. Pide a Administración que lo revise.';
+      }
+      return 'Usuario o clave incorrectos';
+    })() };
   }
   if (cache) { try { cache.remove(claveFallos); } catch (e) { } }
   return { ok: true, rol: x.rol === 'admin' ? 'admin' : x.rol === 'area' ? 'area' : 'vista', usuario: x.usuario, nombre: x.nombre,
