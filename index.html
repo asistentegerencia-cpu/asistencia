@@ -617,7 +617,7 @@ function ico(n, extra){
     <div class="tab" data-tab="rep">Reportes</div>
     <div class="tab" data-tab="prog">Programación</div>
     <div class="tab" data-tab="perm">Permisos</div>
-    <div class="tab" data-tab="cfg">Ajustes</div>
+    <div class="tab" data-tab="cfg">Configuración</div>
   </div>
   </div>
   <div id="srvAviso" class="hidden" style="max-width:1200px;margin:14px auto 0;padding:0 16px"></div>
@@ -2969,7 +2969,7 @@ const DEF_CFG = {
   adminPass:'',
 
   /* Clave de solo lectura, para Gerencia y Dirección: ven el tablero, el análisis
-     y el historial, pero no pueden editar nada ni entrar a Ajustes.
+     y el historial, pero no pueden editar nada ni entrar a Configuración.
      Vacía = solo existe el acceso de administrador. */
   vistaPass:'',
 
@@ -3654,7 +3654,7 @@ function rangoSync(){
    quedaba con lo de esa hora, y para ver lo nuevo había que recargar la página
    entera, que es lo más lento que hay. Ahora, mientras está a la vista, pide la
    última semana cada dos minutos y al volver a la pestaña. No repinta si hay una
-   ventana abierta o se está escribiendo, ni en Ajustes: no se pierde nada. */
+   ventana abierta o se está escribiendo, ni en Configuración: no se pierde nada. */
 /* ---- Versiones: app y servidor ----
    APP_VERSION cambia con cada publicación de la app. SERVIDOR_MINIMO es la versión
    de Codigo.gs que esta app necesita: si el servidor tiene una anterior, alguien
@@ -4139,7 +4139,7 @@ function verResumenDia(){
       '<button class="btn btn-sm" id="resCopiar">Copiar imagen</button>'+
       '<button class="btn btn-sm btn-line" id="resBajar">Descargar</button>'+
     '</div>'+
-    // Un botón por destinatario (Ajustes → Enviar el resumen del día a). La
+    // Un botón por destinatario (Configuración → Enviar el resumen del día a). La
     // tarea de Cowork recorre #resDestinos: copia la imagen, abre cada chat y la pega.
     '<div id="resDestinos" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
       destinatariosResumen().map(e=>{
@@ -4152,7 +4152,7 @@ function verResumenDia(){
     '</div>'+
     '<p style="font-size:12.5px;color:var(--muted);margin:10px 0 0;line-height:1.5">Los botones de WhatsApp abren el chat con el resumen ya escrito en texto. '+
       'La imagen es para verla o compartirla a mano.'+
-      (destinatariosResumen().length ? '' : ' Elige a quién enviarlo en Ajustes → "Enviar el resumen del día a".')+'</p>'+
+      (destinatariosResumen().length ? '' : ' Elige a quién enviarlo en Configuración → "Enviar el resumen del día a".')+'</p>'+
     '<button class="btn btn-line" id="resX" style="width:100%;margin-top:12px">Cerrar</button></div>';
   document.body.appendChild(m);
   m.querySelector('#resX').onclick = ()=>m.remove();
@@ -4539,7 +4539,7 @@ function botonWhatsApp(r, f, esHoy){
   const txt = mensajeWhatsApp(r, f, esHoy);
   if(!txt) return '';
   const num = numeroWhatsApp(r.e.tel);
-  if(!num) return '<span style="font-size:12px;color:var(--muted)" title="Agrega su celular en Ajustes → Personal para avisarle por WhatsApp">Sin celular</span>';
+  if(!num) return '<span style="font-size:12px;color:var(--muted)" title="Agrega su celular en Configuración → Personal para avisarle por WhatsApp">Sin celular</span>';
   return '<a class="btn btn-sm btn-wa" target="_blank" rel="noopener" '+
     'href="https://wa.me/'+num+'?text='+encodeURIComponent(txt)+'">'+ico('chat')+'WhatsApp</a>';
 }
@@ -4592,7 +4592,7 @@ function domingoTrabajado(fechaISO){
   return (CFG.domingosTrabajados||[]).indexOf(fechaISO) >= 0;
 }
 
-/* Los sábados del año, para pintar el calendario de Ajustes */
+/* Los sábados del año, para pintar el calendario de Configuración */
 function diasDelAnio(anio, diaSemana){
   const out = [];
   const d = new Date(anio, 0, 1);
@@ -6374,7 +6374,7 @@ function ayudaUbicacion(){
 
   const androidNav = bloque('📱 Android · desde el navegador', [
     'Toca el <b>candado 🔒</b> junto a la dirección, arriba',
-    'Entra a <b>Permisos</b> o <b>Ajustes del sitio</b>',
+    'Entra a <b>Permisos</b> o <b>Configuración del sitio</b>',
     'Cambia <b>Ubicación</b> a <b>Permitir</b>',
     'Vuelve aquí y toca <b>Reintentar</b>'
   ], esAndroid && !inst);
@@ -7210,7 +7210,7 @@ function abrirAdmin(){
                        // aplica el servidor, no hace falta recordárselo a quien entra
 
   // En solo lectura no existen las pestañas que editan
-  const ocultas = esJefeArea() ? ['cfg'] : [];   // en solo lectura, Ajustes muestra solo Personal
+  const ocultas = esJefeArea() ? ['cfg'] : [];   // en solo lectura, Configuración muestra solo Personal
   $$('#adTabs .tab').forEach(t=>t.classList.toggle('hidden', ocultas.indexOf(t.dataset.tab)>=0));
   if(ocultas.indexOf(TAB)>=0){
     TAB='hoy';
@@ -7256,7 +7256,7 @@ $('#adTabs').addEventListener('click', e=>{
   renderTab();
 });
 
-const TITULOS_TAB = {hoy:'Hoy', rep:'Reportes', emp:'Personal', prog:'Programación', perm:'Permisos', cfg:'Ajustes'};
+const TITULOS_TAB = {hoy:'Hoy', rep:'Reportes', emp:'Personal', prog:'Programación', perm:'Permisos', cfg:'Configuración'};
 function pintarNavPanel(){
   const pt = $('#adPageTitle'); if(pt) pt.textContent = TITULOS_TAB[TAB] || '';
   const tp = document.querySelector('#adTabs .tab[data-tab="perm"]');
@@ -7271,12 +7271,12 @@ function renderTab(){
   const b=$('#adBody');
   // Cerrojo: aunque alguien fuerce la pestaña, en solo lectura no se abre
   if(TAB==='disp'){ TAB='cfg'; CFG_SEC='personal'; PER_SUB='cel'; }   // Celulares vive en Personal
-  if(TAB==='emp'){ TAB='cfg'; CFG_SEC='personal'; }                    // Personal vive en Ajustes
+  if(TAB==='emp'){ TAB='cfg'; CFG_SEC='personal'; }                    // Personal vive en Configuración
   $$('#adTabs .tab').forEach(x=>x.classList.toggle('on', x.dataset.tab===TAB));
   if(TAB==='aus')  TAB='rep';   // Ausencias, Historial y Análisis son una sola
   if(TAB==='hist') TAB='rep';
   if(TAB==='ana')  TAB='rep';
-  if(TAB==='qr')   TAB='cfg';   // El código QR vive dentro de Ajustes
+  if(TAB==='qr')   TAB='cfg';   // El código QR vive dentro de Configuración
   if(TAB==='hoy')  return tabHoy(b);
   if(TAB==='rep')  return tabReportes(b);
   if(TAB==='prog') return tabProgramacion(b);
@@ -7332,13 +7332,13 @@ function avisoCorreoAlertas(){
     (candado
       ? 'El bloqueo por celular sí está funcionando, pero <b>nadie recibe el aviso</b> cuando alguien intenta marcar por otra persona. '
       : 'Nadie recibe aviso cuando un celular marca por varias personas. ')+
-    'Ponlo en <b>Ajustes → Servidor</b>.</div>';
+    'Ponlo en <b>Configuración → Servidor</b>.</div>';
 }
 
 function avisoUbicacion(){
   if(sinAdmin() || CFG.ubicacionOk) return '';
   return '<div class="alert alert-warn" style="margin-bottom:16px">⚠ <b>Pendiente:</b> la ubicación de la oficina todavía es un valor de ejemplo. '+
-         'Ve a <b>Ajustes</b>, párate en la puerta de la oficina y toca <b>Capturar ubicación actual</b>. '+
+         'Ve a <b>Configuración</b>, párate en la puerta de la oficina y toca <b>Capturar ubicación actual</b>. '+
          'Hasta entonces el control por GPS solo advierte, no bloquea.</div>';
 }
 
@@ -7461,7 +7461,7 @@ function avisoInicioOperacion(desde){
   if(!CFG.inicioOperacion){
     return '<div class="alert alert-bad" style="margin-bottom:16px">⚠ <b>Falta definir desde cuándo está operando el sistema.</b> '+
       'Mientras no lo definas, todos los días anteriores al lanzamiento se cuentan como inasistencia — y nadie podía marcar entonces. '+
-      'Ve a <b>Ajustes → Inicio de operación</b> y pon la fecha del primer día.</div>';
+      'Ve a <b>Configuración → Inicio de operación</b> y pon la fecha del primer día.</div>';
   }
   if(desde && desde < CFG.inicioOperacion){
     return '<div class="alert alert-warn" style="margin-bottom:16px">📅 <b>El rango empieza antes del '+
@@ -7477,13 +7477,13 @@ function avisoServidor(){
   if(hayServidor()){
     if(COLA.length) return '<div class="alert alert-warn" style="margin-bottom:16px">📤 <b>'+COLA.length+
       ' marcaje'+(COLA.length===1?'':'s')+' sin enviar al servidor.</b> Se reintenta solo. '+
-      'Puedes forzarlo en <b>Ajustes → Servidor → Reintentar ahora</b>.</div>';
+      'Puedes forzarlo en <b>Configuración → Servidor → Reintentar ahora</b>.</div>';
     return '';
   }
   return '<div class="alert alert-bad" style="margin-bottom:16px">🔌 <b>No hay servidor configurado.</b> '+
     'Este panel solo ve los marcajes hechos en <i>este</i> navegador. Si el personal marca desde su propio celular, '+
     'esos registros se quedan en sus teléfonos y aquí no aparecen nunca. '+
-    'Configúralo en <b>Ajustes → Servidor</b>.</div>';
+    'Configúralo en <b>Configuración → Servidor</b>.</div>';
 }
 
 /* ---------- DETECCIÓN DE ANOMALÍAS ----------
@@ -7959,7 +7959,7 @@ function notaExentos(){
     ex.length+' colaborador'+(ex.length===1?'':'es')+' está'+(ex.length===1?'':'n')+
     ' marcado'+(ex.length===1?'':'s')+' como <b>exento de control de asistencia</b> y no aparece'+
     (ex.length===1?'':'n')+' en este cuadro: '+ ex.map(e=>esc(e.nombre)).join(', ')+
-    '. Puedes cambiarlo en Ajustes → Personal.</p>';
+    '. Puedes cambiarlo en Configuración → Personal.</p>';
 }
 /* La hora que le tocaba, en pequeño y debajo de la que marcó.
    Se muestra siempre que haya horario, aunque no haya marcado: así se ve a qué
@@ -10438,7 +10438,7 @@ function leerEditorDias(m){
 }
 
 /* ---------- TAB: CONFIGURACIÓN ---------- */
-/* Ajustes y Código QR eran dos pestañas, y el QR no es una sección aparte:
+/* Configuración y Código QR eran dos pestañas, y el QR no es una sección aparte:
    es una cosa que se genera a partir de la configuración —la dirección de la app y
    la del servidor— y se imprime una vez. Tenerlo suelto obligaba a saltar entre dos
    pantallas para comprobar que el enlace del cartel apuntaba a donde debía. */
@@ -10677,7 +10677,7 @@ function editarUsuario(u, alTerminar){
   };
 }
 
-/* ---------- PERSONAL (dentro de Ajustes) ---------- */
+/* ---------- PERSONAL (dentro de Configuración) ---------- */
 function tabPersonal(b){
   const subs = [['col','Colaboradores']].concat(soloVista() ? [] : [['jef','Jefes de área'],['cel','Celulares vinculados']]);
   if(!subs.some(x=>x[0]===PER_SUB)) PER_SUB = 'col';
@@ -10690,7 +10690,7 @@ function tabPersonal(b){
     b.innerHTML = cab +
       '<p class="rd" style="margin:0 0 10px">'+(CFG.exigirDispositivo
         ? 'El control de dispositivo está <b>activado</b>: cada quien marca solo desde su celular. Si alguien cambia de teléfono, libéralo aquí.'
-        : 'El control de dispositivo está <b>desactivado</b> (Ajustes → Sedes y marcaje). Los vínculos se registran igual.')+'</p>'+
+        : 'El control de dispositivo está <b>desactivado</b> (Configuración → Sedes y marcaje). Los vínculos se registran igual.')+'</p>'+
       '<div class="rtbl">'+gente.map(e=>'<div class="ptr pcel"><div class="rwho"><b>'+esc(nombrePropio(e.nombre))+'</b><small>'+esc(nombrePropio(e.area))+'</small></div>'+
         '<div>'+celularDe(e)+'</div><div style="text-align:right">'+(DISP[e.id]?'<button class="btn btn-sm btn-line" data-lib="'+esc(e.id)+'">Liberar</button>':'')+'</div></div>').join('')+'</div>'+
       seccionSenales();
@@ -10901,16 +10901,16 @@ function tabCfg(b){
   '<div class="frow"><div><label>Clave general de administrador</label><input id="cPas" value="'+esc(CFG.adminPass)+'"'+
     (CFG.claveAdminActiva===false ? ' placeholder="Desactivada: se entra con usuario"' : '')+'>'+
     (CFG.claveAdminActiva===false ? '<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45">Desactivada: como hay usuarios administradores, '+
-      'cada uno entra con su usuario (Ajustes → Usuarios). Vuelve a servir solo si no queda ningún administrador activo.</div>' : '')+'</div></div>'+
+      'cada uno entra con su usuario (Configuración → Usuarios). Vuelve a servir solo si no queda ningún administrador activo.</div>' : '')+'</div></div>'+
   '<div class="frow"><div><label>Clave de solo lectura</label><input id="cPasV" value="'+esc(CFG.vistaPass||'')+'" placeholder="Déjala vacía para no habilitarla"></div></div>'+
   '<p style="font-size:12px;color:var(--muted);margin:-4px 0 0;line-height:1.55">'+
     'Quien entre con la <b>clave de solo lectura</b> ve el tablero, el análisis, las ausencias y el historial, '+
-    'y puede descargar el Excel — pero no puede editar nada ni entrar a Personal, Ajustes o Código QR. '+
+    'y puede descargar el Excel — pero no puede editar nada ni entrar a Personal, Configuración o Código QR. '+
     'Es para Gerencia y Dirección.<br>'+
     '<b>Que sea distinta de la de administrador</b>, o no sirve de nada.</p></div>'+
 
   '<div class="cfg" style="grid-column:1/-1"><h3>Turnos</h3>'+
-  '<p class="hint">Horarios asignables a cada colaborador desde Ajustes → Personal.</p>'+
+  '<p class="hint">Horarios asignables a cada colaborador desde Configuración → Personal.</p>'+
   '<div class="tblscroll"><table><thead><tr><th>Turno</th><th>Entrada L-V</th><th>Salida L-V</th><th>Sábado</th><th>Entrada sáb.</th><th>Salida sáb.</th><th>Domingo</th><th>Entrada dom.</th><th>Salida dom.</th></tr></thead><tbody>'+
   CFG.turnos.map((t,i)=>'<tr>'+
     '<td><input class="sel tI" data-i="'+i+'" data-f="nombre" value="'+esc(t.nombre)+'" style="width:150px"></td>'+
@@ -11113,7 +11113,7 @@ function tabCfg(b){
     if(CFG.modoRecepcion && !recAntes){ DEV=null; localStorage.removeItem(K.dev); save(K.lock,{fallos:0,hasta:0}); }
     saveCfg(); $('#adTitle').textContent=CFG.empresa+' · Asistencia';
     renderTab();
-    empujarConfig().then(r=>{ avisarGuardado(r, 'Ajustes'); });
+    empujarConfig().then(r=>{ avisarGuardado(r, 'Configuración'); });
   };
 
   /* Servidor */
@@ -11372,7 +11372,7 @@ function avisoDemo(){
   if(!n) return '';
   return '<div class="alert alert-bad" style="margin-bottom:16px">🧪 <b>Hay '+n+' marcajes de prueba cargados.</b> '+
          'Son datos generados para ver cómo se comportan los reportes: <b>no son asistencia real</b> y no deben presentarse como tal. '+
-         'Quítalos desde <b>Ajustes → Datos → Borrar datos de prueba</b> antes de usar el sistema en serio.</div>';
+         'Quítalos desde <b>Configuración → Datos → Borrar datos de prueba</b> antes de usar el sistema en serio.</div>';
 }
 
 /* ---------- TAB: CÓDIGO QR ---------- */

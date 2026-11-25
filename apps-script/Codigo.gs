@@ -467,7 +467,7 @@ function avisarPorCorreo(cfg, asunto, cuerpo) {
       to: dest,
       subject: '[Asistencia Grupo Robles] ' + asunto,
       body: cuerpo + '\n\n—\nAviso automático del control de asistencia.\n' +
-            'Para dejar de recibirlos, vacía el campo de correo en Ajustes → Servidor.'
+            'Para dejar de recibirlos, vacía el campo de correo en Configuración → Servidor.'
     });
     return 'enviado';
   } catch (e) {
@@ -2388,7 +2388,7 @@ function marcar(p) {
           'Fecha: ' + ahoraISO().fecha + ' ' + ahoraISO().hora + '\n' +
           'Equipo usado: ' + (p.equipo || 'desconocido') + '\n\n' +
           'El marcaje fue RECHAZADO. Si cambió de teléfono, libera su vínculo en\n' +
-          'Ajustes → Un celular por persona.');
+          'Configuración → Un celular por persona.');
         registrarAlerta('MARCAJE RECHAZADO · celular ajeno', emp,
           'Intentó marcar desde un celular que no es el suyo. El marcaje fue rechazado.',
           p, envio1);
@@ -3367,7 +3367,7 @@ function textoResumenDia(r, falta, tarde) {
   return t.trim();
 }
 
-/* Quienes reciben los resúmenes por WhatsApp: los marcados en Ajustes →
+/* Quienes reciben los resúmenes por WhatsApp: los marcados en Configuración →
    «Resumen del día» (resumenPara, ids de Personal) que tengan celular. El número
    sale con el código de Perú delante, como lo pide WhatsApp. */
 function destinatariosResumen(cfg, personal) {
